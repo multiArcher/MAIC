@@ -1,0 +1,63 @@
+# ##############################################################################
+# Experiment specific parameters
+# ##############################################################################
+name: "reward_shaping"
+
+#runner: "episode"
+#batch_size_run: 1
+runner: "parallel"
+batch_size_run: 8
+
+mac: "basic_mac" # Basic controller
+agent: "rnn" # Default rnn agent
+learner: "rsq_learner"
+use_rnn: True
+
+test_nepisode: 100
+test_interval: 50000
+log_interval: 50000
+runner_log_interval: 10000
+learner_log_interval: 10000
+t_max: 3050000
+
+save_model: True # Save the models to disk
+save_model_interval: 100000 # Save models after this many timesteps
+
+use_tensorboard: True # Log results to tensorboard
+buffer_cpu_only: True # If true we won't keep all of the replay buffer in vram
+
+# ##############################################################################
+# --- QMix specific parameters ---
+# ##############################################################################
+# use epsilon greedy action selector
+action_selector: "epsilon_greedy"
+epsilon_start: 1.0
+epsilon_finish: 0.05
+epsilon_anneal_time: 100000
+evaluation_epsilon: 0.0
+
+batch_size: 128
+buffer_size: 5000
+
+# update the target network every {} episodes
+target_update_interval_or_tau: 200
+
+obs_agent_id: True
+obs_last_action: False
+obs_individual_obs: False
+
+# use the Q_Learner to train
+standardise_returns: False
+standardise_rewards: True
+
+agent_output_type: "q"
+double_q: True
+mixer: "qmix"
+mixing_embed_dim: 32
+hypernet_layers: 2
+hypernet_embed: 64
+
+# ##############################################################################
+# Reward potential factors.
+# ##############################################################################
+potential_sum: 1

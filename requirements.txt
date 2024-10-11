@@ -1,0 +1,5 @@
+psutil==6.0.0
+PyYAML==6.0.1
+SMAC==1.0.0
+torch==2.4.1
+tqdm==4.66.5
