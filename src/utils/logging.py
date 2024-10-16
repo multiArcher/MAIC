@@ -1,12 +1,12 @@
-import os
 import sys
 import json
 import logging
 import datetime
 
-from tqdm import tqdm
 from hashlib import sha256
 from collections import defaultdict
+
+from tqdm import tqdm
 
 import numpy as np
 
@@ -119,7 +119,7 @@ class Logger:
         self.tb_writer.add_embedding(key, value)
 
     def print_recent_stats(self):
-        log_prefix = f"{datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")} | STATSLOG | "
+        log_prefix = f"{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")} | STATSLOG | "
         log_str = "t_env: {} | Episode: {}\n".format(
             *self.stats["episode"][-1]
         )
@@ -141,14 +141,40 @@ class Logger:
 
         # Use tqdm.write to avoid interrupting the progress bar.
         # self.console_logger.info(log_str)
-        tqdm.write(log_prefix + log_str)
-        tqdm.write(" " * 33 + "*" * 41 + "STATS FINISHED" + "*" * 41)
+        tqdm.write(log_prefix + log_str, file=sys.stdout)
+        tqdm.write(" " * 33 + "*" * 41 + "STATS FINISHED" + "*" * 41, file=sys.stdout)
 
-    def finish(self):
+    def finish(self, args):
         if self.use_wandb:
             if self.wandb_current_data:
                 self.wandb.log(self.wandb_current_data, step=self.wandb_current_t)
             self.wandb.finish()
+
+        if self.use_tb:
+            import torch
+            hparam_dict = {}
+            for key, value in vars(args).items():
+                if isinstance(value, dict):
+                    for sub_key, sub_value in value.items():
+                        if not isinstance(sub_value, (bool, str, float, int,  type(None), torch.Tensor)):
+                            continue
+                        hparam_dict[f"{key}.{sub_key}"] = sub_value
+                else:
+                    hparam_dict[key] = value
+
+            metric_dict = {}
+            for key, value in self.stats.items():
+                if isinstance(value, dict):
+                    for sub_key, sub_value in value.items():
+                        metric_dict[f"{key}.{sub_key}"] = torch.tensor(sub_value[-1][-1])
+                metric_dict[key] = torch.tensor(value[-1][-1])
+
+            self.tb_writer.add_hparams(
+                hparam_dict=hparam_dict,
+                metric_dict=metric_dict,
+                run_name=args.unique_token
+            )
+            self.tb_writer.close()
 
 
 # set up a custom logger
@@ -158,8 +184,8 @@ def get_logger():
     ch = logging.StreamHandler(stream=sys.stdout)
 
     # modified logging formatter
-    logging_fmt = "{asctime} | {levelname:<8} | {name:<8} |{message}"
-    logging_date_fmt = "%Y-%m-%d %H:%M:%S"
+    logging_fmt = "{asctime} | {levelname:<8} | {name:<8} | {message}"
+    logging_date_fmt = "%Y-%m-%d_%H-%M-%S"
     formatter = logging.Formatter(fmt=logging_fmt, datefmt=logging_date_fmt, style="{")
 
     # ori formatter.

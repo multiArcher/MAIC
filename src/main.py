@@ -1,6 +1,7 @@
 import os
 import sys
 import yaml
+import datetime
 from copy import deepcopy
 from os.path import dirname, abspath
 try:
@@ -30,7 +31,6 @@ ex.logger = logger
 ex.captured_out_filter = apply_backspaces_and_linefeeds
 
 results_path = os.path.join(dirname(dirname(abspath(__file__))), "results")
-# results_path = "/home/ubuntu/data"
 
 
 @ex.main
@@ -89,7 +89,8 @@ def config_copy(config):
 
 
 if __name__ == "__main__":
-    # Params order is algs -> envs -> defaults
+    # region read_parameters
+    # Params order is command line -> algs -> envs -> defaults
     params = deepcopy(sys.argv)
     # th.set_num_threads(1)
 
@@ -109,28 +110,42 @@ if __name__ == "__main__":
     config_dict = recursive_dict_update(config_dict, env_config)
     config_dict = recursive_dict_update(config_dict, alg_config)
 
+    # endregion
+
+    # Generate unique token.
+    # get map_name from yaml
     try:
         map_name = config_dict["env_args"]["map_name"]
-    except:
+    except KeyError:
         map_name = config_dict["env_args"]["key"]
+    # Get experiment name from yaml
+    experiment_name = config_dict["name"]
 
-    # now add all the config to sacred
-    ex.add_config(config_dict)
-
+    # Update map name and experiment name from command line parameters.
     for param in params:
         if param.startswith("env_args.map_name"):
             map_name = param.split("=")[1]
         elif param.startswith("env_args.key"):
             map_name = param.split("=")[1]
+        elif param.startswith("name"):
+            experiment_name = param.split("=")[1]
+
+    unique_token = (
+        f"{experiment_name}_{map_name}_{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}"
+    )
+
+    config_dict.update({"unique_token": unique_token})
 
     # Save to disk by default for sacred
     logger.info("Saving to FileStorageObserver in \"./results/sacred\".")
-    file_obs_path = os.path.join(
-        results_path, f"sacred/{config_dict['name']}/{map_name}"
-    )
+    file_obs_path = os.path.join(results_path, f"sacred/{unique_token}")
 
+    ex.observers.append(
+        FileStorageObserver(file_obs_path, copy_artifacts=False, copy_sources=False)
+    )
     # ex.observers.append(MongoObserver(db_name="marlbench")) #url='172.31.5.187:27017'))
-    ex.observers.append(FileStorageObserver(file_obs_path))
     # ex.observers.append(MongoObserver())
 
+    # Run experiment.
+    ex.add_config(config_dict)
     ex.run_commandline(params)

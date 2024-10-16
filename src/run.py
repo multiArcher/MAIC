@@ -45,23 +45,12 @@ def run(_run, _config, _log):
     _log.info("\n" + experiment_params + "\n")
 
     # configure tensorboard logger
-    # unique_token = "{}__{}".format(args.name, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
-
-    try:
-        map_name = _config["env_args"]["map_name"]
-    except KeyError:
-        map_name = _config["env_args"]["key"]
-    unique_token = (
-        f"{_config['name']}_{map_name}_seed{_config['seed']}_{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}"
-    )
-
-    args.unique_token = unique_token
     if args.use_tensorboard:
-        tb_logs_direc = os.path.join(
-            dirname(dirname(abspath(__file__))), "results", "tb_logs"
+        tb_logs_dir = os.path.join(
+            dirname(dirname(abspath(__file__))), "results", "tensorboard_logs"
         )
-        tb_exp_direc = os.path.join(tb_logs_direc, "{}").format(unique_token)
-        logger.setup_tb(tb_exp_direc)
+        tb_exp_dir = os.path.join(tb_logs_dir, "{}").format(_config["unique_token"])
+        logger.setup_tb(tb_exp_dir)
 
     if args.use_wandb:
         logger.setup_wandb(
@@ -75,7 +64,7 @@ def run(_run, _config, _log):
     run_sequential(args=args, logger=logger)
 
     # Finish logging
-    logger.finish()
+    logger.finish(args)
 
     # Clean up after finishing
     print("Exiting Main")
@@ -214,6 +203,7 @@ def run_sequential(args, logger):
 
     # Delay init tqdm bar
     progress_bar = None
+    tqdm_output = open("/dev/tty", "w") if sys.platform.startswith('linux') else sys.stderr
 
     while runner.t_env <= args.t_max:
         # Run for a whole episode at a time
@@ -221,16 +211,17 @@ def run_sequential(args, logger):
         buffer.insert_episode_batch(episode_batch)
 
         if buffer.can_sample(args.batch_size):
-            episode_sample = buffer.sample(args.batch_size)
+            for _ in range(args.batch_size_run):
+                episode_sample = buffer.sample(args.batch_size)
 
-            # Truncate batch to only filled timesteps
-            max_ep_t = episode_sample.max_t_filled()
-            episode_sample = episode_sample[:, :max_ep_t]
+                # Truncate batch to only filled timesteps
+                max_ep_t = episode_sample.max_t_filled()
+                episode_sample = episode_sample[:, :max_ep_t]
 
-            if episode_sample.device != args.device:
-                episode_sample.to(args.device)
+                if episode_sample.device != args.device:
+                    episode_sample.to(args.device)
 
-            learner.train(episode_sample, runner.t_env, episode)
+                learner.train(episode_sample, runner.t_env, episode)
 
         # Execute test runs once in a while
         n_test_runs = max(1, args.test_nepisode // runner.batch_size)
@@ -289,12 +280,12 @@ def run_sequential(args, logger):
             logger.console_logger.info("Train process started")
             progress_bar = tqdm.tqdm(
                 total=args.t_max,
-                mininterval=1,
+                mininterval=3,
                 unit="step",
-                bar_format="{desc}{bar:9}|{n_fmt}/{total_fmt} steps{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}] {postfix}",
-                desc=f"{datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")} | TRAINING | ",
+                bar_format="{desc}{bar:9}| {n_fmt}/{total_fmt} steps{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}] {postfix}",
+                desc=f"{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")} | TRAINING | ",
                 postfix={"episode": episode},
-                file=sys.stdout
+                file=tqdm_output
             )
 
         # Watch CPU usage.
@@ -315,8 +306,10 @@ def run_sequential(args, logger):
                     "memory": f"{used_memory:2.1f}/{total_memory:2.1f} GB",
                     "gpu": f"{gpu_memory_allocated:2.1f}/{gpu_memory_reserved:2.1f}/{gpu_available_memory:2.1f}/{gpu_total_memory:2.1f} GB"
                 })
+        progress_bar.set_description_str(f"{datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")} | TRAINING | ")
         update_steps = runner.t_env - progress_bar.n
         progress_bar.update(update_steps)
+        sys.stdout.flush()
 
     progress_bar.close()
     runner.close_env()

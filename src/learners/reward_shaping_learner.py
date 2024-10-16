@@ -1,7 +1,6 @@
 import copy
 
 import torch as th
-from torch.optim import Adam
 
 from components.episode_buffer import EpisodeBatch
 from components.standarize_stream import RunningMeanStd
@@ -33,7 +32,18 @@ class RewardShapingLearner:
             self.params += list(self.mixer.parameters())
             self.target_mixer = copy.deepcopy(self.mixer)
 
-        self.optimiser = Adam(params=self.params, lr=args.lr)
+        match self.args.optimiser:
+            case "RMSprop":
+                self.optimiser = th.optim.RMSprop(params=self.params, lr=args.lr, alpha=args.optim_alpha, eps=args.optim_eps)
+            case "SGD":
+                self.optimiser = th.optim.SGD(params=self.params, lr=args.lr)
+            case "Adam":    
+                self.optimiser = th.optim.Adam(params=self.params, lr=args.lr)
+            case "AdamW":
+                self.optimiser = th.optim.AdamW(params=self.params, lr=args.lr)
+            case _:
+                raise KeyError(f"Wrong optimiser name: {self.args.optimiser}.")
+
 
         # a little wasteful to deepcopy (e.g. duplicates action selector), but should work for any MAC
         self.target_mac = copy.deepcopy(mac)

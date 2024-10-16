@@ -26,6 +26,7 @@ class EpisodeRunner:
             common_reward=self.args.common_reward,
             reward_scalarisation=self.args.reward_scalarisation,
         )
+        self.args.env_info = self.get_env_info()
         self.episode_limit = self.env.episode_limit
         self.t = 0
 
