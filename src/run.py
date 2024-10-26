@@ -3,10 +3,10 @@ import os
 import sys
 import pprint
 import shutil
-import time
 import tqdm
 import threading
 import psutil
+import time
 from os.path import dirname, abspath
 from types import SimpleNamespace as SN
 
@@ -16,12 +16,6 @@ from components.episode_buffer import ReplayBuffer
 from components.transforms import OneHot
 from utils.general_reward_support import test_alg_config_supports_reward
 from utils.logging import Logger
-# from utils.timehelper import time_left, time_str
-
-# Registration of runners, controllers and learners
-# from runners import REGISTRY as r_REGISTRY
-# from controllers import REGISTRY as mac_REGISTRY
-# from learners import REGISTRY as le_REGISTRY
 from runners import get_runner
 from controllers import get_controller
 from learners import get_learner
@@ -32,7 +26,7 @@ def run(_run, _config, _log):
     _config = args_sanity_check(_config, _log)
 
     args = SN(**_config)
-    args.device = "cuda" if args.use_cuda else "cpu"
+    # args.device = th.device(args.device)
     assert test_alg_config_supports_reward(
         args
     ), "The specified algorithm does not support the general reward setup. Please choose a different algorithm or set `common_reward=True`."
@@ -149,7 +143,7 @@ def run_sequential(args, logger):
     logger.console_logger.debug(f"Running with {learner.__class__.__name__}.")
 
     if args.use_cuda:
-        learner.cuda()
+        learner.to(args.device)
 
     if args.checkpoint_path != "":
         timesteps = []
@@ -194,9 +188,6 @@ def run_sequential(args, logger):
     last_test_t = -args.test_interval - 1
     last_log_t = 0
     model_save_time = 0
-
-    start_time = time.time()
-    last_time = start_time
 
     logger.console_logger.info(f"Beginning training for {args.t_max} timesteps")
     logger.console_logger.info("*" * 38 + "TRAINING START" + "*" * 38)
@@ -282,7 +273,7 @@ def run_sequential(args, logger):
                 total=args.t_max,
                 mininterval=3,
                 unit="step",
-                bar_format="{desc}{bar:9}| {n_fmt}/{total_fmt} steps{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}] {postfix}",
+                bar_format="{desc}{bar:9}| {n_fmt}/{total_fmt} steps{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}]{postfix}",
                 desc=f"{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")} | TRAINING | ",
                 postfix={"episode": episode},
                 file=tqdm_output
@@ -291,7 +282,7 @@ def run_sequential(args, logger):
         # Watch CPU usage.
         memory_info = psutil.virtual_memory()
         total_memory = memory_info.total / 1024 ** 3  # 总内存，单位GB
-        # available_memory = memory_info.available / 1024 ** 3  # 可用内存，单位GB
+        free_memory = memory_info.free / 1024 ** 3  # 可用内存，单位GB
         used_memory = memory_info.used / 1024 ** 3  # 已用内存，单位GB
 
         # Watch GPU usage.
@@ -303,10 +294,10 @@ def run_sequential(args, logger):
 
         progress_bar.set_postfix({
                     "episode": episode,
-                    "memory": f"{used_memory:2.1f}/{total_memory:2.1f} GB",
+                    "memory": f"{used_memory:2.1f}/{free_memory:2.1f}/{total_memory:2.1f} GB",
                     "gpu": f"{gpu_memory_allocated:2.1f}/{gpu_memory_reserved:2.1f}/{gpu_available_memory:2.1f}/{gpu_total_memory:2.1f} GB"
                 })
-        progress_bar.set_description_str(f"{datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")} | TRAINING | ")
+        progress_bar.set_description_str(f"{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")} | TRAINING | ")
         update_steps = runner.t_env - progress_bar.n
         progress_bar.update(update_steps)
         sys.stdout.flush()

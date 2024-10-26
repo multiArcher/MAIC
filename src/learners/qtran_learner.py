@@ -239,11 +239,11 @@ class QLearner:
             self.target_mixer.load_state_dict(self.mixer.state_dict())
 
     def cuda(self):
-        self.mac.cuda()
-        self.target_mac.cuda()
+        self.mac.to(self.args.device)
+        self.target_mac.to(self.args.device)
         if self.mixer is not None:
-            self.mixer.cuda()
-            self.target_mixer.cuda()
+            self.mixer.to(self.args.device)
+            self.target_mixer.to(self.args.device)
 
     def save_models(self, path):
         self.mac.save_models(path)

@@ -42,7 +42,7 @@ class GRCLearner:
         self.last_target_update_step = 0
         self.log_stats_t = -self.args.learner_log_interval - 1
 
-        device = "cuda" if args.use_cuda else "cpu"
+        device = args.device
         if self.args.standardise_returns:
             self.ret_ms = RunningMeanStd(shape=(self.n_agents,), device=device)
         if self.args.standardise_rewards:
@@ -198,11 +198,11 @@ class GRCLearner:
                 )
 
     def cuda(self):
-        self.mac.cuda()
-        self.target_mac.cuda()
+        self.mac.to(self.args.device)
+        self.target_mac.to(self.args.device)
         if self.mixer is not None:
-            self.mixer.cuda()
-            self.target_mixer.cuda()
+            self.mixer.to(self.args.device)
+            self.target_mixer.to(self.args.device)
 
     def save_models(self, path):
         self.mac.save_models(path)

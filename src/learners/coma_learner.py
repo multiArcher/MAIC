@@ -31,7 +31,7 @@ class COMALearner:
         self.agent_optimiser = Adam(params=self.agent_params, lr=args.lr)
         self.critic_optimiser = Adam(params=self.critic_params, lr=args.lr)
 
-        device = "cuda" if args.use_cuda else "cpu"
+        device = args.device
         if self.args.standardise_returns:
             self.ret_ms = RunningMeanStd(shape=(self.n_agents,), device=device)
         if self.args.standardise_rewards:
@@ -220,9 +220,9 @@ class COMALearner:
             target_param.data.copy_(target_param.data * (1.0 - tau) + param.data * tau)
 
     def cuda(self):
-        self.mac.cuda()
-        self.critic.cuda()
-        self.target_critic.cuda()
+        self.mac.to(self.args.device)
+        self.critic.to(self.args.device)
+        self.target_critic.to(self.args.device)
 
     def save_models(self, path):
         self.mac.save_models(path)

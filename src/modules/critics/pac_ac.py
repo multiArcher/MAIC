@@ -37,7 +37,7 @@ class PACCritic(nn.Module):
         self.fc2 = nn.Linear(args.hidden_dim, args.hidden_dim)
         self.fc3 = nn.Linear(args.hidden_dim, self.n_actions)
 
-        self.device = "cuda" if args.use_cuda else "cpu"
+        self.device = args.device
 
     def forward(self, batch, t=None, compute_all=False):
         if compute_all:

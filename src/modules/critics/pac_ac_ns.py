@@ -36,7 +36,7 @@ class PACCriticNS(nn.Module):
             for _ in range(self.n_agents)
         ]
 
-        self.device = "cuda" if args.use_cuda else "cpu"
+        self.device = args.device
 
     def forward(self, batch, t=None, compute_all=False):
         if compute_all:
@@ -224,4 +224,4 @@ class PACCriticNS(nn.Module):
 
     def cuda(self):
         for c in self.critics:
-            c.cuda()
+            c.to(self.args.device)

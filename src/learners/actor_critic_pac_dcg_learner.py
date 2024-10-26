@@ -36,7 +36,7 @@ class PACDCGLearner:
         self.critic_training_steps = 0
         self.log_stats_t = -self.args.learner_log_interval - 1
 
-        device = "cuda" if args.use_cuda else "cpu"
+        device = args.device
         self.ret_ms = RunningMeanStd(shape=(1,), device=device)
         self.ret_ms_v = RunningMeanStd(shape=(self.n_agents,), device=device)
 
@@ -318,9 +318,9 @@ class PACDCGLearner:
             target_param.data.copy_(target_param.data * (1.0 - tau) + param.data * tau)
 
     def cuda(self):
-        self.mac.cuda()
-        self.critic.cuda()
-        self.target_critic.cuda()
+        self.mac.to(self.args.device)
+        self.critic.to(self.args.device)
+        self.target_critic.to(self.args.device)
 
     def save_models(self, path):
         self.mac.save_models(path)

@@ -119,7 +119,7 @@ class Logger:
         self.tb_writer.add_embedding(key, value)
 
     def print_recent_stats(self):
-        log_prefix = f"{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")} | STATSLOG | "
+        log_prefix = f"{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")} | STATSLOG | logging  | "
         log_str = "t_env: {} | Episode: {}\n".format(
             *self.stats["episode"][-1]
         )
@@ -137,7 +137,7 @@ class Logger:
                     np.mean([x[1].item() for x in self.stats[k][-window:]])
                 )
             log_str += "{:<23}{:>8}".format(k + ":", item)
-            log_str += ("\n" + " " * 33) if i % 3 == 0 else "\t"
+            log_str += ("\n" + " " * 44) if i % 3 == 0 else "\t"
 
         # Use tqdm.write to avoid interrupting the progress bar.
         # self.console_logger.info(log_str)
@@ -172,7 +172,7 @@ class Logger:
             self.tb_writer.add_hparams(
                 hparam_dict=hparam_dict,
                 metric_dict=metric_dict,
-                run_name=args.unique_token
+                run_name="hparams"
             )
             self.tb_writer.close()
 

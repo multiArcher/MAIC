@@ -56,4 +56,4 @@ class ACCriticNS(nn.Module):
 
     def cuda(self):
         for c in self.critics:
-            c.cuda()
+            c.to(self.args.device)

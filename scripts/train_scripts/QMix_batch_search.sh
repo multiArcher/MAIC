@@ -8,25 +8,24 @@ PYTHON_SCRIPT="src/main.py"     # Path to python script
 #! ################################################################################
 #! Shoule check every time before running.
 #! ################################################################################
-EXPERIMENT_NAME=_linux_train_template  # Experiment name for tensorboard, sacred, and wandb.
-CONFIG=qmix                 # Algorithm config name in src/config/alg
+EXPERIMENT_NAME=QMIX_batch_search  # Experiment name for tensorboard, sacred, and wandb.
+CONFIG=qmix                # Algorithm config name in src/config/alg
 ENV_CONFIG=sc2                        # Environment config in src/config/envs
-MAP_NAME=3m                        # Map name, e.g., 3m in StarCraftII.
-REPEAT_TIMES=2                        # Times to run the experiment.
+MAP_NAME=MMM2                       # Map name, e.g., 3m in StarCraftII.
+REPEAT_TIMES=6                        # Times to run the experiment.
 
 BUFFER_CPU_ONLY=False
 DEVICE=cuda:1
 
+BATCH_SIZE_LIST=(64 64 128 128 128 96)
+
 function update_hyperparams() {
     declare -n arg_dict=$1
-    local iter=$2
-    arg_dict["name"]="name=${EXPERIMENT_NAME}_run${iter}"
+    local iter=$2   # Note that iter starts from 1.
+    local batch_size=${BATCH_SIZE_LIST[$iter-1]}
 
-    # case $iter in 
-    #     1)
-    #     arg_dict["name"]="name=${EXPERIMENT_NAME}_run1"
-    #     ;;
-    # esac
+    arg_dict["name"]="name=${EXPERIMENT_NAME}_batch$batch_size"
+    arg_dict["batch_size"]="batch_size=$batch_size"
 }
 #! ################################################################################
 #! ################################################################################

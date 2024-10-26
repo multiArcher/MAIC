@@ -15,6 +15,13 @@ class BasicMAC:
         self.action_selector = action_REGISTRY[args.action_selector](args)
 
         self.hidden_states = None
+        
+    @property
+    def device(self):
+        if (agent:= getattr(self, "agent", None)) is not None:
+            return next(agent.parameters()).device
+        else:
+            return None
 
     def select_actions(self, ep_batch, t_ep, t_env, bs=slice(None), test_mode=False):
         # Only select actions for the selected batch elements in bs
@@ -50,7 +57,10 @@ class BasicMAC:
         self.agent.load_state_dict(other_mac.agent.state_dict())
 
     def cuda(self):
-        self.agent.cuda()
+        self.agent.to(self.args.device)
+        
+    def to(self, device):
+        self.agent.to(device)
 
     def save_models(self, path):
         th.save(self.agent.state_dict(), "{}/agent.th".format(path))

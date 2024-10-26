@@ -8,11 +8,11 @@ PYTHON_SCRIPT="src/main.py"     # Path to python script
 #! ################################################################################
 #! Shoule check every time before running.
 #! ################################################################################
-EXPERIMENT_NAME=_linux_train_template  # Experiment name for tensorboard, sacred, and wandb.
-CONFIG=qmix                 # Algorithm config name in src/config/alg
+EXPERIMENT_NAME=QMIX_batch_search  # Experiment name for tensorboard, sacred, and wandb.
+CONFIG=qmix                # Algorithm config name in src/config/alg
 ENV_CONFIG=sc2                        # Environment config in src/config/envs
-MAP_NAME=3m                        # Map name, e.g., 3m in StarCraftII.
-REPEAT_TIMES=2                        # Times to run the experiment.
+MAP_NAME=MMM2                       # Map name, e.g., 3m in StarCraftII.
+REPEAT_TIMES=6                        # Times to run the experiment.
 
 BUFFER_CPU_ONLY=False
 DEVICE=cuda:1

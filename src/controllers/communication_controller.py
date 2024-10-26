@@ -55,7 +55,7 @@ class GRCMAC():
         self.agent.load_state_dict(other_mac.agent.state_dict())
 
     def cuda(self):
-        self.agent.cuda()
+        self.agent.to(self.args.device)
 
     def save_models(self, path):
         torch.save(self.agent.state_dict(), "{}/agent.th".format(path))

@@ -1,38 +1,19 @@
 #!/bin/bash
 
-# Paths
-WORK_DIR="$HOME/workspace/epymarl_based"  # Path to root dir
-PYTHON_SCRIPT="src/main.py"     # Path to python script
-
 # Experiment parameters
-#! ################################################################################
 #! Shoule check every time before running.
-#! ################################################################################
-EXPERIMENT_NAME=_linux_train_template  # Experiment name for tensorboard, sacred, and wandb.
+EXPERIMENT_NAME=qmix_epsilon_search  # Experiment name for tensorboard, sacred, and wandb.
 CONFIG=qmix                 # Algorithm config name in src/config/alg
 ENV_CONFIG=sc2                        # Environment config in src/config/envs
-MAP_NAME=3m                        # Map name, e.g., 3m in StarCraftII.
-REPEAT_TIMES=2                        # Times to run the experiment.
+MAP_NAME=MMM2                         # Map name, e.g., 3M in StarCraftII.
+REPEAT_TIMES=5                        # Times to run the experiment.
 
 BUFFER_CPU_ONLY=False
-DEVICE=cuda:1
 
-function update_hyperparams() {
-    declare -n arg_dict=$1
-    local iter=$2
-    arg_dict["name"]="name=${EXPERIMENT_NAME}_run${iter}"
-
-    # case $iter in 
-    #     1)
-    #     arg_dict["name"]="name=${EXPERIMENT_NAME}_run1"
-    #     ;;
-    # esac
-}
-#! ################################################################################
-#! ################################################################################
-
+# Paths
+WORK_DIR="$HOME/workspace/epymarl_based"  # Path to root dir
+PYTHON_SCRIPT="$WORK_DIR/src/main.py"     # Path to python script
 LOG_DIR="$WORK_DIR/log"                   # Log directory
-PYTHON_SCRIPT_PATH="${WORK_DIR}/${PYTHON_SCRIPT}"
 
 # Python args passed to the Python command
 declare -A args
@@ -40,9 +21,11 @@ declare -A args
 args["config"]="--config=$CONFIG"
 args["env_config"]="--env-config=$ENV_CONFIG"
 
+args["name"]="name=$EXPERIMENT_NAME"
 args["map_name"]="env_args.map_name=$MAP_NAME"
 args["buffer_cpu_only"]="buffer_cpu_only=$BUFFER_CPU_ONLY"
-args["device"]="device=$DEVICE"
+
+args["epsilon_anneal_time"]=""
 
 # Set environment variable
 export SC2PATH="$HOME/.local/share/StarCraftII"  # Path to StarCraft II game.
@@ -64,14 +47,18 @@ logerr_file_path="$LOG_DIR/${EXPERIMENT_NAME}_$(timestamp)_err.log"
 echo "$(timestamp) | INFO     | bash     | $SEPERATOR" | tee -a "$log_file_path"
 echo "$(timestamp) | INFO     | bash     | $SEPERATOR" | tee -a "$log_file_path"
 echo "$(timestamp) | INFO     | bash     | Train script starts." | tee -a "$log_file_path"
-echo "$(timestamp) | INFO     | bash     | Experiment name: $EXPERIMENT_NAME" | tee -a "$log_file_path"
 echo "$(timestamp) | INFO     | bash     | Work dir: $WORK_DIR" | tee -a "$log_file_path"
 echo "$(timestamp) | INFO     | bash     | Saving outputs to log files in $LOG_DIR" 
 echo "$(timestamp) | INFO     | bash     | Running Python script in conda environment: $CONDA_ENVNAME." | tee -a "$log_file_path"
 
 # Define function to run experiment
 run_experiment() {
-    update_hyperparams args "$1"
+    local i=$1
+    
+    epsilon_anneal_time_list=(50000 50000 100000 150000 200000)
+    local epsilon_anneal_time=${epsilon_anneal_time_list[$i-1]}
+    args["name"]="name=${EXPERIMENT_NAME}_epsilonannealtime${epsilon_anneal_time}"
+    args["epsilon_anneal_time"]="epsilon_anneal_time=$epsilon_anneal_time"
 
     echo "$(timestamp) | INFO     | bash     | $SEPERATOR" | tee -a "$log_file_path"
     echo "$(timestamp) | INFO     | bash     | Run $i" | tee -a "$log_file_path"
@@ -93,7 +80,7 @@ run_experiment() {
         fi
     done
 
-    cmd="conda run -n $CONDA_ENVNAME --no-capture-output python ${PYTHON_SCRIPT_PATH} ${pre_args}with $post_args"
+    cmd="conda run -n $CONDA_ENVNAME --no-capture-output python ${PYTHON_SCRIPT} ${pre_args}with $post_args"
     echo "$(timestamp) | INFO     | bash     | Command: $cmd" | tee -a "$log_file_path"
     echo "$(timestamp) | INFO     | bash     | $SEPERATOR" | tee -a "$log_file_path"
     echo "$(timestamp) | INFO     | bash     | Starting train process."

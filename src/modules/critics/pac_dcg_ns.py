@@ -288,15 +288,15 @@ class DCGCriticNS:
     def cuda(self):
         """Overloads methornn_d to make sure all encoders, utilities and payoffs are on the GPU."""
         for ag in self.agents:
-            ag.cuda()
+            ag.to(self.args.device)
         for f in self.utility_fun:
-            f.cuda()
+            f.to(self.args.device)
         for f in self.payoff_fun:
-            f.cuda()
+            f.to(self.args.device)
         if self.edges_from is not None:
-            self.edges_from = self.edges_from.cuda()
-            self.edges_to = self.edges_to.cuda()
-            self.edges_n_in = self.edges_n_in.cuda()
+            self.edges_from = self.edges_from.to(self.args.device)
+            self.edges_to = self.edges_to.to(self.args.device)
+            self.edges_n_in = self.edges_n_in.to(self.args.device)
 
     def parameters(self):
         """Overloads method to make sure the parameters of all encoders, utilities and payoffs are returned."""

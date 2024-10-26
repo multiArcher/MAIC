@@ -7,7 +7,7 @@ $MAP_NAME = "MMM2"                         # Map name, e.g., 3M in StarCraftII.
 $REPEAT_TIMES = 1                          # Times to run the experiment.
 
 # Paths
-$WORK_DIR = "$HOME\WorkSpace\pymarl2_based"  # Path to root dir
+$WORK_DIR = "$HOME\WorkSpace\epymarl_based"  # Path to root dir
 $PYTHON_SCRIPT = "$WORK_DIR\src\main.py"     # Path to python script
 $LOG_DIR = "$WORK_DIR\log"                   # Log directory
 

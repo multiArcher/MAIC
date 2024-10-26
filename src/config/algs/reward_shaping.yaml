@@ -63,7 +63,7 @@ obs_individual_obs: False
 
 # use the Q_Learner to train
 standardise_returns: False
-standardise_rewards: False
+standardise_rewards: True
 
 agent_output_type: "q"
 double_q: True
