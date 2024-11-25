@@ -27,7 +27,7 @@ timestamp() {
 
 SEPERATOR="########################################################################################################################"
 
-if ! nohup "$SCRIPT_PATH" | tee -a "$LOGFILE"; then
+if ! nohup "$SCRIPT_PATH" </dev/null &> >(tee -a "$LOGFILE"); then
     echo "$(timestamp) | ERROR    | root     | Run Failed, see $LOGFILE for more information." | tee -a "$LOGFILE"
     echo "$(timestamp) | ERROR    | bash     | Train script ends." | tee -a "$LOGFILE"
     echo "$(timestamp) | INFO     | bash     | $SEPERATOR" | tee -a "$LOGFILE"

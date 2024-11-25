@@ -1,18 +1,13 @@
 #!/bin/bash
-
-# Paths
-WORK_DIR="$HOME/workspace/epymarl_based"  # Path to root dir
-PYTHON_SCRIPT="src/main.py"     # Path to python script
-
 # Experiment parameters
 #! ################################################################################
 #! Shoule check every time before running.
 #! ################################################################################
-EXPERIMENT_NAME=_linux_train_template  # Experiment name for tensorboard, sacred, and wandb.
+EXPERIMENT_NAME=QMIX_baseline  # Experiment name for tensorboard, sacred, and wandb.
 CONFIG=qmix                 # Algorithm config name in src/config/alg
 ENV_CONFIG=sc2                        # Environment config in src/config/envs
-MAP_NAME=3m                        # Map name, e.g., 3m in StarCraftII.
-REPEAT_TIMES=2                        # Times to run the experiment.
+MAP_NAME=MMM2                        # Map name, e.g., 3m in StarCraftII.
+REPEAT_TIMES=5                        # Times to run the experiment.
 
 BUFFER_CPU_ONLY=False
 DEVICE=cuda:1
@@ -20,10 +15,14 @@ DEVICE=cuda:1
 function update_hyperparams() {
     declare -n arg_dict=$1
     local iter=$2
-    arg_dict["name"]="name=${EXPERIMENT_NAME}_run$((iter))"
+    arg_dict["name"]="name=${EXPERIMENT_NAME}_run$((iter+3))"
 }
 #! ################################################################################
 #! ################################################################################
+
+# Paths
+WORK_DIR="$HOME/workspace/epymarl_based"  # Path to root dir
+PYTHON_SCRIPT="src/main.py"     # Path to python script
 
 LOG_DIR="$WORK_DIR/log"                   # Log directory
 PYTHON_SCRIPT_PATH="${WORK_DIR}/${PYTHON_SCRIPT}"

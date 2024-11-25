@@ -5,3 +5,4 @@ __pycache__
 /.vscode
 /log
 .ipynb_checkpoints
+*nohup.out
