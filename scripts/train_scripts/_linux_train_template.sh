@@ -15,7 +15,8 @@ MAP_NAME=3m                        # Map name, e.g., 3m in StarCraftII.
 REPEAT_TIMES=2                        # Times to run the experiment.
 
 BUFFER_CPU_ONLY=False
-DEVICE=cuda:1
+CUDA_DEVICES=0
+DEVICE=cuda:0
 # arguments in different runs.
 function update_hyperparams() {
     declare -n arg_dict=$1
@@ -40,6 +41,7 @@ args["device"]="device=$DEVICE"
 
 # Set environment variable
 export SC2PATH="$HOME/.local/share/StarCraftII"  # Path to StarCraft II game.
+export CUDA_VISIBLE_DEVICES=$CUDA_DEVICES
 CONDA_ENVNAME="marl_latest"                        # Conda environment name
 
 SEPERATOR="########################################################################################################################"
