@@ -5,9 +5,9 @@ WORK_DIR="$HOME/workspace/epymarl_based"  # Path to root dir
 PYTHON_SCRIPT="src/main.py"     # Path to python script
 
 # Experiment parameters
-#! ################################################################################
-#! Shoule check every time before running.
-#! ################################################################################
+# ! ----------------------------------------------------------------------------
+# ! Should check every time before running.
+# ! ----------------------------------------------------------------------------
 EXPERIMENT_NAME=QMIX_batch_search  # Experiment name for tensorboard, sacred, and wandb.
 CONFIG=qmix                # Algorithm config name in src/config/alg
 ENV_CONFIG=sc2                        # Environment config in src/config/envs
@@ -27,8 +27,8 @@ function update_hyperparams() {
     arg_dict["name"]="name=${EXPERIMENT_NAME}_batch$batch_size"
     arg_dict["batch_size"]="batch_size=$batch_size"
 }
-#! ################################################################################
-#! ################################################################################
+# ! ----------------------------------------------------------------------------
+# ! ----------------------------------------------------------------------------
 
 LOG_DIR="$WORK_DIR/log"                   # Log directory
 PYTHON_SCRIPT_PATH="${WORK_DIR}/${PYTHON_SCRIPT}"
@@ -47,7 +47,7 @@ args["device"]="device=$DEVICE"
 export SC2PATH="$HOME/.local/share/StarCraftII"  # Path to StarCraft II game.
 CONDA_ENVNAME="marl_base"                        # Conda environment name
 
-SEPERATOR="########################################################################################################################"
+SEPERATOR="------------------------------------------------------------------------------------------------------------------------"
 # Create log directory if it doesn't exist
 cd "$WORK_DIR" || exit 1
 mkdir -p "$LOG_DIR"

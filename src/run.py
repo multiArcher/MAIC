@@ -15,7 +15,8 @@ import torch as th
 from components.episode_buffer import ReplayBuffer
 from components.transforms import OneHot
 from utils.general_reward_support import test_alg_config_supports_reward
-from utils.logging import Logger
+# from utils.pymarl_logging import Logger
+from utils.marl_logging import PyMARLLogger
 from runners import get_runner
 from controllers import get_controller
 from learners import get_learner
@@ -32,18 +33,18 @@ def run(_run, _config, _log):
     ), "The specified algorithm does not support the general reward setup. Please choose a different algorithm or set `common_reward=True`."
 
     # setup loggers
-    logger = Logger(_log)
+    logger = PyMARLLogger("main")
 
-    _log.info("Experiment Parameters:")
+    logger.info("Experiment Parameters:")
     experiment_params = pprint.pformat(_config, indent=4, underscore_numbers=True)
-    _log.info("\n" + experiment_params + "\n")
+    logger.info("\n" + experiment_params + "\n")
 
     # configure tensorboard logger
     if args.use_tensorboard:
         tb_logs_dir = os.path.join(
             dirname(dirname(abspath(__file__))), "results", "tensorboard_logs"
         )
-        tb_exp_dir = os.path.join(tb_logs_dir, "{}").format(_config["unique_token"])
+        tb_exp_dir = os.path.join(tb_logs_dir, f"{_config['unique_token']}")
         logger.setup_tb(tb_exp_dir)
 
     if args.use_wandb:
@@ -190,7 +191,7 @@ def run_sequential(args, logger):
     model_save_time = 0
 
     logger.console_logger.info(f"Beginning training for {args.t_max} timesteps")
-    logger.console_logger.info("*" * 38 + "TRAINING START" + "*" * 38)
+    logger.console_logger.info("-" * 38 + "TRAINING START" + "-" * 38)
 
     # Delay init tqdm bar
     progress_bar = None
@@ -273,7 +274,7 @@ def run_sequential(args, logger):
                 total=args.t_max,
                 mininterval=3,
                 unit="step",
-                bar_format="{desc}{bar:9}| {n_fmt}/{total_fmt} steps{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}]{postfix}",
+                bar_format="{desc}{bar:15} | {n_fmt}/{total_fmt} steps{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}]{postfix}",
                 desc=f"{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")} | TRAINING | ",
                 postfix={"episode": episode},
                 file=tqdm_output

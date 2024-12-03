@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 import yaml
@@ -18,16 +19,16 @@ from sacred.observers import FileStorageObserver
 from sacred.utils import apply_backspaces_and_linefeeds
 
 from run import run
-from utils.logging import get_logger
+# from utils.pymarl_logging import get_logger
+from utils.marl_logging import PyMARLLogger
 
-SETTINGS["CAPTURE_MODE"] = (
-    "sys"  # set to "no" if you want to see stdout/stderr in console "sys" / "no" / "fd"
-)
+# set to "no" if you want to see stdout/stderr in console "sys" / "no" / "fd"
+SETTINGS["CAPTURE_MODE"] = "no"
 
-logger = get_logger()
 
 ex = Experiment("pymarl", save_git_info=False)
-ex.logger = logger
+# logger = get_logger()
+# ex.logger = logger
 ex.captured_out_filter = apply_backspaces_and_linefeeds
 
 results_path = os.path.join(dirname(dirname(abspath(__file__))), "results")
@@ -135,6 +136,15 @@ if __name__ == "__main__":
     )
 
     config_dict.update({"unique_token": unique_token})
+
+    logger = PyMARLLogger(
+        name="main",
+        level=logging.DEBUG,
+        file_log=True,
+        log_dir="./results/log",
+        log_file_name=unique_token + ".log"
+    )
+    ex.logger = logger.logger
 
     # Save to disk by default for sacred
     logger.info("Saving to FileStorageObserver in \"./results/sacred\".")
