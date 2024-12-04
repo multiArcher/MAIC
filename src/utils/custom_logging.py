@@ -29,12 +29,9 @@ class CustomLogger:
     """
     _instance = {}
     def __new__(cls, *args, **kwargs):
-        if len(args) != 0:
-            logger_name = args[0]
-        elif "name" in kwargs.keys():
-            logger_name = kwargs["name"]
-        else:
+        if len(args) == 0 and "name" not in kwargs:
             raise KeyError("No logger name was provided.")
+        logger_name = kwargs.get("name", args[0])
 
         if logger_name in cls._instance.keys():
             if len(args) > 1 or (len(kwargs) > 0 and "name" not in kwargs.keys()):
@@ -97,10 +94,6 @@ class CustomLogger:
             self._setup_file_logging()
 
         self._initialized = True
-
-    @classmethod
-    def self_class(cls):
-        return cls
 
     @property
     def logger(self) -> logging.Logger:
@@ -187,26 +180,44 @@ class CustomLogger:
         return self.__class__(name, level, *args, **kwargs)
 
     # region logging.Logger functions.
+    @staticmethod
+    def logging_function(func):
+        """
+        A decorator to wrap logging functions.
+        """
+        def wrapper(self, msg, *args, **kwargs):
+            logging_func = getattr(self._logger, func.__name__)
+            return logging_func(msg, *args, **kwargs)
+
+        return wrapper
+
+    @logging_function
     def debug(self, msg, *args, **kwargs):
-        self._logger.debug(msg, *args, **kwargs)
+        pass
 
+    @logging_function
     def info(self, msg, *args, **kwargs):
-        self._logger.info(msg, *args, **kwargs)
+        pass
 
+    @logging_function
     def warning(self, msg, *args, **kwargs):
-        self._logger.warning(msg, *args, **kwargs)
+        pass
 
+    @logging_function
     def error(self, msg, *args, **kwargs):
-        self._logger.error(msg, *args, **kwargs)
+        pass
 
-    def exception(self, msg, *args, exc_info=True, **kwargs):
-        self._logger.error(msg, *args, exc_info=exc_info, **kwargs)
-
+    @logging_function
     def critical(self, msg, *args, **kwargs):
-        self._logger.critical(msg, *args, **kwargs)
+        pass
 
+    @logging_function
     def fatal(self, msg, *args, **kwargs):
-        self._logger.fatal(msg, *args, **kwargs)
+        pass
+
+    @logging_function
+    def exception(self, msg, *args, exc_info=True, **kwargs):
+        pass
     # endregion
 
     def _setup_console_logging(self):
@@ -236,7 +247,7 @@ class CustomLogger:
                 os.makedirs(self.log_dir)
             except OSError as e:
                 self.error(f"Could not create log directory {self.log_dir}: {e}. Initialization of file handler failed.")
-                return
+                raise RuntimeError(f"Log directory creation failed: {e}")
 
         file_handler = logging.FileHandler(
             filename=os.path.join(self.log_dir, self.log_file_name),
