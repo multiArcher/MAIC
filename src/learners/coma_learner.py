@@ -5,7 +5,7 @@ from torch.optim import Adam
 
 from components.episode_buffer import EpisodeBatch
 from components.standarize_stream import RunningMeanStd
-from modules.critics import REGISTRY as critic_registry
+from modules.critics import CriticMaker
 
 
 class COMALearner:
@@ -22,7 +22,7 @@ class COMALearner:
 
         self.log_stats_t = -self.args.learner_log_interval - 1
 
-        self.critic = critic_registry[args.critic_type](scheme, args)
+        self.critic = CriticMaker.make(args.critic_type, scheme, args)
         self.target_critic = copy.deepcopy(self.critic)
 
         self.agent_params = list(mac.parameters())

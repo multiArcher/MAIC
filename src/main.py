@@ -4,18 +4,17 @@ import yaml
 import datetime
 from copy import deepcopy
 from os.path import dirname, abspath
-try:
-    # until python 3.10
-    from collections import Mapping
-except ImportError:
-    # from python 3.10
-    from collections.abc import Mapping
 
-import numpy as np
-import torch as th
+import numpy
+import torch
 from sacred import Experiment, SETTINGS
 from sacred.observers import FileStorageObserver
 from sacred.utils import apply_backspaces_and_linefeeds
+
+try:
+    from collections import Mapping    # until python 3.10
+except ImportError:
+    from collections.abc import Mapping    # from python 3.10
 
 from run import run
 from utils.logging import get_logger
@@ -37,8 +36,8 @@ results_path = os.path.join(dirname(dirname(abspath(__file__))), "results")
 def my_main(_run, _config, _log):
     # Setting the random seed throughout the modules
     config = config_copy(_config)
-    np.random.seed(config["seed"])
-    th.manual_seed(config["seed"])
+    numpy.random.seed(config["seed"])
+    torch.manual_seed(config["seed"])
     config["env_args"]["seed"] = config["seed"]  # Set the seed in SCII game.
 
     # run the framework

@@ -1,10 +1,12 @@
-from modules.agents import REGISTRY as agent_REGISTRY
-from components.action_selectors import REGISTRY as action_REGISTRY
 import torch as th
+
+from controllers.MAC import MAC
+from modules.agents import AgentMaker
+from components.action_selectors import ActionSelectorMaker
 
 
 # This multi-agent controller shares parameters between agents
-class BasicMAC:
+class BasicMAC(MAC):
     def __init__(self, scheme, groups, args):
         self.n_agents = args.n_agents
         self.args = args
@@ -12,10 +14,10 @@ class BasicMAC:
         self._build_agents(input_shape)
         self.agent_output_type = args.agent_output_type
 
-        self.action_selector = action_REGISTRY[args.action_selector](args)
+        self.action_selector = ActionSelectorMaker.make(args.action_selector, args)
 
         self.hidden_states = None
-        
+
     @property
     def device(self):
         if (agent:= getattr(self, "agent", None)) is not None:
@@ -69,7 +71,7 @@ class BasicMAC:
         self.agent.load_state_dict(th.load("{}/agent.th".format(path), map_location=lambda storage, loc: storage))
 
     def _build_agents(self, input_shape):
-        self.agent = agent_REGISTRY[self.args.agent](input_shape, self.args)
+        self.agent = AgentMaker.make(self.args.agent, input_shape, self.args)
 
     def _build_inputs(self, batch, t):
         # Assumes homogenous agents with flat observations.

@@ -7,7 +7,7 @@ from torch.optim import Adam
 from components.episode_buffer import EpisodeBatch
 from components.standarize_stream import RunningMeanStd
 from controllers.maddpg_controller import gumbel_softmax
-from modules.critics import REGISTRY as critic_registry
+from modules.critics import CriticMaker
 
 
 class MADDPGLearner:
@@ -21,7 +21,7 @@ class MADDPGLearner:
         self.target_mac = copy.deepcopy(self.mac)
         self.agent_params = list(mac.parameters())
 
-        self.critic = critic_registry[args.critic_type](scheme, args)
+        self.critic = CriticMaker.make(args.critic_type, scheme, args)
         self.target_critic = copy.deepcopy(self.critic)
         self.critic_params = list(self.critic.parameters())
 

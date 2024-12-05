@@ -1,46 +1,45 @@
-from typing import Union
+from utils.maker import Maker
+from .learner import Learner
 
+class LearnerMaker(Maker):
+    """Factory class for creating various types of learners."""
+    # TODO, migrate Multiple Learners to Learner.
+    @staticmethod
+    def make_q_learner(*args, **kwargs) -> 'Learner':
+        from .q_learner import QLearner
+        return QLearner(*args, **kwargs)
 
-from .q_learner import QLearner
-from .coma_learner import COMALearner
-from .qtran_learner import QLearner as QTranLearner
-from .actor_critic_learner import ActorCriticLearner
-from .actor_critic_pac_learner import PACActorCriticLearner
-from .actor_critic_pac_dcg_learner import PACDCGLearner
-from .maddpg_learner import MADDPGLearner
-from .ppo_learner import PPOLearner
-from .grc_learner import GRCLearner
-from .reward_shaping_learner import RewardShapingLearner
+    @staticmethod
+    def make_coma_learner(*args, **kwargs) -> 'Learner':
+        from .coma_learner import COMALearner
+        return COMALearner(*args, **kwargs)
 
+    @staticmethod
+    def make_qtran_learner(*args, **kwargs) -> 'Learner':
+        from .qtran_learner import QLearner as QTranLearner
+        return QTranLearner(*args, **kwargs)
 
-REGISTRY = {
-    "q_learner": QLearner,
-    "coma_learner": COMALearner,
-    "qtran_learner": QTranLearner,
-    "actor_critic_learner": ActorCriticLearner,
-    "maddpg_learner": MADDPGLearner,
-    "ppo_learner": PPOLearner,
-    "pac_learner": PACActorCriticLearner,
-    "pac_dcg_learner": PACDCGLearner,
-    "grc_learner": GRCLearner,
-    "rsq_learner": RewardShapingLearner
-}
+    @staticmethod
+    def make_actor_critic_learner(*args, **kwargs) -> 'Learner':
+        from .actor_critic_learner import ActorCriticLearner
+        return ActorCriticLearner(*args, **kwargs)
 
+    @staticmethod
+    def make_pac_learner(*args, **kwargs) -> 'Learner':
+        from .actor_critic_pac_learner import PACActorCriticLearner
+        return PACActorCriticLearner(*args, **kwargs)
 
-def get_learner(learner_name: str, mac, scheme, logger, args) \
-        -> Union[
-            QLearner,
-            COMALearner,
-            QTranLearner,
-            ActorCriticLearner,
-            MADDPGLearner,
-            PPOLearner,
-            PACActorCriticLearner,
-            PACDCGLearner,
-            GRCLearner,
-            RewardShapingLearner
-        ]:
-    if learner_name in REGISTRY.keys():
-        return REGISTRY[learner_name](mac, scheme, logger, args)
-    else:
-        raise ValueError(f"Invalid learner name: {learner_name}.")
+    @staticmethod
+    def make_pac_dcg_learner(*args, **kwargs) -> 'Learner':
+        from .actor_critic_pac_dcg_learner import PACDCGLearner
+        return PACDCGLearner(*args, **kwargs)
+
+    @staticmethod
+    def make_maddpg_learner(*args, **kwargs) -> 'Learner':
+        from .maddpg_learner import MADDPGLearner
+        return MADDPGLearner(*args, **kwargs)
+
+    @staticmethod
+    def make_ppo_learner(*args, **kwargs) -> 'Learner':
+        from .ppo_learner import PPOLearner
+        return PPOLearner(*args, **kwargs)

@@ -1,5 +1,5 @@
-from modules.agents import REGISTRY as agent_REGISTRY
-from components.action_selectors import REGISTRY as action_REGISTRY
+from modules.agents import AgentMaker
+from components.action_selectors import ActionSelectorMaker
 import torch as th
 
 
@@ -11,7 +11,7 @@ class NonSharedMAC:
         self._build_agents(input_shape)
         self.agent_output_type = args.agent_output_type
 
-        self.action_selector = action_REGISTRY[args.action_selector](args)
+        self.action_selector = ActionSelectorMaker.make(args.action_selector, args)
 
         self.hidden_states = None
 
@@ -57,7 +57,7 @@ class NonSharedMAC:
         self.agent.load_state_dict(th.load("{}/agent.th".format(path), map_location=lambda storage, loc: storage))
 
     def _build_agents(self, input_shape):
-        self.agent = agent_REGISTRY[self.args.agent](input_shape, self.args)
+        self.agent = AgentMaker.make(self.args.agent, input_shape, self.args)
 
     def _build_inputs(self, batch, t):
         # Assumes homogenous agents with flat observations.

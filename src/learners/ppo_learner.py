@@ -6,7 +6,7 @@ from torch.optim import Adam
 
 from components.episode_buffer import EpisodeBatch
 from components.standarize_stream import RunningMeanStd
-from modules.critics import REGISTRY as critic_resigtry
+from modules.critics import CriticMaker
 
 
 class PPOLearner:
@@ -21,7 +21,7 @@ class PPOLearner:
         self.agent_params = list(mac.parameters())
         self.agent_optimiser = Adam(params=self.agent_params, lr=args.lr)
 
-        self.critic = critic_resigtry[args.critic_type](scheme, args)
+        self.critic = CriticMaker.make(args.critic_type, scheme, args)
         self.target_critic = copy.deepcopy(self.critic)
 
         self.critic_params = list(self.critic.parameters())

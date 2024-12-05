@@ -6,19 +6,20 @@ import shutil
 import tqdm
 import threading
 import psutil
-import time
+# import time
 from os.path import dirname, abspath
 from types import SimpleNamespace as SN
 
-import torch as th
+import torch
 
 from components.episode_buffer import ReplayBuffer
 from components.transforms import OneHot
 from utils.general_reward_support import test_alg_config_supports_reward
-from utils.logging import Logger
-from runners import get_runner
-from controllers import get_controller
-from learners import get_learner
+# from utils.pymarl_logging import Logger
+from utils.marl_logging import PyMARLLogger
+from runners import RunnerMaker
+from controllers import MACMaker
+from learners import LearnerMaker
 
 
 def run(_run, _config, _log):
@@ -32,18 +33,18 @@ def run(_run, _config, _log):
     ), "The specified algorithm does not support the general reward setup. Please choose a different algorithm or set `common_reward=True`."
 
     # setup loggers
-    logger = Logger(_log)
+    logger = PyMARLLogger("main")
 
-    _log.info("Experiment Parameters:")
+    logger.info("Experiment Parameters:")
     experiment_params = pprint.pformat(_config, indent=4, underscore_numbers=True)
-    _log.info("\n" + experiment_params + "\n")
+    logger.info("\n" + experiment_params + "\n")
 
     # configure tensorboard logger
     if args.use_tensorboard:
         tb_logs_dir = os.path.join(
             dirname(dirname(abspath(__file__))), "results", "tensorboard_logs"
         )
-        tb_exp_dir = os.path.join(tb_logs_dir, "{}").format(_config["unique_token"])
+        tb_exp_dir = os.path.join(tb_logs_dir, f"{_config['unique_token']}")
         logger.setup_tb(tb_exp_dir)
 
     if args.use_wandb:
@@ -89,7 +90,7 @@ def evaluate_sequential(args, runner):
 def run_sequential(args, logger):
     # Init runner so we can get env info
     # runner = r_REGISTRY[args.runner](args=args, logger=logger)
-    runner = get_runner(args.runner, args=args, logger=logger)
+    runner = RunnerMaker.make(args.runner, args=args, logger=logger)
     logger.console_logger.debug(f"Running with {runner.__class__.__name__}.")
 
     # Set up schemes and groups here
@@ -102,13 +103,13 @@ def run_sequential(args, logger):
     scheme = {
         "state": {"vshape": env_info["state_shape"]},
         "obs": {"vshape": env_info["obs_shape"], "group": "agents"},
-        "actions": {"vshape": (1,), "group": "agents", "dtype": th.long},
+        "actions": {"vshape": (1,), "group": "agents", "dtype": torch.long},
         "avail_actions": {
             "vshape": (env_info["n_actions"],),
             "group": "agents",
-            "dtype": th.int,
+            "dtype": torch.int,
         },
-        "terminated": {"vshape": (1,), "dtype": th.uint8},
+        "terminated": {"vshape": (1,), "dtype": torch.uint8},
     }
     # For individual rewards in gymmai reward is of shape (1, n_agents)
     if args.common_reward:
@@ -131,7 +132,7 @@ def run_sequential(args, logger):
 
     # Setup multiagent controller here
     # mac = mac_REGISTRY[args.mac](buffer.scheme, groups, args)
-    mac = get_controller(args.mac, buffer.scheme, groups, args)
+    mac = MACMaker.make(args.mac, buffer.scheme, groups, args)
     logger.console_logger.debug(f"Running with {mac.__class__.__name__}.")
 
     # Give runner the scheme
@@ -139,7 +140,7 @@ def run_sequential(args, logger):
 
     # Learner
     # learner = le_REGISTRY[args.learner](mac, buffer.scheme, logger, args)
-    learner = get_learner(args.learner, mac, buffer.scheme, logger, args)
+    learner = LearnerMaker.make(args.learner, mac, buffer.scheme, logger, args)
     logger.console_logger.debug(f"Running with {learner.__class__.__name__}.")
 
     if args.use_cuda:
@@ -190,11 +191,11 @@ def run_sequential(args, logger):
     model_save_time = 0
 
     logger.console_logger.info(f"Beginning training for {args.t_max} timesteps")
-    logger.console_logger.info("*" * 38 + "TRAINING START" + "*" * 38)
+    logger.console_logger.info("-" * 38 + "TRAINING START" + "-" * 38)
 
     # Delay init tqdm bar
     progress_bar = None
-    tqdm_output = open("/dev/tty", "w") if sys.platform.startswith('linux') else sys.stderr
+    tqdm_output = open("/dev/tty", "w") if sys.platform.startswith('linux') else sys.stdout
 
     while runner.t_env <= args.t_max:
         # Run for a whole episode at a time
@@ -243,6 +244,7 @@ def run_sequential(args, logger):
             )
             # "results/models/{}".format(unique_token)
             os.makedirs(save_path, exist_ok=True)
+            print("\n", file=tqdm_output)
             logger.console_logger.info("Saving models to {}".format(save_path))
 
             # learner should handle saving/loading -- delegate actor save/load to mac,
@@ -273,7 +275,7 @@ def run_sequential(args, logger):
                 total=args.t_max,
                 mininterval=3,
                 unit="step",
-                bar_format="{desc}{bar:9}| {n_fmt}/{total_fmt} steps{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}]{postfix}",
+                bar_format="{desc}{bar:15} | {n_fmt}/{total_fmt} steps{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}]{postfix}",
                 desc=f"{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")} | TRAINING | ",
                 postfix={"episode": episode},
                 file=tqdm_output
@@ -286,11 +288,11 @@ def run_sequential(args, logger):
         used_memory = memory_info.used / 1024 ** 3  # 已用内存，单位GB
 
         # Watch GPU usage.
-        gpu_available_memory, gpu_total_memory = th.cuda.mem_get_info()
+        gpu_available_memory, gpu_total_memory = torch.cuda.mem_get_info()
         gpu_available_memory = gpu_available_memory / 1024 ** 3
         gpu_total_memory = gpu_total_memory / 1024 ** 3
-        gpu_memory_allocated = th.cuda.memory_allocated() / 1024 ** 3
-        gpu_memory_reserved = th.cuda.memory_reserved() / 1024 ** 3
+        gpu_memory_allocated = torch.cuda.memory_allocated() / 1024 ** 3
+        gpu_memory_reserved = torch.cuda.memory_reserved() / 1024 ** 3
 
         progress_bar.set_postfix({
                     "episode": episode,
@@ -310,7 +312,7 @@ def run_sequential(args, logger):
 def args_sanity_check(config, _log):
     # set CUDA flags
     # config["use_cuda"] = True # Use cuda whenever possible!
-    if config["use_cuda"] and not th.cuda.is_available():
+    if config["use_cuda"] and not torch.cuda.is_available():
         config["use_cuda"] = False
         _log.warning(
             "CUDA flag use_cuda was switched OFF automatically because no CUDA devices are available!"

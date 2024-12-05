@@ -3,29 +3,41 @@ from functools import partial
 import numpy as np
 
 from components.episode_buffer import EpisodeBatch
-from envs import REGISTRY as env_REGISTRY
-from envs import register_smac  # , register_smacv2
+from envs import EnvMaker
+from runners.runner import Runner
 
 
-class EpisodeRunner:
+class EpisodeRunner(Runner):
     def __init__(self, args, logger):
+
         self.args = args
         self.logger = logger
         self.batch_size = self.args.batch_size_run
-        assert self.batch_size == 1
+        if self.batch_size != 1:
+            self.batch_size = 1
+            args.batch_size_run = 1
+            logger.warning("Batch size run for episode runner must be 1. args.batch_size_run is set to 1")
 
-        # registering both smac and smacv2 causes a pysc2 error
-        # --> dynamically register the needed env
-        if self.args.env == "sc2":
-            register_smac()
-        # elif self.args.env == "sc2v2":
-        #     register_smacv2()
+        # # registering both smac and smacv2 causes a pysc2 error
+        # # --> dynamically register the needed env
+        # if self.args.env == "sc2":
+        #     register_smac()
+        # # elif self.args.env == "sc2v2":
+        # #     register_smacv2()
+        #
+        # self.env = env_REGISTRY[self.args.env](
+        #     **self.args.env_args,
+        #     common_reward=self.args.common_reward,
+        #     reward_scalarisation=self.args.reward_scalarisation,
+        # )
 
-        self.env = env_REGISTRY[self.args.env](
+        self.env = EnvMaker.make(
+            self.args.env,
             **self.args.env_args,
             common_reward=self.args.common_reward,
-            reward_scalarisation=self.args.reward_scalarisation,
+            reward_scalarisation=self.args.reward_scalarisation
         )
+
         self.args.env_info = self.get_env_info()
         self.episode_limit = self.env.episode_limit
         self.t = 0

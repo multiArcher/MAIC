@@ -4,13 +4,13 @@ from multiprocessing import Pipe, Process
 import numpy as np
 
 from components.episode_buffer import EpisodeBatch
-from envs import REGISTRY as env_REGISTRY
-from envs import register_smac  # , register_smacv2
+from envs import EnvMaker
+from runners.runner import Runner
 
 
 # Based (very) heavily on SubprocVecEnv from OpenAI Baselines
 # https://github.com/openai/baselines/blob/master/baselines/common/vec_env/subproc_vec_env.py
-class ParallelRunner:
+class ParallelRunner(Runner):
     def __init__(self, args, logger):
         self.args = args
         self.logger = logger
@@ -21,15 +21,18 @@ class ParallelRunner:
             *[Pipe() for _ in range(self.batch_size)]
         )
 
-        # registering both smac and smacv2 causes a pysc2 error
-        # --> dynamically register the needed env
-        if self.args.env == "sc2":
-            register_smac()
+        # # registering both smac and smacv2 causes a pysc2 error
+        # # --> dynamically register the needed env
+        # if self.args.env == "sc2":
+        #     register_smac()
         # elif self.args.env == "sc2v2":
         #     register_smacv2()
+        #
+        # env_fn = env_REGISTRY[self.args.env]
 
-        env_fn = env_REGISTRY[self.args.env]
+        env_fn = EnvMaker.make_func(self.args.env)
         env_args = [self.args.env_args.copy() for _ in range(self.batch_size)]
+
         for i in range(self.batch_size):
             env_args[i]["seed"] += i
             env_args[i]["common_reward"] = self.args.common_reward
