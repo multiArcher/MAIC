@@ -29,9 +29,12 @@ class CustomLogger:
     """
     _instance = {}
     def __new__(cls, *args, **kwargs):
-        if len(args) == 0 and "name" not in kwargs:
+        if "name" in kwargs:
+            logger_name = kwargs["name"]
+        elif len(args) > 0:
+            logger_name = args[0]
+        else:
             raise KeyError("No logger name was provided.")
-        logger_name = kwargs.get("name", args[0])
 
         if logger_name in cls._instance.keys():
             if len(args) > 1 or (len(kwargs) > 0 and "name" not in kwargs.keys()):
