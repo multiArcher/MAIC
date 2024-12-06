@@ -1,12 +1,19 @@
-from typing import Union
+from abc import ABC, abstractmethod
 
 import torch as th
 from torch.distributions import Categorical
+
+from utils.maker import Maker
 from .epsilon_schedules import DecayThenFlatSchedule
-REGISTRY = {}
 
 
-class MultinomialActionSelector():
+class ActionSelector(ABC):
+    @abstractmethod
+    def select_action(self, agent_inputs, avail_actions, t_env, test_mode=False):
+        pass
+
+
+class MultinomialActionSelector(ActionSelector):
 
     def __init__(self, args):
         self.args = args
@@ -30,10 +37,7 @@ class MultinomialActionSelector():
         return picked_actions
 
 
-REGISTRY["multinomial"] = MultinomialActionSelector
-
-
-class EpsilonGreedyActionSelector():
+class EpsilonGreedyActionSelector(ActionSelector):
 
     def __init__(self, args):
         self.args = args
@@ -63,10 +67,7 @@ class EpsilonGreedyActionSelector():
         return picked_actions
 
 
-REGISTRY["epsilon_greedy"] = EpsilonGreedyActionSelector
-
-
-class SoftPoliciesSelector():
+class SoftPoliciesSelector(ActionSelector):
 
     def __init__(self, args):
         self.args = args
@@ -77,16 +78,16 @@ class SoftPoliciesSelector():
         return picked_actions
 
 
-REGISTRY["soft_policies"] = SoftPoliciesSelector
+class ActionSelectorMaker(Maker):
+    """Factory class for creating Action Selectors."""
+    @staticmethod
+    def make_multinomial(*args, **kwargs) -> ActionSelector:
+        return MultinomialActionSelector(*args, **kwargs)
 
+    @staticmethod
+    def make_epsilon_greedy(*args, **kwargs) -> ActionSelector:
+        return EpsilonGreedyActionSelector(*args, **kwargs)
 
-def get_action_selector(action_selector_name: str, args) \
-        -> Union[
-            MultinomialActionSelector,
-            EpsilonGreedyActionSelector,
-            SoftPoliciesSelector
-        ]:
-    if action_selector_name in REGISTRY.keys():
-        return REGISTRY[action_selector_name](args)
-    else:
-        raise ValueError(f"Invalid action_selector name: {action_selector_name}.")
+    @staticmethod
+    def make_soft_policies(*args, **kwargs) -> ActionSelector:
+        return SoftPoliciesSelector(*args, **kwargs)

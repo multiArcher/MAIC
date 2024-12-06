@@ -1,27 +1,20 @@
-from typing import Union
-
-from .rnn_agent import RNNAgent
-from .rnn_ns_agent import RNNNSAgent
-from .rnn_feature_agent import RNNFeatureAgent
-from .grc_agent import GRCAgent
+from torch.nn import Module
+from utils.maker import Maker
 
 
-REGISTRY = {
-    "rnn": RNNAgent, 
-    "rnn_ns": RNNNSAgent, 
-    "rnn_feat": RNNFeatureAgent, 
-    "grc": GRCAgent
-}
+class AgentMaker(Maker):
+    """Factory class for creating Agents."""
+    @staticmethod
+    def make_rnn(*args, **kwargs) -> Module:
+        from .rnn_agent import RNNAgent
+        return RNNAgent(*args, **kwargs)
 
+    @staticmethod
+    def make_rnn_ns(*args, **kwargs) -> Module:
+        from .rnn_ns_agent import RNNNSAgent
+        return RNNNSAgent(*args, **kwargs)    # TODO migrate RNNNSAgent to Agent
 
-def get_agent(agent_name: str, input_shape, args) \
-        -> Union[
-            RNNAgent, 
-            RNNNSAgent, 
-            RNNFeatureAgent, 
-            GRCAgent
-        ]:
-    if agent_name in REGISTRY.keys():
-        return REGISTRY[agent_name](input_shape, args)
-    else:
-        raise ValueError(f"Invalid agent name: {agent_name}.")
+    @staticmethod
+    def make_rnn_feat(*args, **kwargs) -> Module:
+        from .rnn_feature_agent import RNNFeatureAgent
+        return RNNFeatureAgent(*args, **kwargs)   # TODO migrate RNNFeatureAgent to Agent

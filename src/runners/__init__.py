@@ -1,21 +1,17 @@
-from typing import Union
-
-from .episode_runner import EpisodeRunner
-from .parallel_runner import ParallelRunner
+from .runner import Runner
+from utils.maker import Maker
 
 
-REGISTRY = {
-    "episode": EpisodeRunner,
-    "parallel": ParallelRunner
-}
+class RunnerMaker(Maker):
+    """
+    Factory class for creating runners.
+    """
+    @staticmethod
+    def make_episode(args, logger) -> Runner:
+        from .episode_runner import EpisodeRunner
+        return EpisodeRunner(args, logger)
 
-
-def get_runner(runner_name: str, args, logger) \
-        -> Union[
-            EpisodeRunner,
-            ParallelRunner
-        ]:
-    if runner_name in REGISTRY.keys():
-        return REGISTRY[runner_name](args=args, logger=logger)
-    else:
-        raise ValueError(f"Invalid runner name: {runner_name}.")
+    @staticmethod
+    def make_parallel(args, logger) -> Runner:
+        from .parallel_runner import ParallelRunner
+        return ParallelRunner(args, logger)

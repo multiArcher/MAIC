@@ -5,11 +5,13 @@ from torch.optim import Adam
 
 from components.episode_buffer import EpisodeBatch
 from components.standarize_stream import RunningMeanStd
-from modules.mixers.vdn import VDNMixer
-from modules.mixers.qmix import QMixer
+from learners.learner import Learner
+# from modules.mixers.vdn import VDNMixer
+# from modules.mixers.qmix import QMixer
+from modules.mixers import MixerMaker
 
 
-class QLearner:
+class QLearner(Learner):
     def __init__(self, mac, scheme, logger, args):
         self.args = args
         self.n_agents = args.n_agents
@@ -20,15 +22,10 @@ class QLearner:
         self.last_target_update_episode = 0
 
         self.mixer = None
+
         if args.mixer is not None:
-            if args.mixer == "vdn":
-                assert args.common_reward, "VDN only supports common reward setting"
-                self.mixer = VDNMixer()
-            elif args.mixer == "qmix":
-                assert args.common_reward, "QMIX only supports common reward setting"
-                self.mixer = QMixer(args)
-            else:
-                raise ValueError("Mixer {} not recognised.".format(args.mixer))
+            self.mixer = MixerMaker.make(args.mixer, args)
+
             self.params += list(self.mixer.parameters())
             self.target_mixer = copy.deepcopy(self.mixer)
 
@@ -199,13 +196,6 @@ class QLearner:
         if self.mixer is not None:
             self.mixer.to(self.args.device)
             self.target_mixer.to(self.args.device)
-            
-    def to(self, device):
-        self.mac.to(device)
-        self.target_mac.to(device)
-        if self.mixer is not None:
-            self.mixer.to(device)
-            self.target_mixer.to(device)
 
     def save_models(self, path):
         self.mac.save_models(path)

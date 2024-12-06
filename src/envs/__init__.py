@@ -2,59 +2,53 @@ import os
 import sys
 
 from .multiagentenv import MultiAgentEnv
-# from .gymma import GymmaWrapper
-# from .smaclite_wrapper import SMACliteWrapper
-
+from utils.maker import Maker
 
 if sys.platform == "linux":
     os.environ.setdefault(
         "SC2PATH", os.path.join(os.getcwd(), "3rdparty", "StarCraftII")
     )
 
+class EnvMaker(Maker):
+    """Factory class for creating environments."""
+    @staticmethod
+    def _check_and_prepare_smac_kwargs(kwargs):
+        """Check and prepare kwargs for SMAC environments."""
+        assert "common_reward" in kwargs and "reward_scalarisation" in kwargs
+        assert kwargs[
+            "common_reward"
+        ], "SMAC only supports common reward. Please set `common_reward=True` or choose a different environment that supports general sum rewards."
+        del kwargs["common_reward"]
+        del kwargs["reward_scalarisation"]
+        assert "map_name" in kwargs, "Please specify the map_name in the env_args"
+        return kwargs
 
-def __check_and_prepare_smac_kwargs(kwargs):
-    assert "common_reward" in kwargs and "reward_scalarisation" in kwargs
-    assert kwargs[
-        "common_reward"
-    ], "SMAC only supports common reward. Please set `common_reward=True` or choose a different environment that supports general sum rewards."
-    del kwargs["common_reward"]
-    del kwargs["reward_scalarisation"]
-    assert "map_name" in kwargs, "Please specify the map_name in the env_args"
-    return kwargs
+    @staticmethod
+    def make_gymma(*args, **kwargs) -> MultiAgentEnv:
+        from .gymma import GymmaWrapper
 
+        assert "common_reward" in kwargs and "reward_scalarisation" in kwargs
+        return GymmaWrapper(*args, **kwargs)
 
-# def smaclite_fn(**kwargs) -> MultiAgentEnv:
-#     kwargs = __check_and_prepare_smac_kwargs(kwargs)
-#     return SMACliteWrapper(**kwargs)
+    @staticmethod
+    def make_smaclite(*args, **kwargs) -> MultiAgentEnv:
+        from .smaclite_wrapper import SMACliteWrapper
 
+        kwargs = EnvMaker._check_and_prepare_smac_kwargs(kwargs)
+        return SMACliteWrapper(*args, **kwargs)
 
-# def gymma_fn(**kwargs) -> MultiAgentEnv:
-#     assert "common_reward" in kwargs and "reward_scalarisation" in kwargs
-#     return GymmaWrapper(**kwargs)
+    @staticmethod
+    def make_sc2(*args, **kwargs) -> MultiAgentEnv:
+        # registering both smac and smacv2 causes a pysc2 error
+        from .smac_wrapper import SMACWrapper
 
+        kwargs = EnvMaker._check_and_prepare_smac_kwargs(kwargs)
+        return SMACWrapper(*args, **kwargs)
 
-REGISTRY = {}
-# REGISTRY["smaclite"] = smaclite_fn
-# REGISTRY["gymma"] = gymma_fn
+    @staticmethod
+    def make_sc2v2(*args, **kwargs) -> MultiAgentEnv:
+        # registering both smac and smacv2 causes a pysc2 error
+        from .smacv2_wrapper import SMACv2Wrapper
 
-
-# registering both smac and smacv2 causes a pysc2 error
-# --> dynamically register the needed env
-def register_smac():
-    from .smac_wrapper import SMACWrapper
-
-    def smac_fn(**kwargs) -> MultiAgentEnv:
-        kwargs = __check_and_prepare_smac_kwargs(kwargs)
-        return SMACWrapper(**kwargs)
-
-    REGISTRY["sc2"] = smac_fn
-
-
-# def register_smacv2():
-#     from .smacv2_wrapper import SMACv2Wrapper
-#
-#     def smacv2_fn(**kwargs) -> MultiAgentEnv:
-#         kwargs = __check_and_prepare_smac_kwargs(kwargs)
-#         return SMACv2Wrapper(**kwargs)
-#
-#     REGISTRY["sc2v2"] = smacv2_fn
+        kwargs = EnvMaker._check_and_prepare_smac_kwargs(kwargs)
+        return SMACv2Wrapper(*args, **kwargs)
