@@ -27,6 +27,15 @@ class CustomLogger:
         - log_file_name (str): Name of the log file. Default is time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(time.time())).
         - propagate (bool): Whether to propagate through child loggers. Default is True.
     """
+    CRITICAL = logging.CRITICAL
+    FATAL = CRITICAL
+    ERROR = logging.ERROR
+    WARNING = logging.WARNING
+    WARN = WARNING
+    INFO = logging.INFO
+    DEBUG = logging.DEBUG
+    NOTSET = logging.NOTSET
+
     _instance = {}
     def __new__(cls, *args, **kwargs):
         if "name" in kwargs:
