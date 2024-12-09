@@ -25,7 +25,7 @@ timestamp() {
     date +"%Y-%m-%d_%H-%M-%S" 
 }
 
-SEPERATOR="------------------------------------------------------------------------------------------------------------------------"
+SEPERATOR="========================================================================================================================"
 
 if ! nohup "$SCRIPT_PATH" </dev/null &> >(tee -a "$LOGFILE"); then
     echo "$(timestamp) | ERROR    | root     | Run Failed, see log files in $LOG_DIR for more information." | tee -a "$LOGFILE"
