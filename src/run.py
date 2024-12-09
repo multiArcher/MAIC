@@ -15,7 +15,6 @@ import torch
 from components.episode_buffer import ReplayBuffer
 from components.transforms import OneHot
 from utils.general_reward_support import test_alg_config_supports_reward
-# from utils.pymarl_logging import Logger
 from utils.marl_logging import PyMARLLogger
 from runners import RunnerMaker
 from controllers import MACMaker

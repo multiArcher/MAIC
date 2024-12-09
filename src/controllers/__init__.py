@@ -2,7 +2,7 @@ from utils.maker import Maker
 from .MAC import MAC
 
 class MACMaker(Maker):
-    """Factory class for creating MAC."""
+    """Factory class for creating Controllers."""
     @staticmethod
     def make_basic_mac(*args, **kwargs) -> MAC:
         from .basic_controller import BasicMAC
@@ -17,3 +17,6 @@ class MACMaker(Maker):
     def make_maddpg_mac(*args, **kwargs) -> MAC:
         from .maddpg_controller import MADDPGMAC
         return MADDPGMAC(*args, **kwargs)   # TODO migrate NonSharedMAC to MAC
+
+# Compatible with old code
+REGISTRY=MACMaker
