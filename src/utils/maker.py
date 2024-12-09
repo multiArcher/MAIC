@@ -20,3 +20,8 @@ class Maker(ABC):
         """Make an object of the target type"""
         make_func = cls.make_func(target_type)
         return make_func(*args, **kwargs)
+
+    @classmethod
+    def __getitem__(cls, item: str) -> Callable:
+        # Compatible for old code.
+        return cls.make_func(item)
