@@ -20,6 +20,9 @@ except ImportError:
 from run import run
 # from utils.pymarl_logging import get_logger
 from utils.marl_logging import PyMARLLogger
+from utils.torch_optimizer import optimize_tensor_display
+
+optimize_tensor_display(torch)
 
 # set to "no" if you want to see stdout/stderr in console "sys" / "no" / "fd"
 SETTINGS["CAPTURE_MODE"] = "no"
