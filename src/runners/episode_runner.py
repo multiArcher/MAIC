@@ -3,13 +3,13 @@ from functools import partial
 import numpy as np
 
 from components.episode_buffer import EpisodeBatch
-from envs import EnvMaker
 from utils.maker import EnvMaker
+from utils.custom_logging import PyMARLLogger
 from runners.runner import Runner
 
 
 class EpisodeRunner(Runner):
-    def __init__(self, args, logger):
+    def __init__(self, args, logger: PyMARLLogger):
 
         self.args = args
         self.logger = logger
