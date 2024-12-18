@@ -1,4 +1,4 @@
-from modules.agents import AgentMaker
+from utils.maker import AgentMaker
 # from components.action_selectors import REGISTRY as action_REGISTRY
 import torch as th
 from torch.autograd import Variable

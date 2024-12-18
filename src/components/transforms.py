@@ -1,12 +1,19 @@
-import torch as th
+from collections import OrderedDict
+from abc import ABC, abstractmethod
+
+import torch
 
 
-class Transform:
-    def transform(self, tensor):
-        raise NotImplementedError
+class Transform(ABC):
+    @abstractmethod
+    def transform(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Transform input to output"""
+        pass
 
-    def infer_output_info(self, vshape_in, dtype_in):
-        raise NotImplementedError
+    @abstractmethod
+    def infer_output_info(self, vshape_in: tuple[int], dtype_in: torch.dtype):
+        """Infer output shape and type from input shape and type"""
+        pass
 
 
 class OneHot(Transform):

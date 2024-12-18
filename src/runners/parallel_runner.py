@@ -4,7 +4,7 @@ from multiprocessing import Pipe, Process
 import numpy as np
 
 from components.episode_buffer import EpisodeBatch
-from envs import EnvMaker
+from utils.maker import EnvMaker
 from runners.runner import Runner
 
 

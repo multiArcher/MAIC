@@ -1,8 +1,7 @@
 import torch as th
 
-from controllers.MAC import MAC
-from modules.agents import AgentMaker
-from components.action_selectors import ActionSelectorMaker
+from controllers.mac import MAC
+from utils.maker import AgentMaker, ActionSelectorMaker
 
 
 # This multi-agent controller shares parameters between agents

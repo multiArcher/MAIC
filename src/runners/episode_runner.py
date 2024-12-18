@@ -4,6 +4,7 @@ import numpy as np
 
 from components.episode_buffer import EpisodeBatch
 from envs import EnvMaker
+from utils.maker import EnvMaker
 from runners.runner import Runner
 
 
@@ -34,6 +35,7 @@ class EpisodeRunner(Runner):
         self.env = EnvMaker.make(
             self.args.env,
             **self.args.env_args,
+            args=args,
             common_reward=self.args.common_reward,
             reward_scalarisation=self.args.reward_scalarisation
         )

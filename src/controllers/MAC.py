@@ -1,15 +1,20 @@
-from abc import ABCMeta, abstractmethod
+from abc import ABC, abstractmethod
 
 
-class MAC(metaclass=ABCMeta):
-
+class MAC(ABC):
+    """
+    Interface for Multi Agent Controllers(MAC).
+    """
+    @abstractmethod
+    def __init__(self, scheme, groups, args):
+        pass
 
     @abstractmethod
     def select_actions(self, ep_batch, t_ep, t_env, bs, test_mode):
         pass
 
     @abstractmethod
-    def forward(self, ep_batch, t, test_mode):
+    def forward(self, ep_batch, t, test_mode, **kwargs):
         pass
 
     @abstractmethod
