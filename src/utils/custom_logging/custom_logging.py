@@ -1,22 +1,31 @@
-import os
 import sys
 import time
 import logging
+from pathlib import Path
 
 
-class CustomLogger:
-    """
-    Custom logger class to log messages with a specific format and handlers.
+class MetaCustomLogger(type):
+    """Metaclass for inheriting attributes and methods from python logging module."""
+    @classmethod
+    def __getattr__(cls, item):
+        if item in cls.__dict__:
+            return getattr(cls, item)
+        else:
+            return getattr(logging, item)
+
+
+class CustomLogger(metaclass=MetaCustomLogger):
+    """Custom logger class to log messages with a specific format and handlers.
 
     Args:
         name (str): The name of the logger.
-        level (int): The level of the logger.
+        level (int): The level of the logger (defaults to `logging.NOTSET`).
         *args: The positional arguments passed to the logger.
         **kwargs: The keyword arguments passed to the logger.
 
     Note:
         The following keyword arguments are accepted:\n
-        - fmt (str): The format of the logger. Default is "{asctime} | {levelname:<8} | {name:<14} | {message}".
+        - fmt (str): The format of the logger. Default is "{asctime} | {levelname:<8} | {name:<12} | {message}".
         - date_fmt (str): The format of the asctime in fmt. Default is "%Y-%m-%d_%H-%M-%S".
         - console_log (bool). Whether to log to console. Default is True.
         - console_log_level (int): Level of the console log handler. Default is the same as CustomLogger.
@@ -25,26 +34,28 @@ class CustomLogger:
         - file_log_level (int): Level of the file log handler. Default is the same as CustomLogger.
         - log_dir (str): Directory for storaging log files. Default is "./log".
         - log_file_name (str): Name of the log file. Default is time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(time.time())).
-        - propagate (bool): Whether to propagate through child loggers. Default is True.
+        - propagate (bool): Whether to propagate through child loggers. Default is False.
     """
-    CRITICAL = logging.CRITICAL
-    FATAL = CRITICAL
-    ERROR = logging.ERROR
-    WARNING = logging.WARNING
-    WARN = WARNING
-    INFO = logging.INFO
-    DEBUG = logging.DEBUG
-    NOTSET = logging.NOTSET
+    # CRITICAL = logging.CRITICAL
+    # FATAL = CRITICAL
+    # ERROR = logging.ERROR
+    # WARNING = logging.WARNING
+    # WARN = WARNING
+    # INFO = logging.INFO
+    # DEBUG = logging.DEBUG
+    # NOTSET = logging.NOTSET
 
     _instance = {}
     def __new__(cls, *args, **kwargs):
-        if "name" in kwargs:
+        # Get logger name.
+        if "name" in kwargs:    # TODO: Implement a logger like root logger to enable directly logging without initializing a logger object.
             logger_name = kwargs["name"]
         elif len(args) > 0:
             logger_name = args[0]
         else:
-            raise KeyError("No logger name was provided.")
+            raise RuntimeError("No logger name was provided.")
 
+        # Check if logger has already been initialized.
         if logger_name in cls._instance.keys():
             if len(args) > 1 or (len(kwargs) > 0 and "name" not in kwargs.keys()):
                 print(
@@ -55,6 +66,7 @@ class CustomLogger:
         else:
             cls._instance[logger_name] = super(CustomLogger, cls).__new__(cls)
 
+        # Return the initialized logger.
         return cls._instance[logger_name]
 
 
@@ -72,7 +84,7 @@ class CustomLogger:
         # self.level: int = level
         self.kwargs: dict = kwargs
 
-        self.fmt: str = kwargs.get("fmt", "{asctime} | {levelname:<8} | {name:<15} | {message}")
+        self.fmt: str = kwargs.get("fmt", "{asctime} | {levelname:<8} | {name:<12} | {message}")
         self.date_fmt: str = kwargs.get("date_fmt", "%Y-%m-%d_%H-%M-%S")
 
         self.console_log: bool = kwargs.get("console_log", True)
@@ -82,7 +94,7 @@ class CustomLogger:
         self.file_log_mode: str = kwargs.get("file_log_mode", "a")
         self.file_log_level: int = kwargs.get("file_log_level", level)
         self.file_log_encoding: str = kwargs.get("file_log_encoding", "utf-8")
-        self.log_dir: str = os.path.abspath(kwargs.get("log_dir", "./log"))
+        self.log_dir: Path = Path(kwargs.get("log_dir", "./log")).resolve()
         self.log_file_name: str = kwargs.get(
             "log_file_name",
             time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(time.time())) + ".log",
@@ -95,7 +107,7 @@ class CustomLogger:
 
         self._logger = logging.getLogger(name)
         self._logger.setLevel(level)
-        self._logger.propagate = kwargs.get("propagate", True)
+        self._logger.propagate = kwargs.get("propagate", False)
 
         if self.console_log is True:
             # Setup console logging.
@@ -175,67 +187,24 @@ class CustomLogger:
             level = self.level
 
         child_logger = self.__class__(
-            name=f"{self.name}.{name}",
+            name=f"{name}",
             level=level,
             **self.kwargs
         )
         child_logger.parent = self._logger
-        if self.propagate:
-            # Avoid repeat logging.
-            child_logger._logger.handlers = []
+        child_logger.propagate = True
+        child_logger._logger.handlers = []   # Avoid repeat logging.
 
         return child_logger
 
     def init_from_logger(self, ori_logger: logging.Logger, *args, **kwargs) -> "CustomLogger":
+        self.warning(f"Initializing {str(self.__class__)} object from logger {ori_logger.name}. This method hasn't been tested.")
         name = ori_logger.name
         level = ori_logger.level
         return self.__class__(name, level, *args, **kwargs)
 
-    # region logging.Logger functions.
-    @staticmethod
-    def logging_function(func):
-        """
-        A decorator to wrap logging functions.
-        """
-        def wrapper(self, msg, *args, **kwargs):
-            logging_func = getattr(self._logger, func.__name__)
-            return logging_func(msg, *args, **kwargs)
-
-        return wrapper
-
-    @logging_function
-    def debug(self, msg, *args, **kwargs):
-        pass
-
-    @logging_function
-    def info(self, msg, *args, **kwargs):
-        pass
-
-    @logging_function
-    def warning(self, msg, *args, **kwargs):
-        pass
-
-    @logging_function
-    def error(self, msg, *args, **kwargs):
-        pass
-
-    @logging_function
-    def critical(self, msg, *args, **kwargs):
-        pass
-
-    @logging_function
-    def fatal(self, msg, *args, **kwargs):
-        pass
-
-    @logging_function
-    def exception(self, msg, *args, exc_info=True, **kwargs):
-        pass
-    # endregion
-
     def _setup_console_logging(self):
-        """
-        Set up console logging with different handlers for stdout and stderr.
-        """
+        """Set up console logging with different handlers for stdout and stderr."""
         # Log lower levels to stdout.
         stdout_handler = logging.StreamHandler(sys.stdout)
         stdout_handler.setLevel(self.console_log_level)
@@ -251,18 +220,15 @@ class CustomLogger:
         self._logger.addHandler(stderr_handler)
 
     def _setup_file_logging(self):
-        """
-        Set up file logging.
-        """
-        if not os.path.exists(self.log_dir):
-            try:
-                os.makedirs(self.log_dir)
-            except OSError as e:
-                self.error(f"Could not create log directory {self.log_dir}: {e}. Initialization of file handler failed.")
-                raise RuntimeError(f"Log directory creation failed: {e}")
+        """Set up file logging."""
+        try:
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            self.error(f"Could not create log directory {self.log_dir}: {e}. Initialization of file handler failed.")
+            raise RuntimeError(f"Log directory creation failed: {e}")
 
         file_handler = logging.FileHandler(
-            filename=os.path.join(self.log_dir, self.log_file_name),
+            filename=self.log_dir / self.log_file_name,
             mode=self.file_log_mode,
             encoding=self.file_log_encoding,
         )
@@ -272,8 +238,7 @@ class CustomLogger:
 
     def __getattr__(self, item):
         if "_logger" in self.__dict__:
-            if hasattr(self._logger, item):
-                return getattr(self._logger, item)
+            return getattr(self._logger, item)
         else:
             raise AttributeError(f"{self.__class__.__name__} object has no attribute '{item}'")
 
@@ -283,3 +248,9 @@ class CustomLogger:
     def __repr__(self):
         # TODO Should display handler, formatter, etc.
         return self.__str__()
+
+if __name__ == '__main__':
+    logger = CustomLogger("test_logger", level=CustomLogger.DEBUG)
+    logger.info("Test info")
+    logger.info(CustomLogger.DEBUG)
+    logger.info(CustomLogger.getLevelNamesMapping())

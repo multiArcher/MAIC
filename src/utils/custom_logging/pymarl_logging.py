@@ -21,7 +21,7 @@ class PyMARLLogger(CustomLogger):
 
     Note:
         The following keyword arguments are accepted:\n
-        - fmt (str): The format of the logger. Default is "{asctime} | {levelname:<8} | {name:<14} | {message}".
+        - fmt (str): The format of the logger. Default is "{asctime} | {levelname:<8} | {name:<12} | {message}".
         - date_fmt (str): The format of the asctime in fmt. Default is "%Y-%m-%d_%H-%M-%S".
         - console_log (bool). Whether to log to console. Default is True.
         - console_log_level (int): Level of the console log handler. Default is the same as CustomLogger.
@@ -30,7 +30,7 @@ class PyMARLLogger(CustomLogger):
         - file_log_level (int): Level of the file log handler. Default is the same as CustomLogger.
         - log_dir (str): Directory for storaging log files. Default is "./log".
         - log_file_name (str): Name of the log file. Default is time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(time.time())).
-        - propagate (bool): Whether to propagate through child loggers. Default is True.
+        - propagate (bool): Whether to propagate through child loggers. Default is False.
     """
     def __init__(self, name, level: int = logging.NOTSET, *args, **kwargs):
         if hasattr(self, "_initialized"):
@@ -49,6 +49,8 @@ class PyMARLLogger(CustomLogger):
         self.sacred_info = None
 
         self.stats = defaultdict(lambda: [])
+
+        self.args_storage = None   # Temporary solution for args sharing. Will be removed after Config is implemented.
 
     def setup_tensorboard_logging(self, directory_name: str):
         """Initialize a SummaryWriter to log tensorboard data."""
@@ -128,7 +130,9 @@ class PyMARLLogger(CustomLogger):
                             continue
                         hparam_dict[f"{key}.{sub_key}"] = sub_value
                 else:
-                    hparam_dict[key] = value
+                    if isinstance(value, (bool, str, float, int, type(None), torch.Tensor)):
+                        hparam_dict[key] = value
+
 
             metric_dict = {}
             for key, value in self.stats.items():
