@@ -1,0 +1,28 @@
+from torch.nn import Module
+
+from .maker import Maker
+from modules.agents.agent import Agent
+
+
+class AgentMaker(Maker):
+    """Factory class for creating Agents."""
+
+    @staticmethod
+    def make_rnn(*args, **kwargs) -> Agent:
+        from modules.agents.rnn_agent import RNNAgent
+        return RNNAgent(*args, **kwargs)    #TODO: Make old agents a subclass of Agent.
+
+    @staticmethod
+    def make_rnn_ns(*args, **kwargs) -> Agent:
+        from modules.agents.rnn_ns_agent import RNNNSAgent
+        return RNNNSAgent(*args, **kwargs)
+
+    @staticmethod
+    def make_rnn_feat(*args, **kwargs) -> Agent:
+        from modules.agents.rnn_feature_agent import RNNFeatureAgent
+        return RNNFeatureAgent(*args, **kwargs)
+
+    @staticmethod
+    def make_entity_attend_rnn(*args, **kwargs) -> Agent:
+        from modules.agents.entity_attend_rnn_agent import EntityAttnRNNAgent
+        return EntityAttnRNNAgent(*args, **kwargs)

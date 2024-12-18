@@ -1,11 +1,15 @@
-from pathlib import Path
 import yaml
+from pathlib import Path
+from collections import OrderedDict
+
+from typing import Union
 
 from smacv2.env.starcraft2.wrapper import StarCraftCapabilityEnvWrapper
 
 from .multiagentenv import MultiAgentEnv
 
 
+# TODO: This should not be here!
 SMACv2_CONFIG_DIR = Path(__file__).parent.parent / "config" / "envs" / "smacv2_configs"
 
 
@@ -17,7 +21,12 @@ def load_scenario(map_name, **kwargs):
     scenario_path = SMACv2_CONFIG_DIR / f"{map_name}.yaml"
     with open(scenario_path, "r") as f:
         scenario_args = yaml.load(f, Loader=yaml.FullLoader)
-    scenario_args.update(kwargs)
+    scenario_args.update(kwargs)    # TODO: Bug Seed, episode_limit and other kwargs are not passed to the SC2Env.
+    # Work around: pass them to the SC2Env directly.
+    scenario_args["env_args"]["seed"] = kwargs.get("seed", None)
+    scenario_args["env_args"]["window_size_x"] = kwargs.get("window_size_x", None)
+    scenario_args["env_args"]["window_size_y"] = kwargs.get("window_size_y", None)
+
     return StarCraftCapabilityEnvWrapper(**scenario_args["env_args"])
 
 
@@ -87,6 +96,12 @@ class SMACv2Wrapper(MultiAgentEnv):
 
     def get_stats(self):
         return self.env.get_stats()
+
+    def __getattr__(self, name):
+        if hasattr(self.env, name):
+            return getattr(self.env, name)
+        else:
+            raise AttributeError
 
 
 if __name__ == "__main__":

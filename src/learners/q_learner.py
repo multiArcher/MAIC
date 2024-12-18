@@ -8,7 +8,7 @@ from components.standarize_stream import RunningMeanStd
 from learners.learner import Learner
 # from modules.mixers.vdn import VDNMixer
 # from modules.mixers.qmix import QMixer
-from modules.mixers import MixerMaker
+from utils.maker import MixerMaker
 
 
 class QLearner(Learner):

@@ -1,5 +1,4 @@
-from modules.agents import AgentMaker
-from components.action_selectors import ActionSelectorMaker
+from utils.maker import AgentMaker, ActionSelectorMaker
 import torch as th
 
 
