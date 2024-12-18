@@ -6,33 +6,29 @@ import shutil
 import tqdm
 import threading
 import psutil
-# import time
-from os.path import dirname, abspath
+# from os.path import dirname, abspath
 from types import SimpleNamespace as SN
+from pathlib import Path
 
 import torch
 
 from components.episode_buffer import ReplayBuffer
 from components.transforms import OneHot
 from utils.general_reward_support import test_alg_config_supports_reward
-from utils.marl_logging import PyMARLLogger
-from runners import RunnerMaker
-from controllers import MACMaker
-from learners import LearnerMaker
+from utils.custom_logging import PyMARLLogger
+from utils.maker import MACMaker, LearnerMaker, RunnerMaker
 
 
 def run(_run, _config, _log):
+    # setup loggers
+    logger = PyMARLLogger("main").get_child_logger("run")
+
     # check args sanity
-    _config = args_sanity_check(_config, _log)
+    _config = args_sanity_check(_config, logger)
 
     args = SN(**_config)
-    # args.device = th.device(args.device)
-    assert test_alg_config_supports_reward(
-        args
-    ), "The specified algorithm does not support the general reward setup. Please choose a different algorithm or set `common_reward=True`."
-
-    # setup loggers
-    logger = PyMARLLogger("main")
+    args.device = torch.device(args.device)
+    logger.args_storage = args  # Temporary solution for args sharing. Will be removed after Config is implemented.
 
     logger.info("Experiment Parameters:")
     experiment_params = pprint.pformat(_config, indent=4, underscore_numbers=True)
@@ -40,10 +36,8 @@ def run(_run, _config, _log):
 
     # configure tensorboard logger
     if args.use_tensorboard:
-        tb_logs_dir = os.path.join(
-            dirname(dirname(abspath(__file__))), "results", "tensorboard_logs"
-        )
-        tb_exp_dir = os.path.join(tb_logs_dir, f"{_config['unique_token']}")
+        tb_logs_dir = Path(__file__).resolve().parents[1] / "results" / "tensorboard_logs"
+        tb_exp_dir = tb_logs_dir / f"{_config['unique_token']}"
         logger.setup_tb(tb_exp_dir)
 
     if args.use_wandb:
@@ -61,16 +55,16 @@ def run(_run, _config, _log):
     logger.finish(args)
 
     # Clean up after finishing
-    print("Exiting Main")
+    logger.info("Train process finished, exiting main.")
 
-    print("Stopping all threads")
+    logger.info("Stopping all threads")
     for t in threading.enumerate():
         if t.name != "MainThread":
-            print("Thread {} is alive! Is daemon: {}".format(t.name, t.daemon))
+            logger.info("Thread {} is alive! Is daemon: {}".format(t.name, t.daemon))
             t.join(timeout=1)
-            print("Thread joined")
+            logger.info("Thread joined")
 
-    print("Exiting script")
+    logger.info("Exiting script")
 
     # Making sure framework really exits
     # os._exit(os.EX_OK)
@@ -88,9 +82,10 @@ def evaluate_sequential(args, runner):
 
 def run_sequential(args, logger):
     # Init runner so we can get env info
-    # runner = r_REGISTRY[args.runner](args=args, logger=logger)
-    runner = RunnerMaker.make(args.runner, args=args, logger=logger)
-    logger.console_logger.debug(f"Running with {runner.__class__.__name__}.")
+    # TODO: Environment is initialized in runner. It's difficult for other parts to get env_info. 
+    #       Now, we are using args_env_info for communicating between modules. It's not a good design.
+    runner = RunnerMaker.make(args.runner, args=args, logger=logger)    
+    logger.debug(f"Running with {runner.__class__.__name__}.")
 
     # Set up schemes and groups here
     env_info = runner.get_env_info()
@@ -100,8 +95,8 @@ def run_sequential(args, logger):
 
     # Default/Base scheme
     scheme = {
-        "state": {"vshape": env_info["state_shape"]},
-        "obs": {"vshape": env_info["obs_shape"], "group": "agents"},
+        "state": {"vshape": env_info["state_shape"], "dtype": torch.float32},
+        "obs": {"vshape": env_info["obs_shape"], "group": "agents", "dtype": torch.float32},
         "actions": {"vshape": (1,), "group": "agents", "dtype": torch.long},
         "avail_actions": {
             "vshape": (env_info["n_actions"],),
@@ -132,7 +127,7 @@ def run_sequential(args, logger):
     # Setup multiagent controller here
     # mac = mac_REGISTRY[args.mac](buffer.scheme, groups, args)
     mac = MACMaker.make(args.mac, buffer.scheme, groups, args)
-    logger.console_logger.debug(f"Running with {mac.__class__.__name__}.")
+    logger.debug(f"Running with {mac.__class__.__name__}.")
 
     # Give runner the scheme
     runner.setup(scheme=scheme, groups=groups, preprocess=preprocess, mac=mac)
@@ -140,7 +135,7 @@ def run_sequential(args, logger):
     # Learner
     # learner = le_REGISTRY[args.learner](mac, buffer.scheme, logger, args)
     learner = LearnerMaker.make(args.learner, mac, buffer.scheme, logger, args)
-    logger.console_logger.debug(f"Running with {learner.__class__.__name__}.")
+    logger.debug(f"Running with {learner.__class__.__name__}.")
 
     if args.use_cuda:
         learner.to(args.device)
@@ -271,10 +266,10 @@ def run_sequential(args, logger):
         if progress_bar is None:
             logger.console_logger.info("Train process started")
             progress_bar = tqdm.tqdm(
-                total=args.t_max,
+                total=(args.t_max + args.batch_size_run * args.env_info["episode_limit"]),
                 mininterval=3,
                 unit="step",
-                bar_format="{desc}{bar:15} | {n_fmt}/{total_fmt} steps{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}]{postfix}",
+                bar_format="{desc}{bar:13} | {n_fmt}/{total_fmt} steps{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}]{postfix}",
                 desc=f"{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")} | TRAINING | ",
                 postfix={"episode": episode},
                 file=tqdm_output
@@ -293,12 +288,16 @@ def run_sequential(args, logger):
         gpu_memory_allocated = torch.cuda.memory_allocated() / 1024 ** 3
         gpu_memory_reserved = torch.cuda.memory_reserved() / 1024 ** 3
 
-        progress_bar.set_postfix({
-                    "episode": episode,
-                    "memory": f"{used_memory:2.1f}/{free_memory:2.1f}/{total_memory:2.1f} GB",
-                    "gpu": f"{gpu_memory_allocated:2.1f}/{gpu_memory_reserved:2.1f}/{gpu_available_memory:2.1f}/{gpu_total_memory:2.1f} GB"
-                })
-        progress_bar.set_description_str(f"{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")} | TRAINING | ")
+        progress_bar.set_postfix(
+            {
+                "episode": episode,
+                "memory": f"{used_memory:2.1f}/{free_memory:2.1f}/{total_memory:2.1f} GB",
+                "gpu": f"{gpu_memory_allocated:2.1f}/{gpu_memory_reserved:2.1f}/{gpu_available_memory:2.1f}/{gpu_total_memory:2.1f} GB"
+            }
+        )
+        progress_bar.set_description_str(
+            f"{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")} | TRAINING | "
+        )
         update_steps = runner.t_env - progress_bar.n
         progress_bar.update(update_steps)
         sys.stdout.flush()
@@ -308,13 +307,12 @@ def run_sequential(args, logger):
     logger.console_logger.info("Finished Training")
 
 
-def args_sanity_check(config, _log):
+def args_sanity_check(config, logger):
     # set CUDA flags
-    # config["use_cuda"] = True # Use cuda whenever possible!
     if config["use_cuda"] and not torch.cuda.is_available():
         config["use_cuda"] = False
-        _log.warning(
-            "CUDA flag use_cuda was switched OFF automatically because no CUDA devices are available!"
+        logger.warning(
+            "CUDA flag use_cuda was switched OFF automatically because no CUDA device is available!"
         )
 
     if config["test_nepisode"] < config["batch_size_run"]:
@@ -324,4 +322,40 @@ def args_sanity_check(config, _log):
             config["test_nepisode"] // config["batch_size_run"]
         ) * config["batch_size_run"]
 
+    # Check entity scheme availability.
+    entity_env_implemented_list = ["sc2v2"]
+    if config.get("entity_scheme", False) and config["env"] not in entity_env_implemented_list:
+        logger.critical(f"Entity scheme is not available in selected env: {config["env"]}")
+        raise NotImplementedError(f"Entity scheme is only available in {entity_env_implemented_list}. Selected env: {config["env"]}")
+
+    # Separate reward check.
+    assert test_alg_config_supports_reward(
+        config
+    ), "The specified algorithm does not support the general reward setup. Please choose a different algorithm or set `common_reward=True`."
+
     return config
+
+# TODO: Refactor preprocess_init.
+#       Currently, preprocess is implemented in MAC.
+# def preprocess_init(args: SN) -> dict[str: tuple[str, list[Transform]]]:
+#     """Handle preprocess before storing in replay buffer."""
+#     #TODO: Simple implementation, need to refactor.
+#
+#     preprocess = {
+#         # "actions": ("actions_onehot", [OneHot(out_dim=args.n_actions)])
+#     }
+#
+#     if getattr(args, "entity_scheme", False):
+#         args.entity_shape = args.env_info["n_agents"] + args.env_info["n_enemies"]
+#
+#         preprocess.update(
+#             {
+#                 # "state": ("entity_state", [EntityState(**args.env_info)]),
+#                 "obs": (
+#                     ("obs_move", "obs_enemy", "obs_ally", "obs_own"),
+#                     [EntityObs(args.env_info["obs_components"])]
+#                 ),
+#             }
+#         )
+#
+#     return preprocess

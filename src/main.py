@@ -3,14 +3,15 @@ import os
 import sys
 import yaml
 import datetime
+import random
 from copy import deepcopy
-from os.path import dirname, abspath
+from pathlib import Path
 
 import numpy
 import torch
 from sacred import Experiment, SETTINGS
 from sacred.observers import FileStorageObserver
-from sacred.utils import apply_backspaces_and_linefeeds
+# from sacred.utils import apply_backspaces_and_linefeeds
 
 try:
     from collections import Mapping    # until python 3.10
@@ -18,31 +19,43 @@ except ImportError:
     from collections.abc import Mapping    # from python 3.10
 
 from run import run
-# from utils.pymarl_logging import get_logger
-from utils.marl_logging import PyMARLLogger
+from utils.custom_logging import PyMARLLogger
+
 from utils.torch_optimizer import optimize_tensor_display
 
+
+# Optimize tensor display during debugging. This is only useful for debugging.
 optimize_tensor_display(torch)
 
-# set to "no" if you want to see stdout/stderr in console "sys" / "no" / "fd"
-SETTINGS["CAPTURE_MODE"] = "no"
-
+current_file_path = Path(__file__).resolve()
+work_dir = current_file_path.parents[1]
+results_path = work_dir / "results"
 
 ex = Experiment("pymarl", save_git_info=False)
-# logger = get_logger()
-# ex.logger = logger
-ex.captured_out_filter = apply_backspaces_and_linefeeds
-
-results_path = os.path.join(dirname(dirname(abspath(__file__))), "results")
+# set to "no" if you want to see stdout/stderr in console "sys" / "no" / "fd"
+SETTINGS["CAPTURE_MODE"] = "no"
+# ex.captured_out_filter = apply_backspaces_and_linefeeds
 
 
 @ex.main
 def my_main(_run, _config, _log):
     # Setting the random seed throughout the modules
     config = config_copy(_config)
+    
+    # Set the seed for all randomness sources
+    # Python seed
+    random.seed(config["seed"])
+    os.environ["PYTHONHASHSEED"] = str(config["seed"])
+    # Numpy seed
     numpy.random.seed(config["seed"])
+    # Torch seed
     torch.manual_seed(config["seed"])
-    config["env_args"]["seed"] = config["seed"]  # Set the seed in SCII game.
+    torch.cuda.manual_seed(config["seed"])
+    torch.cuda.manual_seed_all(config["seed"])
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    # SMAC seed.
+    config["env_args"]["seed"] = config["seed"]
 
     # run the framework
     run(_run, config, _log)
@@ -116,11 +129,11 @@ if __name__ == "__main__":
     # endregion
 
     # Generate unique token.
-    # get map_name from yaml
-    try:
+    if "map_name" in config_dict["env_args"]:
         map_name = config_dict["env_args"]["map_name"]
-    except KeyError:
+    elif "key" in config_dict["env_args"]:
         map_name = config_dict["env_args"]["key"]
+
     # Get experiment name from yaml
     experiment_name = config_dict["name"]
 
@@ -134,7 +147,7 @@ if __name__ == "__main__":
             experiment_name = param.split("=")[1]
 
     unique_token = (
-        f"{experiment_name}_{map_name}_{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}"
+        f"{experiment_name}__{map_name}__{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}"
     )
 
     config_dict.update({"unique_token": unique_token})
@@ -143,14 +156,14 @@ if __name__ == "__main__":
         name="main",
         level=logging.DEBUG,
         file_log=True,
-        log_dir="./results/log",
-        log_file_name=unique_token + ".log"
+        log_dir=results_path / "logs",
+        log_file_name=unique_token + ".log",
     )
     ex.logger = logger.logger
 
     # Save to disk by default for sacred
     logger.info("Saving to FileStorageObserver in \"./results/sacred\".")
-    file_obs_path = os.path.join(results_path, f"sacred/{unique_token}")
+    file_obs_path = results_path / f"sacred/{unique_token}"
 
     ex.observers.append(
         FileStorageObserver(file_obs_path, copy_artifacts=False, copy_sources=False)

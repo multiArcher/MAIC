@@ -13,14 +13,14 @@ REPEAT_TIMES=3  # Times to run the experiment.
 # arguments in different runs.
 function update_hyperparams() {
     declare -n arg_dict=$1
-    local iter=$2  # Notice iter starts from 1.
+    local iter=$2  # * Should notice that iter starts from 1.
 
     # arguments before "with"
     arg_dict["config"]="--config=$CONFIG"
     arg_dict["env_config"]="--env-config=$ENV_CONFIG"
 
     # arguments after "with"
-    arg_dict["name"]="name=${EXPERIMENT_NAME}_run$((iter-1))}"  # name in tensorboard, sacred, and wandb
+    arg_dict["name"]="name=${EXPERIMENT_NAME}_run$((iter))"  # name in tensorboard, sacred, and wandb
 
     arg_dict["map_name"]="env_args.map_name=$MAP_NAME"
     }
