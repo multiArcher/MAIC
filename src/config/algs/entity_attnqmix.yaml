@@ -1,7 +1,7 @@
 # ------------------------------------------------------------------------------
 # ---Environment specific parameters---
 # ------------------------------------------------------------------------------
-name: "entity_qatten"
+name: "entity_attnqmix"
 
 runner: "parallel"
 batch_size_run: 8
