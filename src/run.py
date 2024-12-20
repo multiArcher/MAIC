@@ -293,7 +293,6 @@ def run_sequential(args, logger):
         progress_bar.update(update_steps)
         sys.stdout.flush()
 
-        torch.cuda.empty_cache()    # clear GPU cache.
 
     progress_bar.close()
     runner.close_env()

@@ -1,6 +1,6 @@
 import copy
 
-import torch as th
+import torch
 from torch.optim import Adam
 
 from components.episode_buffer import EpisodeBatch
@@ -56,7 +56,7 @@ class QLearner(Learner):
 
         if self.args.standardise_rewards:
             self.rew_ms.update(rewards)
-            rewards = (rewards - self.rew_ms.mean) / th.sqrt(self.rew_ms.var)
+            rewards = (rewards - self.rew_ms.mean) / torch.sqrt(self.rew_ms.var)
 
         if self.args.common_reward:
             assert (
@@ -71,7 +71,7 @@ class QLearner(Learner):
         mac_out = self.mac.forward(batch, t=t)
 
         # Pick the Q-Values for the actions taken by each agent
-        chosen_action_qvals = th.gather(mac_out[:, :-1], dim=3, index=actions).squeeze(
+        chosen_action_qvals = torch.gather(mac_out[:, :-1], dim=3, index=actions).squeeze(
             3
         )  # Remove the last dim
 
@@ -92,7 +92,7 @@ class QLearner(Learner):
             mac_out_detach = mac_out.clone().detach()
             mac_out_detach[avail_actions == 0] = -9999999
             cur_max_actions = mac_out_detach[:, 1:].max(dim=3, keepdim=True)[1]
-            target_max_qvals = th.gather(target_mac_out, 3, cur_max_actions).squeeze(3)
+            target_max_qvals = torch.gather(target_mac_out, 3, cur_max_actions).squeeze(3)
         else:
             target_max_qvals = target_mac_out.max(dim=3)[0]
 
@@ -107,7 +107,7 @@ class QLearner(Learner):
 
         if self.args.standardise_returns:
             target_max_qvals = (
-                target_max_qvals * th.sqrt(self.ret_ms.var) + self.ret_ms.mean
+                target_max_qvals * torch.sqrt(self.ret_ms.var) + self.ret_ms.mean
             )
 
         # Calculate 1-step Q-Learning targets
@@ -117,7 +117,7 @@ class QLearner(Learner):
 
         if self.args.standardise_returns:
             self.ret_ms.update(targets)
-            targets = (targets - self.ret_ms.mean) / th.sqrt(self.ret_ms.var)
+            targets = (targets - self.ret_ms.mean) / torch.sqrt(self.ret_ms.var)
 
         # Td-error
         td_error = chosen_action_qvals - targets.detach()
@@ -133,7 +133,7 @@ class QLearner(Learner):
         # Optimise
         self.optimiser.zero_grad()
         loss.backward()
-        grad_norm = th.nn.utils.clip_grad_norm_(self.params, self.args.grad_norm_clip)
+        grad_norm = torch.nn.utils.clip_grad_norm_(self.params, self.args.grad_norm_clip)
         self.optimiser.step()
 
         self.training_steps += 1
@@ -167,6 +167,8 @@ class QLearner(Learner):
                 t_env,
             )
             self.log_stats_t = t_env
+            
+        torch.cuda.empty_cache()
 
     def _update_targets_hard(self):
         self.target_mac.load_state(self.mac)
@@ -196,8 +198,8 @@ class QLearner(Learner):
     def save_models(self, path):
         self.mac.save_models(path)
         if self.mixer is not None:
-            th.save(self.mixer.state_dict(), "{}/mixer.th".format(path))
-        th.save(self.optimiser.state_dict(), "{}/opt.th".format(path))
+            torch.save(self.mixer.state_dict(), "{}/mixer.th".format(path))
+        torch.save(self.optimiser.state_dict(), "{}/opt.th".format(path))
 
     def load_models(self, path):
         self.mac.load_models(path)
@@ -205,11 +207,11 @@ class QLearner(Learner):
         self.target_mac.load_models(path)
         if self.mixer is not None:
             self.mixer.load_state_dict(
-                th.load(
+                torch.load(
                     "{}/mixer.th".format(path),
                     map_location=lambda storage, loc: storage,
                 )
             )
         self.optimiser.load_state_dict(
-            th.load("{}/opt.th".format(path), map_location=lambda storage, loc: storage)
+            torch.load("{}/opt.th".format(path), map_location=lambda storage, loc: storage)
         )

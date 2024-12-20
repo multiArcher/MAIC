@@ -66,9 +66,9 @@ class EntityMAC(MAC):
         agent_inputs = self._build_inputs(ep_batch, t)  # two list of tensor features.
         avail_actions = ep_batch["avail_actions"][:, t]
 
+        agent_outs, self.hidden_states = self.agent(agent_inputs, self.hidden_states)   # Agent forward
 
         # For politic action selection. Not Implemented yet.
-        agent_outs, self.hidden_states = self.agent(agent_inputs, self.hidden_states)   # Agent forward
         if self.agent_output_type == "pi_logits":
             if getattr(self.args, "mask_before_softmax", True):
                 # Make the logits for unavailable actions very negative to minimise their affect on the softmax

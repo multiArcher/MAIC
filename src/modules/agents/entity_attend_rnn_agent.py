@@ -64,16 +64,16 @@ class EntityAttnRNNAgent(Agent):
 
     def forward(self, inputs, hidden_state):
         # Head
-        entities = [
+        x = [
             layer(feature_input) for feature_input, layer in zip(inputs, self.embedding_layers)
         ]
 
-        entities = torch.cat(entities, dim=-2)
+        x = torch.cat(x, dim=-2)
 
         # Encoding: hidden_dim -> attn_dim
         # A single transformer encoder.
         # TODO: Test multiple structure of attention.
-        x = self.encoding(entities)  # TODO: Maybe not useful because all information has already been embedded.
+        x = self.encoding(x)  # TODO: Maybe not useful because all information has already been embedded.
         x = self.norm(x[..., 0, :] + self.attn(x))
         x = self.norm(x + self.feedforward(x))
 
