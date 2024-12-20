@@ -185,18 +185,20 @@ def run_sequential(args, logger):
     model_save_time = 0
 
     logger.console_logger.info(f"Beginning training for {args.t_max} timesteps")
-    logger.console_logger.info("-" * 38 + "TRAINING START" + "-" * 38)
+    logger.console_logger.info("-" * 30 + "TRAINING_START" + "-" * 30)
 
     # Delay init tqdm bar
     progress_bar = None
     tqdm_output = open("/dev/tty", "w") if sys.platform.startswith('linux') else sys.stdout
 
     while runner.t_env <= args.t_max:
-        # Run for a whole episode at a time
-        episode_batch = runner.run(test_mode=False)
-        buffer.insert_episode_batch(episode_batch)
+        with torch.no_grad():
+            # Run for a whole episode at a time
+            episode_batch = runner.run(test_mode=False)
+            buffer.insert_episode_batch(episode_batch)
 
         if buffer.can_sample(args.batch_size):
+            # TODO: Bigger batch_run should use bigger batch_size. Repeat training is not what parallelization is for.
             for _ in range(args.batch_size_run):
                 episode_sample = buffer.sample(args.batch_size)
 
@@ -212,17 +214,6 @@ def run_sequential(args, logger):
         # Execute test runs once in a while
         n_test_runs = max(1, args.test_nepisode // runner.batch_size)
         if (runner.t_env - last_test_t) / args.test_interval >= 1.0:
-            # logger.console_logger.info(
-            #     "t_env: {} / {}".format(runner.t_env, args.t_max)
-            # )
-            # logger.console_logger.info(
-            #     "Estimated time left: {}. Time passed: {}".format(
-            #         time_left(last_time, last_test_t, runner.t_env, args.t_max),
-            #         time_str(time.time() - start_time),
-            #     )
-            # )
-            # last_time = time.time()
-
             last_test_t = runner.t_env
             for _ in range(n_test_runs):
                 runner.run(test_mode=True)
@@ -269,7 +260,7 @@ def run_sequential(args, logger):
                 total=(args.t_max + args.batch_size_run * args.env_info["episode_limit"]),
                 mininterval=3,
                 unit="step",
-                bar_format="{desc}{bar:13} | {n_fmt}/{total_fmt} steps{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}]{postfix}",
+                bar_format="{desc}{bar:12} | {n_fmt}/{total_fmt} steps{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}]{postfix}",
                 desc=f"{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")} | TRAINING | ",
                 postfix={"episode": episode},
                 file=tqdm_output
@@ -301,6 +292,8 @@ def run_sequential(args, logger):
         update_steps = runner.t_env - progress_bar.n
         progress_bar.update(update_steps)
         sys.stdout.flush()
+
+        torch.cuda.empty_cache()    # clear GPU cache.
 
     progress_bar.close()
     runner.close_env()
