@@ -130,9 +130,11 @@ class EntityMAC(MAC):
                 - OrderedDict[str, tuple[int, int]]: Observation components with their shapes.
                 - OrderedDict[str, tuple[int, int]]: Embedding scheme including last action and agent ID features.
     """
+        # Input from env.
         input_scheme = self.obs_components
         embedding_scheme = OrderedDict()
 
+        # Additional embedding features.
         if self.args.obs_last_action:
             embedding_scheme["embedding.last_action"] = (1, scheme["avail_actions"]["vshape"][0])
         if self.args.obs_agent_id:
