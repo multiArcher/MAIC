@@ -1,13 +1,15 @@
 from abc import ABC, abstractmethod
+from types import SimpleNamespace
 
+from torch.nn import Module
 
-class MAC(ABC):
+class MAC(Module,ABC):
     """
     Interface for Multi Agent Controllers(MAC).
     """
     @abstractmethod
-    def __init__(self, scheme, groups, args):
-        pass
+    def __init__(self, scheme: dict, groups: dict, args: SimpleNamespace):
+        super(MAC, self).__init__()
 
     @abstractmethod
     def select_actions(self, ep_batch, t_ep, t_env, bs, test_mode):

@@ -1,119 +1,50 @@
+from collections import OrderedDict
 from types import SimpleNamespace
 
 import torch
 
 from .mac import MAC
-from utils.maker import AgentMaker
-from utils.maker import ActionSelectorMaker
+from utils.maker import AgentMaker, ActionSelectorMaker
+from components.action_selectors.action_selector import ActionSelector
 from utils.custom_logging import PyMARLLogger
 
 
-class EntityMAC(MAC, torch.nn.Module):
+# This multi-agent controller shares parameters between agents
+class EntityMAC(MAC):
     """Controller for entity wise env.
 
     Differences from MAC:
     - input_slices: list of slices to extract input data from obs into entity inputs.
-    - input_shape: tuple of input shape of agents in a tuple including
+    - input_scheme: tuple of input shape of agents in a tuple including
     (own_feats_dim, enemy_feats_dim, ally_feats_dim, Optional last_action_dim, Optional agent_id_dim)
 
-    TODO: Testing inheriting from torch.nn.Module to enable features
-     of breakpoints functions to be added in the future.
+    TODO: Testing inheriting from torch.nn.Module to enable features of nn.Module.
+    TODO: breakpoints functions to be added in the future.
     """
     def __init__(self, scheme: dict, groups, args: SimpleNamespace):
+        # Check if the env is in entity scheme
         if getattr(args, "entity_scheme", False) is False:
-            # Check if the env is in entity scheme
             class_name = self.__class__.__name__
             PyMARLLogger("main").get_child_logger(f"{class_name}").critical(f"{class_name} only works in entity scheme.")
             raise RuntimeError(f"{class_name} only works in entity scheme.")
 
-        super(MAC, self).__init__()
+        super(EntityMAC, self).__init__(scheme, groups, args)
 
         self.args = args
+        self.device: torch.device = args.device
         self.n_agents: int = args.n_agents
-        self.obs_shape: int = args.env_info["obs_shape"]
-        self.obs_components: dict = args.env_info["obs_components"]   # Obs components in a dict. Calculated in env_wrapper.
-        self.n_enemies, self.n_enemy_feats_dim = self.obs_components["n_enemy_feats"]   # int, int
-        self.n_ally, self.n_ally_feats_dim = self.obs_components["n_ally_feats"]    # int, int
-        self.move_feats_size: int = self.obs_components["move_feats_size"]
-        self.own_feats_size: int = self.obs_components["own_feats_size"]
 
-        self.input_slices: list[slice] = []  # Slices to extract input data from obs into entity inputs.
-        self._inti_entity_mapping_slices()
+        # Obs components in a dict. Calculated in env_wrapper.
+        self.obs_components: dict[str: tuple[int, int]] = args.env_info["obs_components"]
+        self.obs_partsL: int = len(self.obs_components) # number of obs parts
+        self.input_scheme = self._get_input_shape(scheme)   # Scheme including normal features and embedding features.
+        self.input_splits = self._init_entity_splits(self.input_scheme[0])  # A list for splitting obs data into entities.
 
-        self.input_shape = self._get_input_shape(scheme)
-        self.agent_output_type = args.agent_output_type
-        self.action_selector = ActionSelectorMaker.make(args.action_selector, args)
+        self.agent_output_type: str = args.agent_output_type
+        self.action_selector: ActionSelector = ActionSelectorMaker.make(args.action_selector, args)
 
-        self._build_agents(self.input_shape)
+        self._build_agents(self.input_scheme)
         self.hidden_states = None
-
-    def _get_input_shape(self, scheme) -> tuple[int, int, int, int, int]:
-        """Return input shape of agents in a tuple including (own_feats_dim, enemy_feats_dim, ally_feats_dim)"""
-        obs_components: dict = self.args.env_info["obs_components"]
-
-        move_feats_dim: int = obs_components["move_feats_size"]
-        enemy_feats_dim: int = obs_components["n_enemy_feats"][1]
-        ally_feats_dim: int = obs_components["n_ally_feats"][1]
-        own_feats_dim: int = obs_components["own_feats_size"]
-        own_feats_dim += move_feats_dim
-
-        last_action_dim = 1 if self.args.obs_last_action else 0
-        agent_id_dim = 1 if self.args.obs_agent_id else 0
-
-        input_shape = (own_feats_dim, enemy_feats_dim, ally_feats_dim, last_action_dim, agent_id_dim)
-
-        return input_shape
-
-    def _build_inputs(self, batch, t):
-        """The input of entity agents have 5 parts:
-
-        own_feats: batch * time * n_agents * own_feats_dim
-        ally_feats: batch * time * n_agents * (n_agents - 1) * ally_feats_dim
-        enemy_feats: batch * time * n_agents * n_enemies * enemy_feats_dim
-        Optional last_action: batch * time * n_agents * n_actions
-        Optional agent_id: batch * time * n_agents * n_agents
-
-        They will return in a tuple in order. If the option is not set, the corresponding part will be None.
-        TODO: The return is in a list. This is not always compatible with agents.
-              Maybe a named_tuple or else.
-        """
-        batch_size, time_steps, n_agents, obs_size = batch["obs"].shape
-        obs_data = batch["obs"][:, t]
-        time_size = obs_data.shape[1]
-
-        # Split obs by the mapping indices.
-        move_feats, enemy_feats, ally_feats, own_feats = [obs_data[...,input_slice] for input_slice in self.input_slices]
-        # split enemies and allies.
-        enemy_feats = enemy_feats.reshape(batch_size, time_size, self.n_agents, self.n_enemies, self.n_enemy_feats_dim)
-        ally_feats = ally_feats.reshape(batch_size, time_size, self.n_agents, self.n_agents - 1, self.n_ally_feats_dim)
-
-        own_feats_catted = torch.cat([own_feats, move_feats], dim=-1)   # own_feats is own_feats + move_feats.
-
-        last_actions = None
-        agent_id = None
-
-        if self.args.obs_last_action:
-            # Add a one dim last_action. This is not one-hot. The Agent will handle it.
-            last_actions_data = torch.roll(batch["actions"], shifts=1, dims=1).int()
-            last_actions_data[:, 0] = 0
-            last_actions = last_actions_data[:, t].squeeze(-1)
-
-        if self.args.obs_agent_id:
-            # Add a one dim agent_id. This is not one-hot. The Agent will handle it.
-            agent_id = torch.arange(    # [1, 2, 3]
-                self.n_agents,
-                dtype=torch.int,
-                device=batch.device,
-            ).repeat(       # b * t * n_agents * 1
-                batch_size,
-                time_size,
-                1,
-            )
-        # TODO: It's not elegant to return a list. Change to a named_tuple or else.
-        return own_feats_catted, ally_feats, enemy_feats, last_actions, agent_id
-
-    def _build_agents(self, input_shape):
-        self.agent = AgentMaker.make(self.args.agent, input_shape, self.args)
 
     def load_models(self, path):
         self.agent.load_state_dict(torch.load("{}/agent.th".format(path), map_location=lambda storage, loc: storage))
@@ -125,22 +56,20 @@ class EntityMAC(MAC, torch.nn.Module):
         self.agent.load_state_dict(other_mac.agent.state_dict())
 
     def init_hidden(self, batch_size):
-        self.hidden_states = self.agent.init_hidden().unsqueeze(0).expand(batch_size, self.n_agents, -1)
+        single_hidden_states = self.agent.init_hidden().unsqueeze(1).unsqueeze(1)
+        self.hidden_states = single_hidden_states.expand(-1, batch_size, self.n_agents, -1).contiguous()
 
     def forward(self, ep_batch, t, test_mode=False, *args, **kwargs):
-        # TODO: The situation that t is a slice never happens. Consider removing it.
         if int_t:= isinstance(t, int):
             t = slice(t, t + 1)
-        else:
-            t = slice(0, ep_batch["avail_actions"].shape[1])
 
-        agent_inputs = self._build_inputs(ep_batch, t)  # own_feats, ally_feats, enemy_feats, last_actions, agent_id
+        agent_inputs = self._build_inputs(ep_batch, t)  # two list of tensor features.
         avail_actions = ep_batch["avail_actions"][:, t]
 
+
+        # For politic action selection. Not Implemented yet.
         agent_outs, self.hidden_states = self.agent(agent_inputs, self.hidden_states)   # Agent forward
-
         if self.agent_output_type == "pi_logits":
-
             if getattr(self.args, "mask_before_softmax", True):
                 # Make the logits for unavailable actions very negative to minimise their affect on the softmax
                 agent_outs[avail_actions == 0] = -1e10
@@ -172,13 +101,102 @@ class EntityMAC(MAC, torch.nn.Module):
 
         return chosen_actions
 
-    def _inti_entity_mapping_slices(self):
-        # Mapping indices.  TODO: slice might be slow. Try torch.split instead.
-        bit_count = 0
-        self.input_slices.append(slice(bit_count, bit_count:= bit_count + self.move_feats_size))
-        self.input_slices.append(slice(bit_count, bit_count:= bit_count + self.n_enemies * self.n_enemy_feats_dim))
-        self.input_slices.append(slice(bit_count, bit_count:= bit_count + self.n_ally * self.n_ally_feats_dim))
-        self.input_slices.append(slice(bit_count, bit_count:= bit_count + self.own_feats_size))
+    @staticmethod
+    def _init_entity_splits(input_scheme: OrderedDict[str, tuple[int, int]]):
+        # Mapping indices.
+        split = []
+        for feat_name, feat_shape in input_scheme.items():
+            if feat_name.startswith("embedding."):
+                # split.append(feat_shape[1])
+                continue
+            else:
+                split.append(feat_shape[0] * feat_shape[1])
+        return split
 
-        # For debugging  # 92 in p 5v5 map
-        assert bit_count == self.obs_shape, "The mapping is not correct."
+    def _get_input_shape(self, scheme) -> (OrderedDict[str, tuple[int, int]], OrderedDict[str, tuple[int, int]]):
+        """Compute and return the input scheme for agents.
+
+        The input scheme includes observation components (e.g., own features, enemy features, ally features)
+        and additional embedding information based on configuration.
+
+        The embedding scheme includes last action and agent ID features. And
+        other features need embedding before encoding.
+
+        Args:
+            scheme (dict): The scheme that defines the structure and shapes of the input data.
+
+        Returns:
+            tuple:
+                - OrderedDict[str, tuple[int, int]]: Observation components with their shapes.
+                - OrderedDict[str, tuple[int, int]]: Embedding scheme including last action and agent ID features.
+    """
+        input_scheme = self.obs_components
+        embedding_scheme = OrderedDict()
+
+        if self.args.obs_last_action:
+            embedding_scheme["embedding.last_action"] = (1, scheme["avail_actions"]["vshape"][0])
+        if self.args.obs_agent_id:
+            embedding_scheme["embedding.agent_id"] = (1, self.n_agents)
+
+        return input_scheme, embedding_scheme
+
+    def _build_inputs(self, batch, t: slice):
+        """Build input for every agent.
+
+        The input of entity agents is organized in a list of tensors.
+        - First are entity states defined in env.env_info. Read fomr obs_components.
+        - Then are embedding features defined in config.
+        - Last are agent_id and last_action.
+        """
+        batch_size, max_length, n_agents, obs_size = batch["obs"].shape
+        obs_data = batch["obs"][:, t]
+        time_size = obs_data.shape[1]
+        inputs = []
+
+        # Split obs by the mapping indices.
+        split_obs = torch.split(obs_data, self.input_splits, dim=-1)
+        for i, feat_shape in enumerate(self.input_scheme[0].values()):
+            inputs.append(
+                split_obs[i].reshape(batch_size, time_size, n_agents, *feat_shape)
+            )
+
+        if self.args.obs_last_action:
+            # Add a one dim last_action. This is not one-hot. The Agent will handle it.
+            last_actions = self._get_last_actions(batch, t, batch_size, n_agents)
+            inputs.append(last_actions)
+
+        if self.args.obs_agent_id:
+            # Add a one dim agent_id. This is not one-hot. The Agent will handle it.
+            agent_id = torch.arange(    # [1, 2, 3]
+                self.n_agents, dtype=torch.int, device=batch.device,
+            ).repeat(       # b * t * n_agents * 1
+                batch_size,
+                time_size,
+                1,
+            ).unsqueeze(-1)
+            inputs.append(agent_id)
+
+        return inputs   # TODO: It's not elegant to return a list. Change to a NamedTuple or Dataclass.
+
+    def _build_agents(self, input_shape):
+        self.agent = AgentMaker.make(self.args.agent, input_shape, self.args)
+
+    def _get_last_actions(self, batch, t: slice, batch_size, n_agents):
+        """
+        Return last actions of time slice t。
+
+        Args:
+            batch: PyMARL batch。
+            t (slice): time slice。
+            batch_size (int): batch size。
+            n_agents (int): agent number。
+
+        Returns:
+            torch.Tensor: last actions of time slice t。
+        """
+        if t.start == 0:
+            zeros = torch.zeros(batch_size, 1, n_agents, 1, device=self.device)
+            sliced_actions = batch["actions"][:, slice(0, t.stop - 1)]
+            return torch.cat([zeros, sliced_actions], dim=1).int()
+        else:
+            return batch["actions"][:, slice(t.start - 1, t.stop - 1)].int()

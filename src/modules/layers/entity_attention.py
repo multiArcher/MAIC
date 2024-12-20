@@ -1,8 +1,8 @@
 import math
 from types import SimpleNamespace
+from typing import Optional
 
 import torch
-import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -37,11 +37,6 @@ class EntityAttnLayer(nn.Module):
         self.k_proj = nn.Linear(embed_dim, embed_dim, bias=False)
         self.v_proj = nn.Linear(embed_dim, embed_dim, bias=False)
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=False)
-
-        self.subln = RMSNorm(2 * self.head_dim, eps=1e-5, elementwise_affine=True)
-
-        for name, module in self.named_modules():
-            module.full_name = name
 
     def extra_repr(self):
         return f"embed_dim={self.embed_dim}, heads={self.num_heads}"
