@@ -24,5 +24,12 @@ class AgentMaker(Maker):
 
     @staticmethod
     def make_entity_attend_rnn(*args, **kwargs) -> Agent:
+        """Entity agent using attention to merge obs."""
         from modules.agents.entity_attend_rnn_agent import EntityAttnRNNAgent
         return EntityAttnRNNAgent(*args, **kwargs)
+
+    @staticmethod
+    def make_entity_pooling_rnn(*args, **kwargs) -> Agent:
+        """Entity agent using pooling to merge obs."""
+        from modules.agents.entity_pooling_rnn_agent import EntityPoolingRNNAgent
+        return EntityPoolingRNNAgent(*args, **kwargs)
