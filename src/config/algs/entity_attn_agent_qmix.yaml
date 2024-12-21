@@ -1,7 +1,7 @@
 # ------------------------------------------------------------------------------
 # ---Environment specific parameters---
 # ------------------------------------------------------------------------------
-name: "entity_agent_qmix"
+name: "entity_attn_agent_qmix"
 
 runner: "parallel"
 batch_size_run: 16

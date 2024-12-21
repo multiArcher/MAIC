@@ -40,3 +40,9 @@ class MixerMaker(Maker):
     def make_flex_qmix(*args, **kwargs) -> Module:
         from modules.mixers.flex_qmix import FlexQMixer
         return FlexQMixer(*args, **kwargs)
+
+    @staticmethod
+    def make_pymarl2_qmix_mixer(*args, **kwargs) -> Module:
+        """QMIX implementation in PyMARL2."""
+        from modules.mixers.pymarl2_qmix_mixer import Mixer
+        return Mixer(*args, **kwargs)
