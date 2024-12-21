@@ -24,3 +24,9 @@ class MACMaker(Maker):
     def make_entity_mac(*args, **kwargs) -> MAC:
         from controllers.entity_controller import EntityMAC
         return EntityMAC(*args, **kwargs)
+
+    @staticmethod
+    def make_pymarl2_nmac_controller(*args, **kwargs) -> MAC:
+        """MAC Implementation from PyMARL2"""
+        from controllers.pymarl2_nmac_controller import NMAC
+        return NMAC(*args, **kwargs)

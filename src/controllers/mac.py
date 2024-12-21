@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 from torch.nn import Module
 
-class MAC(Module,ABC):
+class MAC(Module, ABC):
     """
     Interface for Multi Agent Controllers(MAC).
     """

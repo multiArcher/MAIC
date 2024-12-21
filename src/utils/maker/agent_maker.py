@@ -33,3 +33,9 @@ class AgentMaker(Maker):
         """Entity agent using pooling to merge obs."""
         from modules.agents.entity_pooling_rnn_agent import EntityPoolingRNNAgent
         return EntityPoolingRNNAgent(*args, **kwargs)
+
+    @staticmethod
+    def make_pymarl2_qmix_agent(*args, **kwargs) -> Agent:
+        """PyMARL2 QMix agent."""
+        from modules.agents.pymarl2_qmix_agent import NRNNAgent
+        return NRNNAgent(*args, **kwargs)

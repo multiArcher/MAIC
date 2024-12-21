@@ -2,7 +2,19 @@ from abc import ABC, abstractmethod
 from typing import Callable
 
 
-class Maker(ABC):
+class MetaMaker(type):
+    """Metaclass for Maker class"""
+    @classmethod
+    @abstractmethod
+    def make_func(cls, target_type: str) -> Callable:
+        """Abstract method to get the make function for the target type"""
+        pass
+
+    def __getitem__(cls, item) -> Callable:
+        return cls.make_func(item)
+
+
+class Maker(metaclass=MetaMaker):
     """Abstract class for making objects"""
 
     @classmethod
@@ -21,8 +33,3 @@ class Maker(ABC):
         """Make an object of the target type"""
         make_func = cls.make_func(target_type)
         return make_func(*args, **kwargs)
-
-    @classmethod
-    def __getitem__(cls, item: str) -> Callable:
-        # Compatible for old code.
-        return cls.make_func(item)

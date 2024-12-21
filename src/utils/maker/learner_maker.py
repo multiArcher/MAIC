@@ -49,3 +49,9 @@ class LearnerMaker(Maker):
     def make_batch_q_learner(*args, **kwargs) -> 'Learner':
         from learners.batch_q_learner import QLearner
         return QLearner(*args, **kwargs)
+
+    @staticmethod
+    def make_pymarl2_q_learner(*args, **kwargs) -> 'Learner':
+        """Q-learner from PyMARL2."""
+        from learners.pymarl2_q_learner import NQLearner
+        return NQLearner(*args, **kwargs)
