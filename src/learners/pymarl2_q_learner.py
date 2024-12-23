@@ -21,7 +21,7 @@ class NQLearner:
         self.device = th.device('cuda' if args.use_cuda else 'cpu')
         self.params = list(mac.parameters())
 
-        if args.mixer == "pymarn2_qmix_mixer":
+        if args.mixer == "pymarl2_qmix_mixer":
             self.mixer = Mixer(args)
         else:
             raise "mixer error"
@@ -156,8 +156,6 @@ class NQLearner:
             else:
                 info["td_errors_abs"] = ((td_error.abs() * mask).sum(1) \
                                          / th.sqrt(mask.sum(1))).detach().to('cpu')
-
-        th.cuda.empty_cache()
 
         return info
 

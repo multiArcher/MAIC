@@ -1,6 +1,7 @@
 import datetime
 import os
 import sys
+import gc
 import pprint
 import shutil
 import tqdm
@@ -199,10 +200,10 @@ def run_sequential(args, logger):
 
         if buffer.can_sample(args.batch_size):
             # TODO: Bigger batch_run should use bigger batch_size. Repeat training is not what parallelization is for.
-            for _ in range(args.batch_size_run):
+            for _ in range(args.sample_times_per_run):
                 episode_sample = buffer.sample(args.batch_size)
 
-                # Truncate batch to only filled timesteps
+                # Truncate batch to only filled time steps.
                 max_ep_t = episode_sample.max_t_filled()
                 episode_sample = episode_sample[:, :max_ep_t]
 
@@ -210,6 +211,11 @@ def run_sequential(args, logger):
                     episode_sample.to(args.device)
 
                 learner.train(episode_sample, runner.t_env, episode)
+
+                # Clear cache.
+                del episode_sample
+                gc.collect()
+                torch.cuda.empty_cache()
 
         # Execute test runs once in a while
         n_test_runs = max(1, args.test_nepisode // runner.batch_size)
@@ -307,6 +313,7 @@ def args_sanity_check(config, logger):
             "CUDA flag use_cuda was switched OFF automatically because no CUDA device is available!"
         )
 
+    # Adjust batch_size_run and test_nepisode to be divisible by batch_size_run.
     if config["test_nepisode"] < config["batch_size_run"]:
         config["test_nepisode"] = config["batch_size_run"]
     else:
@@ -324,6 +331,21 @@ def args_sanity_check(config, logger):
     assert test_alg_config_supports_reward(
         config
     ), "The specified algorithm does not support the general reward setup. Please choose a different algorithm or set `common_reward=True`."
+
+    # Check sample_times_per_run
+    if sample_times_per_run := config.get("sample_times_per_run", None) is not None:
+        if sample_times_per_run < 1:
+            logger.error(
+                "sample_times_per_run should be greater than or equal to 1. Setting it to 1."
+            )
+            config["sample_times_per_run"] = 1
+        else:
+            logger.warning(
+                "sample_times_per_run should be less than or equal to batch_size_run. "
+                "Consider enlarging batch_size instead of repeat training."
+            )
+    else:
+        config["sample_times_per_run"] = 1
 
     return config
 
