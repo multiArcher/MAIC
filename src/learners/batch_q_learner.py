@@ -167,8 +167,6 @@ class QLearner(Learner):
                 t_env,
             )
             self.log_stats_t = t_env
-            
-        torch.cuda.empty_cache()
 
     def _update_targets_hard(self):
         self.target_mac.load_state(self.mac)

@@ -11,3 +11,4 @@ log_interval: 50000
 runner_log_interval: 50000
 learner_log_interval: 50000
 t_max: 10050000
+save_model_interval: 1000000 # Save models after this many timesteps
