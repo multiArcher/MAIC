@@ -84,7 +84,14 @@ class EntityAttnLayer(nn.Module):
         v = v.transpose(-2, -3)  # batch * time * agents * heads * n_entities * head_dim
 
         # calculate attention weights.
+        # why not batch * time * agents * heads * n_entities  * head_dim
         attn_weights = q @ k.transpose(-2, -1)  # batch * time * agents * heads * 1  * head_dim
+
+        # attention change -> if refil use agent mask
+        if agent_mask is not None and self.args.name == "refil":
+            agent_mask_repeat = agent_mask.repeat_interleave(self.num_heads, dim=0)
+            attn_weights = attn_weights.masked_fill(agent_mask_repeat[:, :, :n_entities], -float('Inf'))
+
         attn_weights = F.softmax(
             attn_weights,
             dim=-1,
