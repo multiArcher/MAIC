@@ -5,6 +5,7 @@ name: "entity_catting_agent_qmix"
 
 runner: "parallel"
 batch_size_run: 16
+sample_times_per_run: 16
 
 entity_scheme: True
 

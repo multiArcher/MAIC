@@ -334,18 +334,20 @@ def args_sanity_check(config, logger):
 
     # Check sample_times_per_run
     if sample_times_per_run := config.get("sample_times_per_run", None) is not None:
+        # sample_times_per_run is defined in config.
         if sample_times_per_run < 1:
             logger.error(
                 "sample_times_per_run should be greater than or equal to 1. Setting it to 1."
             )
             config["sample_times_per_run"] = 1
-        else:
+        elif sample_times_per_run > config["batch_size_run"]:
             logger.warning(
                 "sample_times_per_run should be less than or equal to batch_size_run. "
                 "Consider enlarging batch_size instead of repeat training."
             )
     else:
-        config["sample_times_per_run"] = 1
+        # sample_times_per_run is not defined in config.
+        config["sample_times_per_run"] = config["batch_size_run"]   # Use batch_size_run as default.
 
     return config
 
