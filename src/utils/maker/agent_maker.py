@@ -39,3 +39,9 @@ class AgentMaker(Maker):
         """PyMARL2 QMix agent."""
         from modules.agents.pymarl2_qmix_agent import NRNNAgent
         return NRNNAgent(*args, **kwargs)
+
+    @staticmethod
+    def make_entity_catting_rnn(*args, **kwargs) -> Agent:
+        """Entity agent using concatenation to merge obs."""
+        from modules.agents.entity_catting_rnn_agent import EntityCattingRNNAgent
+        return EntityCattingRNNAgent(*args, **kwargs)
