@@ -5,11 +5,12 @@ from typing import Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as functional
+from jieba.lac_small.predict import batch_size
 
 from utils.custom_logging import PyMARLLogger
 
 
-class EntityAttnLayer(nn.Module):
+class ImagineEntityAttnLayer(nn.Module):
     """
     Attention Layer for entity scheme multi-agent systems.
     Args:
@@ -24,7 +25,7 @@ class EntityAttnLayer(nn.Module):
             num_heads: int,
             device: Optional[torch.device] = None
     ):
-        super(EntityAttnLayer, self).__init__()
+        super(ImagineEntityAttnLayer, self).__init__()
         self.args = args
 
         # Attn arguments.
@@ -52,7 +53,8 @@ class EntityAttnLayer(nn.Module):
 
     def forward(
             self,
-            entities: torch.Tensor
+            entities: torch.Tensor,
+            agent_mask: torch.Tensor = None
     ) -> torch.Tensor:
         """
         Args:
@@ -77,6 +79,14 @@ class EntityAttnLayer(nn.Module):
 
         # calculate attention weights.
         attn_weights = q @ k.transpose(-2, -1)  # batch * time * agents * heads * 1  * head_dim
+
+        bs, time_size, n_entities, _ = entities.shape
+
+        # attention masked -> if refil use agent mask
+        if agent_mask is not None and self.args.name == "refil":
+            agent_mask_repeat = agent_mask.repeat_interleave(self.num_heads, dim=0)
+            attn_weights = attn_weights.masked_fill(agent_mask_repeat[:, :, :n_entities], -float('Inf'))
+
         attn_weights = attn_weights * self.scaling
         attn_weights = functional.softmax(attn_weights, dim=-1)
 

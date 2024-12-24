@@ -5,7 +5,7 @@ import torch.nn
 import torch.nn as nn
 import torch.nn.functional as F
 
-from modules.layers import EntityAttnLayer
+from modules.layers import ImagineEntityAttnLayer
 from utils.rms_norm import RMSNorm
 from utils.custom_logging import PyMARLLogger
 from .agent import Agent
