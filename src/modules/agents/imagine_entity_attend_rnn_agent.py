@@ -78,10 +78,7 @@ class ImagineEntityAttnRNNAgent(EntityAttnRNNAgent):
         entities = entities.repeat(2, 1, 1, 1, 1)
         # no obs_mask, so dim * 2 not like source code * 3
         attn_mask = th.cat([withinattnmask, interactattnmask], dim=0)
-        print("hidden:")
-        print(hidden_state.shape)
         hidden_state = hidden_state.repeat(2, 1, 1)
-        print(hidden_state.shape)
         # Encoding  hidden_dim -> attn_dim
 
         # A single transformer encoder.
