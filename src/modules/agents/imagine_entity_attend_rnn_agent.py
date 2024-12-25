@@ -15,6 +15,7 @@ from .entity_attend_rnn_agent import EntityAttnRNNAgent
 class ImagineEntityAttnRNNAgent(EntityAttnRNNAgent):
     def __init__(self, input_shape, args: SimpleNamespace):
         super(ImagineEntityAttnRNNAgent, self).__init__(input_shape, args)
+        self.attn = ImagineEntityAttnLayer(args, self.attn_dim, self.n_heads)
 
     # copy from refil, used to calculate matrix logical
     def logical_not(self, inp):
@@ -26,12 +27,12 @@ class ImagineEntityAttnRNNAgent(EntityAttnRNNAgent):
         return out
 
     def entitymask2attnmask(self, entity_mask):
-        bs, ts, ne = entity_mask.shape
+        bs, ts, na, ne = entity_mask.shape
         # agent_mask = entity_mask[:, :, :self.args.n_agents]
-        in1 = (1 - entity_mask.to(th.float)).reshape(bs * ts, ne, 1)
-        in2 = (1 - entity_mask.to(th.float)).reshape(bs * ts, 1, ne)
+        in1 = (1 - entity_mask.to(th.float)).reshape(bs * ts * na, ne, 1)
+        in2 = (1 - entity_mask.to(th.float)).reshape(bs * ts * na, 1, ne)
         attn_mask = 1 - th.bmm(in1, in2)
-        return attn_mask.reshape(bs, ts, ne, ne).to(th.uint8)
+        return attn_mask.reshape(bs, ts, na, ne, ne).to(th.uint8)
 
     def forward(self, inputs, hidden_state, ret_attn_logits=None, msg=None, ret_attn_weights=False):
         # Head
@@ -54,10 +55,13 @@ class ImagineEntityAttnRNNAgent(EntityAttnRNNAgent):
 
         entities = th.cat([own_embedding.unsqueeze(-2), ally_embedding, enemy_embedding], dim=-2)
 
-        batch_size, time_size, n_entities, _ = entities.shape
+        # with open(".tmp.txt", "w") as f:
+        #     f.write(str(entities.shape))
+        # print(entities.shape)
+        batch_size, time_size, n_agents, n_entities, _ = entities.shape
 
         # create random split of entities (once per episode)
-        groupin_probs = th.rand(batch_size, 1, 1, device=entities.device).repeat(1, 1, n_entities)
+        groupin_probs = th.rand(batch_size, 1, n_agents, 1, device=entities.device).repeat(1, 1, 1, n_entities)
 
         groupin = th.bernoulli(groupin_probs).to(th.uint8)
         groupout = self.logical_not(groupin)
@@ -71,10 +75,13 @@ class ImagineEntityAttnRNNAgent(EntityAttnRNNAgent):
         # get within group attention mask
         withinattnmask = self.logical_not(interactattnmask)
 
-        entities = entities.repeat(2, 1, 1, 1)
+        entities = entities.repeat(2, 1, 1, 1, 1)
+        # no obs_mask, so dim * 2 not like source code * 3
         attn_mask = th.cat([withinattnmask, interactattnmask], dim=0)
+        print("hidden:")
+        print(hidden_state.shape)
         hidden_state = hidden_state.repeat(2, 1, 1)
-
+        print(hidden_state.shape)
         # Encoding  hidden_dim -> attn_dim
 
         # A single transformer encoder.
@@ -93,8 +100,8 @@ class ImagineEntityAttnRNNAgent(EntityAttnRNNAgent):
         for t in range(time_size):
             curr_x = x[:, t].reshape(-1, self.hidden_dim)
             h = self.rnn(curr_x, h)
-            hs.append(h.reshape(batch_size, self.n_agents, self.hidden_dim))
+            hs.append(h.reshape(batch_size * 2, self.n_agents, self.hidden_dim))
         hs = torch.stack(hs, dim=1)
         q = self.decoding(hs)
-
+        # q = q.reshape(batch_size, time_size, self.args.n_agents, -1)
         return q, hs
