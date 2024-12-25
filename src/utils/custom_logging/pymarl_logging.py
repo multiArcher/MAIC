@@ -32,10 +32,10 @@ class PyMARLLogger(CustomLogger):
         - log_file_name (str): Name of the log file. Default is time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(time.time())).
         - propagate (bool): Whether to propagate through child loggers. Default is False.
     """
-    def __init__(self, name, level: int = logging.NOTSET, *args, **kwargs):
+    def __init__(self, name, level: int = logging.NOTSET, **kwargs):
         if hasattr(self, "_initialized"):
             return
-        super().__init__(name, level, *args, **kwargs)
+        super().__init__(name, level, **kwargs)
 
         # PyMarl Structure.
         self.use_tensorboard: bool = kwargs.get("use_tensorboard", False)
@@ -48,9 +48,10 @@ class PyMARLLogger(CustomLogger):
         self._run_obj = None
         self.sacred_info = None
 
+        # Stats storage.
         self.stats = defaultdict(lambda: [])
 
-        self.args_storage = None   # Temporary solution for args sharing. Will be removed after Config is implemented.
+        self.args_storage = None   # TODO: Temporary solution for args sharing. Will be removed after Config is implemented.
 
     def setup_tensorboard_logging(self, directory_name: str):
         """Initialize a SummaryWriter to log tensorboard data."""
@@ -98,7 +99,7 @@ class PyMARLLogger(CustomLogger):
         self.tb_writer.add_embedding(key, value)
 
     def print_recent_stats(self):
-        """Log recent stats storaged in self.stats."""
+        """Log recent stats stored in self.stats."""
         print("", end="\n", flush=True) # flush tqdm bar
         log_str = "t_env: {} | Episode: {}\n".format(*self.stats["episode"][-1])
         log_str += " " * 33
@@ -132,7 +133,6 @@ class PyMARLLogger(CustomLogger):
                 else:
                     if isinstance(value, (bool, str, float, int, type(None), torch.Tensor)):
                         hparam_dict[key] = value
-
 
             metric_dict = {}
             for key, value in self.stats.items():

@@ -5,7 +5,7 @@ import torch.nn as nn
 
 from .agent import Agent
 from modules.layers import EntityAttnLayer
-from utils.rms_norm import RMSNorm
+from modules.layers.rms_norm import RMSNorm
 
 
 class EntityAttnRNNAgent(Agent):
@@ -59,28 +59,29 @@ class EntityAttnRNNAgent(Agent):
         entities = torch.cat(
             [layer(feature_input) for feature_input, layer in zip(inputs, self.embedding_layers)],
             dim=-2
-        )
+        )   # batch * time * n_agents * n_entities * hidden_dim
 
         # Encoding: hidden_dim -> attn_dim
         # A single transformer encoder.
         # TODO: Test multiple structure of attention.
         entities = self.encoding(entities)
         attn = self.norm1(entities[..., 0, :] + self.attn(entities))
-        attn = self.norm2(attn + self.feedforward(attn))
+        attn = self.norm2(attn + self.feedforward(attn))    # batch * time * n_agents * attn_dim
 
         # TODO: After the first entity attention layer, the rest should be self attention layer. Not implemented.
 
         batch_size, time_size, n_agents, _ = attn.shape
 
         # Output:  attn_dim -> n_actions
-        x = self.rnn_proj(attn)     # attn_dim -> hidden_dim
+        # attn_dim -> hidden_dim
+        x = self.rnn_proj(attn)    # batch * time * n_agents * hidden_dim
 
         x = x.transpose(1, 2).reshape(batch_size * n_agents, time_size, self.hidden_dim)  # b * t * n * d -> b * n * t * d -> (b * n) * t * d
-        h = hidden_state.reshape(self.gru_layers, batch_size * n_agents, self.hidden_dim)
+        h = hidden_state.reshape(self.gru_layers, batch_size * n_agents, self.hidden_dim)   # layers * (batch * n_agents) * hidden_dim
 
         x, h = self.rnn(x, h)   # GRU forward.
 
-        x = x.reshape(batch_size, n_agents, time_size, self.hidden_dim).transpose(1, 2)
+        x = x.reshape(batch_size, n_agents, time_size, self.hidden_dim).transpose(1, 2)     # (b * n) * t * d -> b * n * t * d -> b * t * n * d
         h = h.reshape(self.gru_layers, batch_size, n_agents, self.hidden_dim)
 
         q = self.decoding(x)

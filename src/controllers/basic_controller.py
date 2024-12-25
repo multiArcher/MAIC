@@ -7,23 +7,18 @@ from utils.maker import AgentMaker, ActionSelectorMaker
 # This multi-agent controller shares parameters between agents
 class BasicMAC(MAC):
     def __init__(self, scheme, groups, args):
-        super().__init__()
+        super(BasicMAC, self).__init__(scheme, groups, args)
         self.n_agents = args.n_agents
         self.args = args
+        self.device = args.device
+        self.agent_output_type = args.agent_output_type
+
         input_shape = self._get_input_shape(scheme)
         self._build_agents(input_shape)
-        self.agent_output_type = args.agent_output_type
 
         self.action_selector = ActionSelectorMaker.make(args.action_selector, args)
 
         self.hidden_states = None
-
-    @property
-    def device(self):
-        if (agent:= getattr(self, "agent", None)) is not None:
-            return next(agent.parameters()).device
-        else:
-            return None
 
     def select_actions(self, ep_batch, t_ep, t_env, bs=slice(None), test_mode=False):
         # Only select actions for the selected batch elements in bs
@@ -56,17 +51,17 @@ class BasicMAC(MAC):
         if self.hidden_states is not None:
             self.hidden_states = self.hidden_states.unsqueeze(0).expand(batch_size, self.n_agents, -1)  # bav
 
-    def parameters(self):
-        return self.agent.parameters()
+    # def parameters(self):
+    #     return self.agent.parameters()
 
     def load_state(self, other_mac):
         self.agent.load_state_dict(other_mac.agent.state_dict())
 
-    def cuda(self):
-        self.agent.to(self.args.device)
+    # def cuda(self):
+    #     self.agent.to(self.args.device)
         
-    def to(self, device):
-        self.agent.to(device)
+    # def to(self, device):
+    #     self.agent.to(device)
 
     def save_models(self, path):
         th.save(self.agent.state_dict(), "{}/agent.th".format(path))

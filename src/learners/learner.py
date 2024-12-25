@@ -1,7 +1,7 @@
-from abc import ABCMeta, abstractmethod
+from abc import ABC, abstractmethod
 
 
-class Learner(metaclass=ABCMeta):
+class Learner(ABC):
     @abstractmethod
     def train(self, batch, t_env, episode_num):
         pass
@@ -14,19 +14,13 @@ class Learner(metaclass=ABCMeta):
     def _update_targets_soft(self, tau):
         pass
 
-    # def to(self, device):
-    #     self.mac.to(device)
-    #     self.target_mac.to(device)
-    #     if self.mixer is not None:
-    #         self.mixer.to(device)
-    #         self.target_mixer.to(device)
-
     @abstractmethod
     def cuda(self):
+        # TODO: cuda can inherit from torch.nn.Module.
         pass
 
     def to(self, device):
-        # TODO Implement suppliment of different devices.
+        # TODO: Implement supplement of different devices.
         self.cuda()
 
     @abstractmethod

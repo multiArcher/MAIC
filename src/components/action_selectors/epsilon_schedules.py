@@ -2,7 +2,15 @@ import numpy as np
 
 
 class DecayThenFlatSchedule():
-
+    """A schedule that starts with a linear decay and then stays flat.
+    Args:
+        start (float): initial value
+        finish (float): final value
+        time_length (int): time in number of steps over which to linearly decay
+        decay (str): type of decay, either "linear" or "exp" (exponential)
+    Returns:
+        float: the current value of the schedule at time T
+    """
     def __init__(self,
                  start,
                  finish,

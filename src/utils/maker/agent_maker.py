@@ -1,5 +1,3 @@
-from torch.nn import Module
-
 from .maker import Maker
 from modules.agents.agent import Agent
 
