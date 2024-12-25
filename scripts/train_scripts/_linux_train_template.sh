@@ -29,24 +29,26 @@ function update_hyperparams() {
 # ? Should check before running experiments in a new environment.
 # ? ============================================================================
 # Set environment variable
-CONDA_ENVNAME="marl_latest"                        # Conda environment name
+CONDA_ENV_NAME="marl_latest"                        # Conda environment name
 
-export SC2PATH="$HOME/.local/share/StarCraftII"  # Path to StarCraft II game.
+if [-z "$SC2PATH"]: then
+    export SC2PATH="$HOME/.local/share/StarCraftII"  # Path to StarCraft II game.
+fi
 
-CUDA_DEVICES=0,1  # Set visible devices for scripts.
-export CUDA_VISIBLE_DEVICES=$CUDA_DEVICES
+# Set CUDA devices
+CUDA_DEVICES=0  # Set visible devices for scripts.
 
 # Paths
 WORK_DIR="$HOME/workspace/epymarl_based"    # Path to work dir
-LOG_DIR="$WORK_DIR/log"     # Log directory
-PYTHON_SCRIPT="src/main.py"     # Relative path to python script in work dir.
-PYTHON_SCRIPT_PATH="${WORK_DIR}/${PYTHON_SCRIPT}"
+LOG_DIR="$WORK_DIR/log"     # Log directory for logging terminal outputs.
+PYTHON_SCRIPT="src/main.py"     # Path to python script in work dir. Can be absolute or relative to work dir.
 
-BUFFER_CPU_ONLY=False
-DEVICE=cuda:0
+# Environment parameters passed to the Python script.
+BUFFER_CPU_ONLY=True
+DEVICE=cuda
 
 # arguments for different environments.
-function update_envparams() {
+function update_env_params() {
     declare -n arg_dict=$1
     local iter=$2  # Notice iter starts from 1.
 
@@ -57,12 +59,27 @@ function update_envparams() {
 
 SEPERATOR="------------------------------------------------------------------------------------------------------------------------"
 
-# Create log directory if it doesn't exist
-if ! cd "$WORK_DIR"; then
-    echo "Work dir: $WORK_DIR not found."
-    exit 1
+export CUDA_VISIBLE_DEVICES=$CUDA_DEVICES
+
+# Check if work dir exists
+if ! [[ -d $WORK_DIR ]]; then
+    echo "Work dir: $WORK_DIR not found. Making directory."
+    mkdir -p "$WORK_DIR"
+fi
+cd "$WORK_DIR"
+
+# Check if Python script exists
+if [[ $PYTHON_SCRIPT = /* ]]; then
+    PYTHON_SCRIPT_PATH="$PYTHON_SCRIPT"
+else
+    PYTHON_SCRIPT_PATH="$WORK_DIR/$PYTHON_SCRIPT" # Path to train script.
 fi
 
+if ! [[ -e $SCRIPT_PATH ]]; then
+    echo "$(timestamp) | FATAL    | bash         | Run Failed, $PYTHON_SCRIPT_PATH not found." | tee -a "$LOGFILE"
+fi
+
+# Create log directory if it doesn't exist
 mkdir -p "$LOG_DIR"
 
 timestamp() {
@@ -72,25 +89,25 @@ timestamp() {
 # Python args passed to the Python command
 declare -A args
 
-log_file_path="$LOG_DIR/${EXPERIMENT_NAME}_$(timestamp)_log.log"
-logerr_file_path="$LOG_DIR/${EXPERIMENT_NAME}_$(timestamp)_err.log"
+std_log_path="$LOG_DIR/${EXPERIMENT_NAME}_$(timestamp)_log.log"
+err_log_path="$LOG_DIR/${EXPERIMENT_NAME}_$(timestamp)_err.log"
 
 # Generate log file names
-echo "$(timestamp) | INFO     | bash         | $SEPERATOR" | tee -a "$log_file_path"
-echo "$(timestamp) | INFO     | bash         | $SEPERATOR" | tee -a "$log_file_path"
-echo "$(timestamp) | INFO     | bash         | Train script starts." | tee -a "$log_file_path"
-echo "$(timestamp) | INFO     | bash         | Experiment name: $EXPERIMENT_NAME" | tee -a "$log_file_path"
-echo "$(timestamp) | INFO     | bash         | Work dir: $WORK_DIR" | tee -a "$log_file_path"
-echo "$(timestamp) | INFO     | bash         | Saving outputs to log files in $LOG_DIR" | tee -a "$log_file_path"
-echo "$(timestamp) | INFO     | bash         | Running Python script in conda environment: $CONDA_ENVNAME." | tee -a "$log_file_path"
+echo "$(timestamp) | INFO     | bash         | $SEPERATOR" | tee -a "$std_log_path"
+echo "$(timestamp) | INFO     | bash         | $SEPERATOR" | tee -a "$std_log_path"
+echo "$(timestamp) | INFO     | bash         | Train script starts." | tee -a "$std_log_path"
+echo "$(timestamp) | INFO     | bash         | Experiment name: $EXPERIMENT_NAME" | tee -a "$std_log_path"
+echo "$(timestamp) | INFO     | bash         | Work dir: $WORK_DIR" | tee -a "$std_log_path"
+echo "$(timestamp) | INFO     | bash         | Saving outputs to log files in $LOG_DIR" | tee -a "$std_log_path"
+echo "$(timestamp) | INFO     | bash         | Running Python script in conda environment: $CONDA_ENV_NAME." | tee -a "$std_log_path"
 
 # Define function to run experiment
 run_experiment() {
     update_hyperparams args "$1"
-    update_envparams args "$1"
+    update_env_params args "$1"
 
-    echo "$(timestamp) | INFO     | bash         | $SEPERATOR" | tee -a "$log_file_path"
-    echo "$(timestamp) | INFO     | bash         | Run $i" | tee -a "$log_file_path"
+    echo "$(timestamp) | INFO     | bash         | $SEPERATOR" | tee -a "$std_log_path"
+    echo "$(timestamp) | INFO     | bash         | Run $i" | tee -a "$std_log_path"
 
     # Construct command arguments
     local pre_args=""
@@ -109,23 +126,23 @@ run_experiment() {
         fi
     done
 
-    cmd="conda run -n $CONDA_ENVNAME --no-capture-output python ${PYTHON_SCRIPT_PATH} ${pre_args}with $post_args"
-    echo "$(timestamp) | INFO     | bash         | Command: $cmd" | tee -a "$log_file_path"
-    echo "$(timestamp) | INFO     | bash         | $SEPERATOR" | tee -a "$log_file_path"
+    cmd="conda run -n ${CONDA_ENV_NAME} --no-capture-output python ${PYTHON_SCRIPT_PATH} ${pre_args}with $post_args"
+    echo "$(timestamp) | INFO     | bash         | Command: $cmd" | tee -a "$std_log_path"
+    echo "$(timestamp) | INFO     | bash         | $SEPERATOR" | tee -a "$std_log_path"
     echo "$(timestamp) | INFO     | bash         | Starting train process."
     
     # Run the Python script
-    if ! eval "$cmd" 1>> "$log_file_path" 2>> "$logerr_file_path"; then
-        echo "$(timestamp) | ERROR    | root         | Run Failed, see $logerr_file_path for more information." | tee -a "$log_file_path" "$logerr_file_path"
-        echo "$(timestamp) | ERROR    | bash         | Train script ends." | tee -a "$log_file_path" "$logerr_file_path"
-        echo "$(timestamp) | INFO     | bash         | $SEPERATOR" | tee -a "$log_file_path" "$logerr_file_path"
-        echo "$(timestamp) | INFO     | bash         | $SEPERATOR" | tee -a "$log_file_path" "$logerr_file_path"
+    if ! eval "$cmd" 1>> "$std_log_path" 2>> "$err_log_path"; then
+        echo "$(timestamp) | FATAL    | bash         | Run Failed, see $err_log_path for more information." | tee -a "$std_log_path" "$err_log_path"
+        echo "$(timestamp) | FATAL    | bash         | Train script ends." | tee -a "$std_log_path" "$err_log_path"
+        echo "$(timestamp) | INFO     | bash         | $SEPERATOR" | tee -a "$std_log_path" "$err_log_path"
+        echo "$(timestamp) | INFO     | bash         | $SEPERATOR" | tee -a "$std_log_path" "$err_log_path"
         exit 1
     fi
 
-    echo "$(timestamp) | INFO     | bash         | $SEPERATOR" | tee -a "$log_file_path"
-    echo "$(timestamp) | INFO     | root         | Run $i finished." | tee -a "$log_file_path"
-    echo "$(timestamp) | INFO     | bash         | $SEPERATOR" | tee -a "$log_file_path"
+    echo "$(timestamp) | INFO     | bash         | $SEPERATOR" | tee -a "$std_log_path"
+    echo "$(timestamp) | INFO     | bash         | Run $i finished." | tee -a "$std_log_path"
+    echo "$(timestamp) | INFO     | bash         | $SEPERATOR" | tee -a "$std_log_path"
 
 }
 
@@ -140,6 +157,6 @@ done
 # done
 # wait
 
-echo "$(timestamp) | INFO     | bash         | Train script ends." | tee -a "$log_file_path"
-echo "$(timestamp) | INFO     | bash         | $SEPERATOR" | tee -a "$log_file_path"
-echo "$(timestamp) | INFO     | bash         | $SEPERATOR" | tee -a "$log_file_path"
+echo "$(timestamp) | INFO     | bash         | Train script ends." | tee -a "$std_log_path"
+echo "$(timestamp) | INFO     | bash         | $SEPERATOR" | tee -a "$std_log_path"
+echo "$(timestamp) | INFO     | bash         | $SEPERATOR" | tee -a "$std_log_path"

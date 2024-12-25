@@ -6,7 +6,7 @@ from torch.optim import Adam
 
 from components.episode_buffer import EpisodeBatch
 from components.standarize_stream import RunningMeanStd
-from modules.critics import CriticMaker
+from utils.maker import CriticMaker
 
 
 class ActorCriticLearner:

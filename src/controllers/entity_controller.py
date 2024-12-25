@@ -56,8 +56,8 @@ class EntityMAC(MAC):
         self.agent.load_state_dict(other_mac.agent.state_dict())
 
     def init_hidden(self, batch_size):
-        single_hidden_states = self.agent.init_hidden().unsqueeze(1).unsqueeze(1)
-        self.hidden_states = single_hidden_states.expand(-1, batch_size, self.n_agents, -1).contiguous()
+        single_hidden_state = self.agent.init_hidden().unsqueeze(1).unsqueeze(1)
+        self.hidden_states = single_hidden_state.expand(-1, batch_size, self.n_agents, -1).contiguous()
 
     def forward(self, ep_batch, t, test_mode=False, *args, **kwargs):
         if int_t:= isinstance(t, int):

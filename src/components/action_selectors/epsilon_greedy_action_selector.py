@@ -2,10 +2,15 @@ import torch
 from torch.distributions import Categorical
 
 from .action_selector import ActionSelector
-from ..epsilon_schedules import DecayThenFlatSchedule
+from .epsilon_schedules import DecayThenFlatSchedule
 
 class EpsilonGreedyActionSelector(ActionSelector):
+    """Implements epsilon-greedy action selection.
 
+    Epsilon-greedy action selection chooses between exploration (taking a random action) and exploitation (taking the
+    action with the highest Q-value). The probability of exploration is decayed over time, starting from a high value
+    and annealing to a low value over a fixed period of time.
+    """
     def __init__(self, args):
         self.args = args
 
@@ -14,7 +19,6 @@ class EpsilonGreedyActionSelector(ActionSelector):
         self.epsilon = self.schedule.eval(0)
 
     def select_action(self, agent_inputs, avail_actions, t_env, test_mode=False):
-
         # Assuming agent_inputs is a batch of Q-Values for each agent bav
         self.epsilon = self.schedule.eval(t_env)
 

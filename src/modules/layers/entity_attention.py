@@ -76,12 +76,12 @@ class EntityAttnLayer(nn.Module):
         v = v.transpose(-2, -3)  # batch * time * agents * heads * n_entities * head_dim
 
         # calculate attention weights.
-        attn_weights = q @ k.transpose(-2, -1)  # batch * time * agents * heads * 1  * head_dim
+        attn_weights = q @ k.transpose(-2, -1)  # batch * time * agents * heads * 1  * n_entities
         attn_weights = attn_weights * self.scaling
         attn_weights = functional.softmax(attn_weights, dim=-1)
 
         attn = attn_weights @ v     # batch * time * agents * heads * 1  * head_dim
-        attn = attn.transpose(-2, -3).reshape(*attn.shape[:-3], self.num_heads * self.head_dim)
+        attn = attn.reshape(*attn.shape[:-3], self.num_heads * self.head_dim)
 
         attn = self.out_proj(attn)  # batch * agents * embedding_dim
 
