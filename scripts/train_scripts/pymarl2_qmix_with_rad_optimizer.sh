@@ -9,6 +9,7 @@ CONFIG=pymarl2_qmix  # Algorithm config name in src/config/alg
 ENV_CONFIG=sc2v2  # Environment config in src/config/envs
 MAP_NAME=protoss_5_vs_5  # Map name, e.g., 3m in StarCraftII.
 REPEAT_TIMES=1  # Times to run the experiment.
+OPTIMIZER=rad  # Optimizer name.
 
 # arguments in different runs.
 function update_hyperparams() {
@@ -23,6 +24,7 @@ function update_hyperparams() {
     arg_dict["name"]="name=${EXPERIMENT_NAME}_run$((iter))"  # name in tensorboard, sacred, and wandb
 
     arg_dict["map_name"]="env_args.map_name=$MAP_NAME"
+    arg_dict["optimizer"]="optimizer=$OPTIMIZER"
     }
 # ! ============================================================================
 # ? ============================================================================

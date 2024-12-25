@@ -31,7 +31,7 @@ function update_hyperparams() {
 # Set environment variable
 CONDA_ENV_NAME="marl_latest"                        # Conda environment name
 
-if [-z "$SC2PATH"]: then
+if [ -z "$SC2PATH" ]; then
     export SC2PATH="$HOME/.local/share/StarCraftII"  # Path to StarCraft II game.
 fi
 
