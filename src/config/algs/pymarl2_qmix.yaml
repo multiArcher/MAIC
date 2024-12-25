@@ -13,7 +13,7 @@ batch_size_run: 4 # batch_size_run=4, buffer_size = 2500, batch_size=64  for 3s5
 sample_times_per_run: 1 # When set to 1, is the original parallel runner. When set to batch_size_run, is equivalent to episode runner.
 buffer_size: 5000
 batch_size: 128
-optimizer: 'adam'
+optimizer: 'rad'
 
 t_max: 10050000
 
