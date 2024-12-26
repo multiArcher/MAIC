@@ -43,3 +43,9 @@ class AgentMaker(Maker):
         """Entity agent using concatenation to merge obs."""
         from modules.agents.entity_catting_rnn_agent import EntityCattingRNNAgent
         return EntityCattingRNNAgent(*args, **kwargs)
+
+    @staticmethod
+    def make_entity_feature_attend_rnn(*args, **kwargs) -> Agent:
+        """Entity agent using feature attention to merge obs."""
+        from modules.agents.entity_feature_attend_rnn_agent import EntityFeatureAttnRNNAgent
+        return EntityFeatureAttnRNNAgent(*args, **kwargs)
