@@ -1,3 +1,4 @@
+# Modified from attend rnn agent. Can be merged with a parameter to select.
 from types import SimpleNamespace
 
 import torch.nn

@@ -3,3 +3,4 @@ from .diff_attention import EntityDiffAttnLayer
 from .CAMA_attention import EntityAttentionLayer
 from .entity_pooling import EntityPoolingLayer
 from .rms_norm import RMSNorm
+from .entity_feature_attention import EntityFeatureAttentionLayer

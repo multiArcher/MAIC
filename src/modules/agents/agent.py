@@ -5,7 +5,7 @@ import torch
 
 class Agent(torch.nn.Module, ABC):
     @abstractmethod
-    def __init__(self, input_shape, args):
+    def __init__(self, input_shape: any, args: any):
         super(Agent, self).__init__()
 
     @abstractmethod
