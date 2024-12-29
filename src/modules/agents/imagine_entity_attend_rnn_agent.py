@@ -100,5 +100,5 @@ class ImagineEntityAttnRNNAgent(EntityAttnRNNAgent):
             hs.append(h.reshape(batch_size * 2, self.n_agents, self.hidden_dim))
         hs = torch.stack(hs, dim=1)
         q = self.decoding(hs)
-        # q = q.reshape(batch_size, time_size, self.args.n_agents, -1)
-        return q, hs
+        q = q.reshape(batch_size * 2, time_size, self.args.n_agents, -1)
+        return q, hs, (withinattnmask.repeat(1, time_size, 1, 1, 1), interactattnmask.repeat(1, time_size, 1, 1, 1))
