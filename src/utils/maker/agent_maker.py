@@ -1,5 +1,3 @@
-from torch.nn import Module
-
 from .maker import Maker
 from modules.agents.agent import Agent
 
@@ -24,5 +22,30 @@ class AgentMaker(Maker):
 
     @staticmethod
     def make_entity_attend_rnn(*args, **kwargs) -> Agent:
+        """Entity agent using attention to merge obs."""
         from modules.agents.entity_attend_rnn_agent import EntityAttnRNNAgent
         return EntityAttnRNNAgent(*args, **kwargs)
+
+    @staticmethod
+    def make_entity_pooling_rnn(*args, **kwargs) -> Agent:
+        """Entity agent using pooling to merge obs."""
+        from modules.agents.entity_pooling_rnn_agent import EntityPoolingRNNAgent
+        return EntityPoolingRNNAgent(*args, **kwargs)
+
+    @staticmethod
+    def make_pymarl2_qmix_agent(*args, **kwargs) -> Agent:
+        """PyMARL2 QMix agent."""
+        from modules.agents.pymarl2_qmix_agent import NRNNAgent
+        return NRNNAgent(*args, **kwargs)
+
+    @staticmethod
+    def make_entity_catting_rnn(*args, **kwargs) -> Agent:
+        """Entity agent using concatenation to merge obs."""
+        from modules.agents.entity_catting_rnn_agent import EntityCattingRNNAgent
+        return EntityCattingRNNAgent(*args, **kwargs)
+
+    @staticmethod
+    def make_entity_feature_attend_rnn(*args, **kwargs) -> Agent:
+        """Entity agent using feature attention to merge obs."""
+        from modules.agents.entity_feature_attend_rnn_agent import EntityFeatureAttnRNNAgent
+        return EntityFeatureAttnRNNAgent(*args, **kwargs)

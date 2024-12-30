@@ -4,11 +4,11 @@
 # ! Should check every time before running.
 # ! ============================================================================
 # Experiment parameters
-EXPERIMENT_NAME=entity_agent_smac2_test_p_5v5  # Experiment name for logging.
-CONFIG=entity_attnqmix  # Algorithm config name in src/config/alg
+EXPERIMENT_NAME=entity_catting_agent_test_protoss_5_vs_5  # Experiment name for logging.
+CONFIG=entity_catting_agent_qmix  # Algorithm config name in src/config/alg
 ENV_CONFIG=sc2v2  # Environment config in src/config/envs
 MAP_NAME=protoss_5_vs_5  # Map name, e.g., 3m in StarCraftII.
-REPEAT_TIMES=4  # Times to run the experiment.
+REPEAT_TIMES=2  # Times to run the experiment.
 
 # arguments in different runs.
 function update_hyperparams() {

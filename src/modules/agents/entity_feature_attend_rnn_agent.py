@@ -4,11 +4,11 @@ import torch.nn
 import torch.nn as nn
 
 from .agent import Agent
-from modules.layers import EntityAttnLayer
+from modules.layers import EntityFeatureAttentionLayer
 from modules.layers.rms_norm import RMSNorm
 
 
-class EntityAttnRNNAgent(Agent):
+class EntityFeatureAttnRNNAgent(Agent):
     def __init__(self, input_scheme, args: SimpleNamespace):
         super().__init__(input_scheme, args)
 
@@ -38,7 +38,7 @@ class EntityAttnRNNAgent(Agent):
             nn.LeakyReLU(inplace=True),
         )
 
-        self.attn = EntityAttnLayer(args, self.attn_dim, self.n_heads)
+        self.attn = EntityFeatureAttentionLayer(args, self.attn_dim, self.n_heads)
         self.norm1 = RMSNorm(self.attn_dim, eps=1e-5, elementwise_affine=True).to(self.device)
         self.feedforward = nn.Linear(self.attn_dim, self.attn_dim, bias=False, device=self.device)
         self.norm2 = RMSNorm(self.attn_dim, eps=1e-5, elementwise_affine=True).to(self.device)

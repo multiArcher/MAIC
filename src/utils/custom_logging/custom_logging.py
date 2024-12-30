@@ -16,6 +16,7 @@ class MetaCustomLogger(type):
 
 class CustomLogger(metaclass=MetaCustomLogger):
     """Custom logger class to log messages with a specific format and handlers.
+    TODO: Implement Class level function like logging.info().
 
     Args:
         name (str): The name of the logger.
@@ -36,14 +37,6 @@ class CustomLogger(metaclass=MetaCustomLogger):
         - log_file_name (str): Name of the log file. Default is time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(time.time())).
         - propagate (bool): Whether to propagate through child loggers. Default is False.
     """
-    # CRITICAL = logging.CRITICAL
-    # FATAL = CRITICAL
-    # ERROR = logging.ERROR
-    # WARNING = logging.WARNING
-    # WARN = WARNING
-    # INFO = logging.INFO
-    # DEBUG = logging.DEBUG
-    # NOTSET = logging.NOTSET
 
     _instance = {}
     def __new__(cls, *args, **kwargs):
@@ -69,20 +62,16 @@ class CustomLogger(metaclass=MetaCustomLogger):
         # Return the initialized logger.
         return cls._instance[logger_name]
 
-
     def __init__(
             self,
             name: str,
             level: int = logging.NOTSET,
-            *args,
             **kwargs
     ):
         if getattr(self, "_initialized", False):
             return
         # Parameters init.
-        # self.name: str = name
-        # self.level: int = level
-        self.kwargs: dict = kwargs
+        self.kwargs: dict = kwargs  # Store all keyword arguments.
 
         self.fmt: str = kwargs.get("fmt", "{asctime} | {levelname:<8} | {name:<12} | {message}")
         self.date_fmt: str = kwargs.get("date_fmt", "%Y-%m-%d_%H-%M-%S")
@@ -99,8 +88,6 @@ class CustomLogger(metaclass=MetaCustomLogger):
             "log_file_name",
             time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(time.time())) + ".log",
         )
-
-        # self.propagate: bool = kwargs.get("propagate", True)
 
         # logger initialization.
         self.formatter = logging.Formatter(fmt=self.fmt, datefmt=self.date_fmt, style="{")

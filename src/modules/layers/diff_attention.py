@@ -6,7 +6,7 @@ import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
 
-from utils.rms_norm import RMSNorm
+from .rms_norm import RMSNorm
 
 
 class EntityDiffAttnLayer(nn.Module):

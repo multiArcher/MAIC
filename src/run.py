@@ -1,6 +1,7 @@
 import datetime
 import os
 import sys
+import gc
 import pprint
 import shutil
 import tqdm
@@ -185,22 +186,24 @@ def run_sequential(args, logger):
     model_save_time = 0
 
     logger.console_logger.info(f"Beginning training for {args.t_max} timesteps")
-    logger.console_logger.info("-" * 38 + "TRAINING START" + "-" * 38)
+    logger.console_logger.info("-" * 30 + "TRAINING_START" + "-" * 30)
 
     # Delay init tqdm bar
     progress_bar = None
     tqdm_output = open("/dev/tty", "w") if sys.platform.startswith('linux') else sys.stdout
 
     while runner.t_env <= args.t_max:
-        # Run for a whole episode at a time
-        episode_batch = runner.run(test_mode=False)
-        buffer.insert_episode_batch(episode_batch)
+        with torch.no_grad():
+            # Run for a whole episode at a time
+            episode_batch = runner.run(test_mode=False)
+            buffer.insert_episode_batch(episode_batch)
 
         if buffer.can_sample(args.batch_size):
-            for _ in range(args.batch_size_run):
+            # TODO: Bigger batch_run should use bigger batch_size. Repeat training is not what parallelization is for.
+            for _ in range(args.sample_times_per_run):
                 episode_sample = buffer.sample(args.batch_size)
 
-                # Truncate batch to only filled timesteps
+                # Truncate batch to only filled time steps.
                 max_ep_t = episode_sample.max_t_filled()
                 episode_sample = episode_sample[:, :max_ep_t]
 
@@ -209,20 +212,14 @@ def run_sequential(args, logger):
 
                 learner.train(episode_sample, runner.t_env, episode)
 
+                # Clear cache.
+                del episode_sample
+                gc.collect()
+                torch.cuda.empty_cache()
+
         # Execute test runs once in a while
         n_test_runs = max(1, args.test_nepisode // runner.batch_size)
         if (runner.t_env - last_test_t) / args.test_interval >= 1.0:
-            # logger.console_logger.info(
-            #     "t_env: {} / {}".format(runner.t_env, args.t_max)
-            # )
-            # logger.console_logger.info(
-            #     "Estimated time left: {}. Time passed: {}".format(
-            #         time_left(last_time, last_test_t, runner.t_env, args.t_max),
-            #         time_str(time.time() - start_time),
-            #     )
-            # )
-            # last_time = time.time()
-
             last_test_t = runner.t_env
             for _ in range(n_test_runs):
                 runner.run(test_mode=True)
@@ -269,7 +266,7 @@ def run_sequential(args, logger):
                 total=(args.t_max + args.batch_size_run * args.env_info["episode_limit"]),
                 mininterval=3,
                 unit="step",
-                bar_format="{desc}{bar:13} | {n_fmt}/{total_fmt} steps{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}]{postfix}",
+                bar_format="{desc}{bar:12} | {n_fmt}/{total_fmt} steps{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}]{postfix}",
                 desc=f"{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")} | TRAINING | ",
                 postfix={"episode": episode},
                 file=tqdm_output
@@ -302,6 +299,7 @@ def run_sequential(args, logger):
         progress_bar.update(update_steps)
         sys.stdout.flush()
 
+
     progress_bar.close()
     runner.close_env()
     logger.console_logger.info("Finished Training")
@@ -315,6 +313,7 @@ def args_sanity_check(config, logger):
             "CUDA flag use_cuda was switched OFF automatically because no CUDA device is available!"
         )
 
+    # Adjust batch_size_run and test_nepisode to be divisible by batch_size_run.
     if config["test_nepisode"] < config["batch_size_run"]:
         config["test_nepisode"] = config["batch_size_run"]
     else:
@@ -332,6 +331,23 @@ def args_sanity_check(config, logger):
     assert test_alg_config_supports_reward(
         config
     ), "The specified algorithm does not support the general reward setup. Please choose a different algorithm or set `common_reward=True`."
+
+    # Check sample_times_per_run
+    if sample_times_per_run := config.get("sample_times_per_run", None) is not None:
+        # sample_times_per_run is defined in config.
+        if sample_times_per_run < 1:
+            logger.error(
+                "sample_times_per_run should be greater than or equal to 1. Setting it to 1."
+            )
+            config["sample_times_per_run"] = 1
+        elif sample_times_per_run > config["batch_size_run"]:
+            logger.warning(
+                "sample_times_per_run should be less than or equal to batch_size_run. "
+                "Consider enlarging batch_size instead of repeat training."
+            )
+    else:
+        # sample_times_per_run is not defined in config.
+        config["sample_times_per_run"] = config["batch_size_run"]   # Use batch_size_run as default.
 
     return config
 

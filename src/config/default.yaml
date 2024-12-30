@@ -20,16 +20,18 @@ learner_log_interval: 2000 # Log training stats every {} timesteps
 t_max: 10000 # Stop running after this many timesteps
 use_cuda: True # Use gpu by default unless it isn't available
 device: "cuda"  # Default cuda device to use.
-buffer_cpu_only: True # If true we won't keep all of the replay buffer in vram
+buffer_cpu_only: True # If true we won't keep the whole replay buffer in vram
+# TODO: Not a good implementation for parallel running. Related to TODO in run.py:line201.
+sample_times_per_run: null # Number of times to sample from buffer per run
 
 # --- Logging options ---
-use_tensorboard: False # Log results to tensorboard
+use_tensorboard: True # Log results to tensorboard
 use_wandb: False # Log results to W&B
 wandb_team: null # W&B team name
 wandb_project: null # W&B project name
 wandb_mode: "offline" # W&B mode (online/offline)
 wandb_save_model: False # Save models to W&B (only done if use_wandb is True and save_model is True)
-save_model: False # Save the models to disk
+save_model: True # Save the models to disk
 save_model_interval: 50000 # Save models after this many timesteps
 checkpoint_path: "" # Load a checkpoint from this path
 evaluate: False # Evaluate model for test_nepisode episodes and quit (no training)

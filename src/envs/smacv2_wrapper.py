@@ -41,10 +41,10 @@ class SMACv2Wrapper(MultiAgentEnv):
         The order is defined in StarCraft2Env.get_obs_agent()
         """
         components = OrderedDict()
-        components["move_feats_size"] = self.env.get_obs_move_feats_size()
+        components["move_feats_size"] = (1, self.env.get_obs_move_feats_size())
         components["n_enemy_feats"] = self.env.get_obs_enemy_feats_size()
         components["n_ally_feats"] = self.env.get_obs_ally_feats_size()
-        components["own_feats_size"] = self.env.get_obs_own_feats_size()
+        components["own_feats_size"] = (1, self.env.get_obs_own_feats_size())
         return components
 
     def get_state_components(self) -> OrderedDict[str: Union[int, tuple[int, int]]]:
@@ -135,6 +135,7 @@ class SMACv2Wrapper(MultiAgentEnv):
         env_info["obs_feature_names"] = self.env.get_obs_feature_names()
         env_info["obs_components"] = self.get_obs_components()
         env_info["state_components"] = self.get_state_components()
+        env_info["state_last_action"] = self.env.state_last_action
 
         return env_info
 

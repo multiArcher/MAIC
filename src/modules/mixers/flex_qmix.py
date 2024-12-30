@@ -15,7 +15,7 @@ class AttentionHyperNet(nn.Module):
     mode='scalar' gets you a scalar by averaging over agents and embed dim
     ...per set of entities
     """
-    def __init__(self, args, extra_dims=0, mode='matrix'):
+    def __init__(self, args:SimpleNamespace, extra_dims=0, mode='matrix'):
         super(AttentionHyperNet, self).__init__()
         self.args = args
         self.mode = mode
@@ -27,7 +27,7 @@ class AttentionHyperNet(nn.Module):
         self.enemy_features = args.env_info["enemy_features"]
         self.n_actions = args.env_info["n_actions"]
         self.state_shape = args.env_info["state_shape"]
-        self.state_last_actions = args.env_info.get("state_last_action", True)
+        self.state_last_actions = args.env_info["state_last_action"]
 
         self.n_entities = self.n_agents + self.n_enemies
         self.agent_feature_dim = len(self.agent_features)

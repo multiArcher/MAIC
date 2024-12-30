@@ -1,7 +1,7 @@
 from torch.distributions import Categorical
 
 from .action_selector import ActionSelector
-from ..epsilon_schedules import DecayThenFlatSchedule
+from .epsilon_schedules import DecayThenFlatSchedule
 
 
 class MultinomialActionSelector(ActionSelector):

@@ -1,0 +1,82 @@
+# ------------------------------------------------------------------------------
+# ---Environment specific parameters---
+# ------------------------------------------------------------------------------
+name: "entity_catting_agent_qmix"
+
+runner: "parallel"
+batch_size_run: 16
+sample_times_per_run: 16
+
+entity_scheme: True
+
+test_nepisode: 160
+test_interval: 50000
+log_interval: 50000
+runner_log_interval: 50000
+learner_log_interval: 50000
+t_max: 10050000
+
+save_model: True # Save the models to disk
+save_model_interval: 1000000 # Save models after this many time steps
+
+use_tensorboard: True # Log results to tensorboard
+buffer_cpu_only: True # If true we won't keep all the replay buffer in vram
+
+# ------------------------------------------------------------------------------
+# --- Algorithm specific parameters ---
+# ------------------------------------------------------------------------------
+mac: "entity_mac" # Basic controller
+agent: "entity_catting_rnn" # Default rnn agent
+learner: "batch_q_learner"  # use the Q_Learner to train
+mixer: "qmix"  # Mixing network.
+
+# ------------------------------------------------------------------------------
+# --- Controller specific parameters ---
+# -----------------------------------------------------------------------------
+agent_output_type: "q"
+
+action_selector: "epsilon_greedy" # use epsilon greedy action selector
+epsilon_start: 1.0
+epsilon_finish: 0.05
+epsilon_anneal_time: 500000
+evaluation_epsilon: 0.0
+
+# ------------------------------------------------------------------------------
+# --- Agent specific parameters ---
+# ------------------------------------------------------------------------------
+use_rnn: True  # Use a recurrent network for the agent
+agent_gru_layers: 1   # Number of GRU layers in default rnn agent
+agent_hidden_dim: 64 # Size of hidden state for default rnn agent
+obs_agent_id: True # Include the agent's one_hot id in the observation
+obs_last_action: True # Include the agent's last action (one_hot) in the observation
+agent_attn_dim: 16
+agent_attn_heads: 4
+
+# ------------------------------------------------------------------------------
+# --- Learner specific parameters ---
+# ------------------------------------------------------------------------------
+standardise_returns: False
+standardise_rewards: True
+
+gamma: 0.99
+
+optimiser: Adam  # Not effective in some epymarl learner. They are fixed.
+lr: 0.001 # Learning rate for agents
+optim_alpha: 0.99 # RMSProp alpha
+optim_eps: 0.00001 # RMSProp epsilon
+
+grad_norm_clip: 10 # Reduce magnitude of gradients above this L2 norm
+
+batch_size: 64 # Number of episodes to train on
+buffer_size: 5000 # Size of the replay buffer
+
+double_q: True
+target_update_interval_or_tau: 200  # update the target network every {} episodes
+
+# ------------------------------------------------------------------------------
+# --- Mixer specific parameters ---
+# ------------------------------------------------------------------------------
+mixing_embed_dim: 32
+
+hypernet_layers: 2
+hypernet_embed: 64

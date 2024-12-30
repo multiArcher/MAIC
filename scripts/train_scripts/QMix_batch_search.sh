@@ -1,12 +1,13 @@
 #!/bin/bash
 
+# Outdated script, not used anymore.
 # Paths
 WORK_DIR="$HOME/workspace/epymarl_based"  # Path to root dir
 PYTHON_SCRIPT="src/main.py"     # Path to python script
 
 # Experiment parameters
 # ! ============================================================================
-# ! Shoule check every time before running.
+# ! Should check every time before running.
 # ! ============================================================================
 EXPERIMENT_NAME=QMIX_batch_search  # Experiment name for tensorboard, sacred, and wandb.
 CONFIG=qmix                # Algorithm config name in src/config/alg
