@@ -36,7 +36,7 @@ class NQLearner:
         if self.args.optimizer == 'adam':
             self.optimiser = Adam(params=self.params, lr=args.lr, weight_decay=getattr(args, "weight_decay", 0))
         elif self.args.optimizer == "rad":
-            self.optimiser = RAD(params=self.params, lr=args.lr)
+            self.optimiser = RAD(params=self.params, lr=args.lr, max_iter=30000)
         else:
             self.optimiser = RMSprop(params=self.params, lr=args.lr, alpha=args.optim_alpha, eps=args.optim_eps)
 

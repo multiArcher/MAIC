@@ -73,17 +73,17 @@ class EntityFeatureAttentionLayer(nn.Module):
         k = self.k_proj(entities).unsqueeze(-1)  # batch * time * agents * n_entities * sequence length * dim
         v = self.v_proj(entities).unsqueeze(-1)  # batch * time * agents * n_entities * sequence length * dim
 
-        q = q.reshape(*q.shape[:-2], self.num_heads, self.head_dim, feature_embed_dim)  # batch * time * agents * self(1) * heads * head_dim
-        k = k.reshape(*k.shape[:-2], self.num_heads, self.head_dim, feature_embed_dim)  # batch * time * agents * n_entities * heads * head_dim
-        v = v.reshape(*v.shape[:-2], self.num_heads, self.head_dim, feature_embed_dim)  # batch * time * agents * n_entities * heads * head_dim
+        q = q.reshape(*q.shape[:-2], self.num_heads, self.head_dim, feature_embed_dim)  # batch * time * agents * self(1) * heads * head_dim * feature_embed_dim
+        k = k.reshape(*k.shape[:-2], self.num_heads, self.head_dim, feature_embed_dim)  # batch * time * agents * n_entities * heads * head_dim * feature_embed_dim
+        v = v.reshape(*v.shape[:-2], self.num_heads, self.head_dim, feature_embed_dim)  # batch * time * agents * n_entities * heads * head_dim * feature_embed_dim
 
-        q = q.transpose(-3, -4)  # batch * time * agents * heads * self(1)  * head_dim
-        k = k.transpose(-3, -4)  # batch * time * agents * heads * n_entities * head_dim
-        v = v.transpose(-3, -4)  # batch * time * agents * heads * n_entities * head_dim
+        q = q.transpose(-3, -4)
+        q = q * self.scaling  # batch * time * agents * heads * self(1)  * head_dim * feature_embed_dim
+        k = k.transpose(-3, -4)  # batch * time * agents * heads * n_entities * head_dim * feature_embed_dim
+        v = v.transpose(-3, -4)  # batch * time * agents * heads * n_entities * head_dim * feature_embed_dim
 
         # calculate attention weights.
-        attn_weights = q @ k.transpose(-2, -1)  # batch * time * agents * heads * 1  * n_entities
-        attn_weights = attn_weights * self.scaling
+        attn_weights = q @ k.transpose(-2, -1)  # batch * time * agents * heads * n_entities * head_dim * head_dim
         attn_weights = functional.softmax(attn_weights, dim=-1)
 
         attn = (attn_weights @ v).sum(dim=-3)     # batch * time * agents * heads * head_dim * 1
