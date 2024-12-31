@@ -95,22 +95,7 @@ def run_sequential(args, logger):
     args.state_shape = env_info["state_shape"]
 
     # Default/Base scheme
-    scheme = {
-        "state": {"vshape": env_info["state_shape"], "dtype": torch.float32},
-        "obs": {"vshape": env_info["obs_shape"], "group": "agents", "dtype": torch.float32},
-        "actions": {"vshape": (1,), "group": "agents", "dtype": torch.long},
-        "avail_actions": {
-            "vshape": (env_info["n_actions"],),
-            "group": "agents",
-            "dtype": torch.int,
-        },
-        "terminated": {"vshape": (1,), "dtype": torch.uint8},
-    }
-    # For individual rewards in gymmai reward is of shape (1, n_agents)
-    if args.common_reward:
-        scheme["reward"] = {"vshape": (1,)}
-    else:
-        scheme["reward"] = {"vshape": (args.n_agents,)}
+    scheme = parse_buffer_scheme(env_info, args.common_reward)
     groups = {"agents": args.n_agents}
     preprocess = {
         "actions": ("actions_onehot", [OneHot(out_dim=args.n_actions)])
@@ -375,3 +360,23 @@ def args_sanity_check(config, logger):
 #         )
 #
 #     return preprocess
+
+def parse_buffer_scheme(env_info: dict, common_reward: bool = True):
+    """Parse buffer scheme from env_info."""
+    scheme = {
+        "state": {"vshape": env_info["state_shape"], "dtype": torch.float32},
+        "obs": {"vshape": env_info["obs_shape"], "group": "agents", "dtype": torch.float32},
+        "actions": {"vshape": (1,), "group": "agents", "dtype": torch.long},
+        "avail_actions": {
+            "vshape": (env_info["n_actions"],),
+            "group": "agents",
+            "dtype": torch.int,
+        },
+        "terminated": {"vshape": (1,), "dtype": torch.uint8},
+    }
+    # For individual rewards in gymmai reward is of shape (1, n_agents)
+    if common_reward:
+        scheme["reward"] = {"vshape": (1,)}
+    else:
+        scheme["reward"] = {"vshape": (env_info["n_agents"],)}
+    return scheme
