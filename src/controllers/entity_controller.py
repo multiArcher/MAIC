@@ -36,7 +36,7 @@ class EntityMAC(MAC):
 
         # Obs components in a dict. Calculated in env_wrapper.
         self.obs_components: dict[str: tuple[int, int]] = args.env_info["obs_components"]
-        self.obs_partsL: int = len(self.obs_components) # number of obs parts
+        # self.obs_partsL: int = len(self.obs_components) # number of obs parts
         self.input_scheme = self._get_input_shape(scheme)   # Scheme including normal features and embedding features.
         self.input_splits = self._init_entity_splits(self.input_scheme[0])  # A list for splitting obs data into entities.
 

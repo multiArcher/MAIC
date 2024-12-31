@@ -1,5 +1,6 @@
 import logging
 
+import torch
 import numpy
 from collections import defaultdict
 
@@ -74,6 +75,9 @@ class PyMARLLogger(CustomLogger):
 
     def log_scalar(self, key, value, t):
         """Add a scalar to initialized log tools."""
+        if isinstance(value, torch.Tensor):
+            value = value.item()
+
         self.stats[key].append((t, value))
 
         if self.use_tensorboard:

@@ -30,3 +30,8 @@ class MACMaker(Maker):
         """MAC Implementation from PyMARL2"""
         from controllers.pymarl2_nmac_controller import NMAC
         return NMAC(*args, **kwargs)
+
+    @staticmethod
+    def make_entity_maic_mac(*args, **kwargs) -> MAC:
+        from controllers.entity_maic_controller import EntityMAICMAC
+        return EntityMAICMAC(*args, **kwargs)
