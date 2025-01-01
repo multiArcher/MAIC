@@ -24,7 +24,7 @@ class EpsilonGreedyActionSelector(ActionSelector):
 
         if test_mode:
             # Greedy action selection only
-            self.epsilon = self.args.evaluation_epsilon
+            self.epsilon = getattr(self.args, "evaluation_epsilon", 0.0)
 
         # mask actions that are excluded from selection
         masked_q_values = agent_inputs.clone()  # Agent inputs are actually the output of Actor net.
