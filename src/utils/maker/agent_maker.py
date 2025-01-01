@@ -49,3 +49,9 @@ class AgentMaker(Maker):
         """Entity agent using feature attention to merge obs."""
         from modules.agents.entity_feature_attend_rnn_agent import EntityFeatureAttnRNNAgent
         return EntityFeatureAttnRNNAgent(*args, **kwargs)
+
+    @staticmethod
+    def make_imagine_entity_attend_rnn_icm_agent(*args, **kwargs) -> Agent:
+        """Entity agent using feature attention to merge obs."""
+        from modules.agents.imagine_entity_attend_rnn_icm_agent import ImagineEntityAttnRNNAgentICM
+        return ImagineEntityAttnRNNAgentICM(*args, **kwargs)

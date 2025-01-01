@@ -267,7 +267,7 @@ def run_sequential(args, logger):
                 mininterval=3,
                 unit="step",
                 bar_format="{desc}{bar:12} | {n_fmt}/{total_fmt} steps{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}]{postfix}",
-                desc=f"{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")} | TRAINING | ",
+                desc=f"{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')} | TRAINING | ",
                 postfix={"episode": episode},
                 file=tqdm_output
             )
@@ -279,21 +279,31 @@ def run_sequential(args, logger):
         used_memory = memory_info.used / 1024 ** 3  # 已用内存，单位GB
 
         # Watch GPU usage.
-        gpu_available_memory, gpu_total_memory = torch.cuda.mem_get_info()
-        gpu_available_memory = gpu_available_memory / 1024 ** 3
-        gpu_total_memory = gpu_total_memory / 1024 ** 3
-        gpu_memory_allocated = torch.cuda.memory_allocated() / 1024 ** 3
-        gpu_memory_reserved = torch.cuda.memory_reserved() / 1024 ** 3
+        if args.use_cuda:
+            gpu_available_memory, gpu_total_memory = torch.cuda.mem_get_info()
+            gpu_available_memory = gpu_available_memory / 1024 ** 3
+            gpu_total_memory = gpu_total_memory / 1024 ** 3
+            gpu_memory_allocated = torch.cuda.memory_allocated() / 1024 ** 3
+            gpu_memory_reserved = torch.cuda.memory_reserved() / 1024 ** 3
 
-        progress_bar.set_postfix(
-            {
-                "episode": episode,
-                "memory": f"{used_memory:2.1f}/{free_memory:2.1f}/{total_memory:2.1f} GB",
-                "gpu": f"{gpu_memory_allocated:2.1f}/{gpu_memory_reserved:2.1f}/{gpu_available_memory:2.1f}/{gpu_total_memory:2.1f} GB"
-            }
-        )
+            progress_bar.set_postfix(
+                {
+                    "episode": episode,
+                    "memory": f"{used_memory:2.1f}/{free_memory:2.1f}/{total_memory:2.1f} GB",
+                    "gpu": f"{gpu_memory_allocated:2.1f}/{gpu_memory_reserved:2.1f}/{gpu_available_memory:2.1f}/{gpu_total_memory:2.1f} GB"
+                }
+            )
+        else:
+            progress_bar.set_postfix(
+                {
+                    "episode": episode,
+                    "memory": f"{used_memory:2.1f}/{free_memory:2.1f}/{total_memory:2.1f} GB",
+                    "gpu": f"0 GB"
+                }
+            )
+
         progress_bar.set_description_str(
-            f"{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")} | TRAINING | "
+            f"{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')} | TRAINING | "
         )
         update_steps = runner.t_env - progress_bar.n
         progress_bar.update(update_steps)
@@ -324,8 +334,8 @@ def args_sanity_check(config, logger):
     # Check entity scheme availability.
     entity_env_implemented_list = ["sc2v2"]
     if config.get("entity_scheme", False) and config["env"] not in entity_env_implemented_list:
-        logger.critical(f"Entity scheme is not available in selected env: {config["env"]}")
-        raise NotImplementedError(f"Entity scheme is only available in {entity_env_implemented_list}. Selected env: {config["env"]}")
+        logger.critical(f"Entity scheme is not available in selected env: {config['env']}")
+        raise NotImplementedError(f"Entity scheme is only available in {entity_env_implemented_list}. Selected env: {config['env']}")
 
     # Separate reward check.
     assert test_alg_config_supports_reward(

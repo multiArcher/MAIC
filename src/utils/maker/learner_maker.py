@@ -55,3 +55,9 @@ class LearnerMaker(Maker):
         """Q-learner from PyMARL2."""
         from learners.pymarl2_q_learner import NQLearner
         return NQLearner(*args, **kwargs)
+
+    @staticmethod
+    def make_icm_q_learner(*args, **kwargs) -> 'Learner':
+        """Q-learner from PyMARL2."""
+        from learners.icm_q_learner import ICMQLearner
+        return ICMQLearner(*args, **kwargs)

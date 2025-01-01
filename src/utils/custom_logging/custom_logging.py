@@ -52,7 +52,7 @@ class CustomLogger(metaclass=MetaCustomLogger):
         if logger_name in cls._instance.keys():
             if len(args) > 1 or (len(kwargs) > 0 and "name" not in kwargs.keys()):
                 print(
-                    f"{time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(time.time()))} "
+                    f"{time.strftime('%Y-%m-%d_%H-%M-%S', time.localtime(time.time()))} "
                     f"| WARNING  | LOGGINGINIT    | "
                     f"{str(cls.name)} object \"{logger_name}\" has already been initialized. Any settings would NOT be passed."
                 )

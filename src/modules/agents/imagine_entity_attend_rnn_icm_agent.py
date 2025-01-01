@@ -5,10 +5,9 @@ import torch as th
 import torch.nn
 import torch.nn as nn
 import torch.nn.functional as F
-from markdown_it.common.entities import entities
 
 from modules.layers import EntityAttentionLayer
-from utils.rms_norm import RMSNorm
+from modules.layers.rms_norm import RMSNorm
 from utils.custom_logging import PyMARLLogger
 from .agent import Agent
 
@@ -35,61 +34,46 @@ class FiniteDist(nn.Module):
 
 
 class EntityAttnRNNAgentICM(Agent):
-    def __init__(self, input_shape, args: SimpleNamespace):
-        super(EntityAttentionLayer, self).__init__(input_shape, args)
+    def __init__(self, input_scheme, args: SimpleNamespace):
+        super().__init__(input_scheme, args)
         self.args = args
-        self.n_agents: int = getattr(args, "n_agents")
-        self.n_enemies: int = getattr(args, "env_info")["n_enemies"]
-        self.n_actions: int = getattr(args, "n_actions")
-        self.n_heads: int = getattr(args, "agent_attn_heads")
-        self.hidden_dim: int = getattr(args, "agent_hidden_dim")
+        self.device = args.device
+        self.n_heads: int = getattr(args, "agent_attn_heads")  # Attention heads.
+        self.hidden_dim: int = getattr(args, "agent_hidden_dim")  # Dimension of embedding andRNN.
         self.attn_dim: int = getattr(args, "agent_attn_dim")  # Dimension of full attention layer
-        self.pooling_type: str = getattr(args, "pooling_type", None)
+        self.gru_layers: int = getattr(args, "agent_gru_layers")  # Number of GRU layers.
 
-        self.n_entities: int = self.n_agents + self.n_enemies
-        self.own_feats_dim, self.enemy_feats_dim, self.ally_feats_dim, self.last_action_dim, self.agent_id_dim = input_shape
-
-        if self.attn_dim % self.n_heads != 0:
-            PyMARLLogger("main").get_child_logger(f"{self.__class__.__name__}").Fatal(
-                f"Attention dimension must be divisible by number of heads. Current values: dim: {self.attn_dim}, heads: {self.n_heads}"
+        # Embedding layers: scheme -> hidden_dim
+        self.embedding_layers = nn.ModuleList()
+        for feat_name, feat_shape in input_scheme[0].items():
+            self.embedding_layers.append(
+                nn.Linear(feat_shape[1], self.hidden_dim, bias=False, device=self.device)
             )
-            raise ValueError("Attention dimension must be divisible by number of heads.")
 
-        self.head_dim = self.attn_dim // self.n_heads  # Dimension of each attention head
+        # Embedding layers: 1 -> hidden_dim
+        for feat_name, feat_shape in input_scheme[1].items():
+            self.embedding_layers.append(
+                nn.Embedding(feat_shape[1], self.hidden_dim, device=self.device)
+            )
 
-        # Embedding layers
-        self.own_embed = nn.Linear(self.own_feats_dim, self.hidden_dim)
-        self.enemy_embed = nn.Linear(self.enemy_feats_dim, self.hidden_dim)
-        self.ally_embed = nn.Linear(self.ally_feats_dim, self.hidden_dim)
-        self.agent_id_embed = None
-        self.last_action_embed = None
-
-        if self.last_action_dim > 0:
-            self.agent_id_embed = torch.nn.Embedding(self.n_agents, self.hidden_dim)
-
-        if self.agent_id_dim > 0:
-            self.last_action_embed = torch.nn.Embedding(self.n_actions, self.hidden_dim)
-
-        # Encoding layers
+        # Encoding layers: hidden_dim -> attn_dim
         self.encoding = nn.Sequential(
-            nn.Linear(self.hidden_dim, self.attn_dim),
-            nn.LeakyReLU(),
-        )  # hidden_dim -> attn_dim
+            nn.Linear(self.hidden_dim, self.attn_dim, device=self.device),
+            nn.LeakyReLU(inplace=True),
+        )
 
-        self.attn = EntityAttentionLayer(args, self.attn_dim, self.n_heads)
-        self.feedforward = nn.Linear(self.attn_dim, self.attn_dim)
-        self.norm = RMSNorm(self.attn_dim, eps=1e-5, elementwise_affine=True)
+        self.attn = EntityAttentionLayer(self.attn_dim, self.attn_dim, self.attn_dim, args)
+        self.norm1 = RMSNorm(self.attn_dim, eps=1e-5, elementwise_affine=True).to(self.device)
+        self.feedforward = nn.Linear(self.attn_dim, self.attn_dim, bias=False, device=self.device)
+        self.norm2 = RMSNorm(self.attn_dim, eps=1e-5, elementwise_affine=True).to(self.device)
 
-        # Output layers
-        self.rnn_proj = nn.Linear(self.attn_dim, self.hidden_dim)  # attn_dim -> hidden_dim
-        self.rnn = nn.GRUCell(self.hidden_dim, self.hidden_dim)
+        # Output layers: attn_dim -> hidden_dim -> n_actions q
+        self.rnn_proj = nn.Linear(self.attn_dim, self.hidden_dim, device=self.device)
+        self.rnn = nn.GRU(self.hidden_dim, self.hidden_dim, num_layers=self.gru_layers, batch_first=True,
+                          device=self.device)
 
-        if args.self_loc:
-            self.self_fc = nn.Linear(input_shape, args.attn_embed_dim)
-            if not args.sp_use_same_attn:
-                self.sp_self_fc = nn.Linear(input_shape, args.attn_embed_dim)
-        self.fc_a1 = nn.Linear(args.attn_embed_dim*(1+args.self_loc)*2, args.rnn_hidden_dim)
-        self.fc_a2 = nn.Linear(args.rnn_hidden_dim, args.n_actions)
+        self.fc_a1 = nn.Linear(self.attn_dim * (1 + args.self_loc) * 2, self.hidden_dim)
+        self.fc_a2 = nn.Linear(self.hidden_dim, args.n_actions)
 
         self.decoding = nn.Linear(self.hidden_dim, args.n_actions)  # h -> q
 
@@ -99,17 +83,17 @@ class EntityAttnRNNAgentICM(Agent):
                 nn.Linear(self.hidden_dim, self.attn_dim),
                 nn.LeakyReLU(),
             )  # hidden_dim -> attn_dim
-            self.sp_attn = EntityAttentionLayer(args, self.attn_dim, self.n_heads)
+            self.sp_attn = EntityAttentionLayer(self.attn_dim, self.attn_dim, self.attn_dim, args)
         self.fc_private = nn.Sequential(
             nn.Linear(self.hidden_dim, self.attn_dim),
             nn.LeakyReLU(),
         )
 
         # coach message used
-        self.fc1_coach = nn.Linear(input_shape, args.attn_embed_dim)
-        self.coach_attn = EntityAttentionLayer(args, self.attn_dim, self.n_heads)
+        # self.fc1_coach = nn.Linear(input_shape, args.attn_embed_dim)
+        # self.coach_attn = EntityAttentionLayer(args, self.attn_dim, self.n_heads)
 
-        attn_out_dim = args.attn_embed_dim * (1 + args.self_loc + args.reserve_ori_f + args.double_attn)
+        attn_out_dim = self.attn_dim * (1 + args.self_loc + args.reserve_ori_f + args.double_attn)
         # mi message used
         if args.rnn_message:
             self.rnn_mess_b = nn.Linear(attn_out_dim * (1 + self.args.club_mi), args.rnn_hidden_dim)
@@ -120,14 +104,14 @@ class EntityAttnRNNAgentICM(Agent):
             self.fc_msg = FiniteDist(attn_out_dim * (1 + self.args.club_mi), args.msg_dim * 2, args.device,
                                      args.limit_msg)
 
-        self.fc_q = nn.Sequential(nn.Linear(attn_out_dim + args.club_mi * args.attn_embed_dim, args.attn_embed_dim),
+        self.fc_q = nn.Sequential(nn.Linear(attn_out_dim + args.club_mi * args.agent_attn_dim, args.agent_attn_dim),
                                   # self.fc_q = nn.Sequential(nn.Linear(attn_out_dim, args.attn_embed_dim),
                                   nn.ReLU(),
-                                  FiniteDist(args.attn_embed_dim, args.msg_dim * 2, args.device, args.limit_msg))
+                                  FiniteDist(args.agent_attn_dim, args.msg_dim * 2, args.device, args.limit_msg))
         if args.add_q:
-            self.adhoc_q_net = nn.Sequential(nn.Linear(args.msg_dim, args.attn_embed_dim),
+            self.adhoc_q_net = nn.Sequential(nn.Linear(args.msg_dim, args.agent_attn_dim),
                                              nn.ReLU(),
-                                             nn.Linear(args.attn_embed_dim, args.n_actions))
+                                             nn.Linear(args.agent_attn_dim, args.n_actions))
 
         if self.args.group == "dpp":
             self.cos = nn.CosineSimilarity(dim=3)
@@ -135,14 +119,14 @@ class EntityAttnRNNAgentICM(Agent):
 
     def init_hidden(self):
         # make hidden states on same device as model
-        return self.own_embed.weight.new(1, self.args.agent_hidden_dim).zero_()
+        # return self.own_embed.weight.new(1, self.args.agent_hidden_dim).zero_()
 
         self.attn_weights = None
         if self.args.rnn_message:
-            return self.own_embed.weight.new(1, self.args.rnn_hidden_dim).zero_(), self.own_embed.weight.new(1,
-                                                                                                             self.args.rnn_hidden_dim).zero_()
+            return torch.zeros(self.gru_layers, self.args.agent_hidden_dim, device=self.device), torch.zeros(
+                self.gru_layers, self.args.agent_hidden_dim, device=self.device)
         self.msg = np.zeros([1, 0, self.args.n_agents, self.args.msg_dim])
-        return self.own_embed.weight.new(1, self.args.rnn_hidden_dim).zero_()
+        return torch.zeros(self.gru_layers, self.args.agent_hidden_dim, device=self.device)
 
     def get_club_message(self, f1, f2, bs, ts, randidx=None, hidden_state=None):
         # f1->f_i f2->f_-i
@@ -247,16 +231,17 @@ class EntityAttnRNNAgentICM(Agent):
     def get_feature(self, inputs, return_F=False, only_F=False, rank_percent=None, pre_obs_mask=False,
                     ret_attn_weights=False):
         # use MHA get f_i
-        entities, obs_mask = inputs
-        if self.args.private_entity_shape > 0:
-            private_entities = entities[:, :, :, :, :self.args.private_entity_shape]
-            entities = entities[:, :, :, :, self.args.private_entity_shape:]
+        # entities, obs_mask, entity_mask = inputs
+
+        entities, obs_mask, entity_mask = inputs
         bs, ts, na, ne, ed = entities.shape
-        entities = entities.reshape(bs * ts * na, ne, ed)
+        entities = entities.reshape(bs * ts, na, ne, ed)
         if pre_obs_mask:
-            obs_mask = obs_mask.reshape(bs * ts * na * self.args.attn_n_heads, self.args.n_agents, ne)
+            obs_mask = obs_mask.reshape(bs * ts * self.args.agent_attn_heads, self.args.n_agents, ne)
         else:
-            obs_mask = obs_mask.reshape(bs * ts * na, ne, ne)
+            obs_mask = obs_mask.reshape(bs * ts, ne, ne)
+        entity_mask = entity_mask.reshape(bs * ts, ne)
+        agent_mask = entity_mask[:, :self.args.n_agents]
 
         if only_F and not self.args.sp_use_same_attn:  # means it is s_p and needs other nets
             cur_encoding = self.sp_encoding
@@ -264,13 +249,13 @@ class EntityAttnRNNAgentICM(Agent):
         else:
             cur_encoding = self.encoding
             cur_attn = self.attn
-        x1 = cur_encoding(entities)
+        x1 = cur_encoding(entities)  # bs * ts * na * ne * hd
         # use multihead attention
         if rank_percent is not None:
-            x2, true_pre_mask = cur_attn(x1, pre_mask=obs_mask, rank_percent=rank_percent,
-                                         ret_attn_weights=ret_attn_weights)
+            x2, true_pre_mask = cur_attn(x1, pre_mask=obs_mask, post_mask=agent_mask, rank_percent=rank_percent,
+                                         entity_mask=entity_mask, ret_attn_weights=ret_attn_weights)
         else:
-            x2 = cur_attn(x1, pre_mask=obs_mask, ret_attn_weights=ret_attn_weights)
+            x2 = cur_attn(x1, pre_mask=obs_mask, post_mask=agent_mask, ret_attn_weights=ret_attn_weights)
         if ret_attn_weights:
             x2, attn_weights = x2
             if self.attn_weights is None:
@@ -278,113 +263,120 @@ class EntityAttnRNNAgentICM(Agent):
             else:
                 self.attn_weights = th.cat([self.attn_weights, attn_weights], dim=0)
 
-
-        if self.args.private_entity_shape > 0:
-            private_entities = private_entities.reshape(bs * ts * na, ne, self.args.private_entity_shape)
-            x2 = self.fc_private(th.cat([private_entities, x2], dim=2))
         if return_F and only_F:
             return x2
         if rank_percent is not None:
-            return x2, bs, ts, true_pre_mask.reshape(bs, ts, na, self.args.attn_n_heads, self.args.n_agents, ne)
+            return x2, bs, ts, true_pre_mask.reshape(bs, ts, self.args.agent_attn_heads, self.args.n_agents, ne)
         # why return batch_size and time_size?
         return x2, bs, ts
 
     def get_q(self, x2, bs, ts, hidden_state, return_F=False, zt=None, h1=None):
         # get q value use rnn
         if zt is not None and not self.args.add_q:
-            # code written by same one? there is edim and next place is ed????
-            _, _, na, ed = zt.shape
+            _, _, na, edim = zt.shape
             if self.args.no_msg:
-                x3 = F.relu(self.rnn_proj(th.cat([x2, th.zeros(bs * ts, na, ed).to(x2.device)], dim=-1)))
+                x3 = F.relu(self.rnn_proj(th.cat([x2, th.zeros(bs * ts, na, edim).to(x2.device)], dim=-1)))
             else:
-                x3 = F.relu(self.rnn_proj(th.cat([x2, zt.reshape(bs * ts, na, ed)], dim=-1)))
+                x3 = F.relu(self.rnn_proj(th.cat([x2, zt.reshape(bs * ts, na, edim)], dim=-1)))
         else:
-            x3 = F.relu(self.fc2(x2))
-        x3 = x3.reshape(bs, ts, self.args.n_agents, -1)
-        h = hidden_state.reshape(-1, self.args.rnn_hidden_dim)
-        hs = []
-        for t in range(ts):
-            curr_x3 = x3[:, t].reshape(-1, self.args.rnn_hidden_dim)
-            h = self.rnn(curr_x3, h)
-            hs.append(h.reshape(bs, self.args.n_agents, self.args.rnn_hidden_dim))
-        hs = th.stack(hs, dim=1)  # Concat over time
+            x3 = F.relu(self.rnn_proj(x2))
 
-        q = self.decoding(x3)
+        x = x3.transpose(1, 2).reshape(bs * self.args.n_agents, ts,
+                                       self.hidden_dim)  # b * t * n * d -> b * n * t * d -> (b * n) * t * d
+        h = hidden_state.reshape(self.gru_layers, bs * self.args.n_agents,
+                                 self.hidden_dim)  # layers * (batch * n_agents) * hidden_dim
+
+        x, h = self.rnn(x, h)  # GRU forward.
+
+        x = x.reshape(bs, self.args.n_agents, ts, self.hidden_dim).transpose(1,
+                                                                             2)  # (b * n) * t * d -> b * n * t * d -> b * t * n * d
+        h = h.reshape(self.gru_layers, bs, self.args.n_agents, self.hidden_dim)
+
+        q = self.decoding(x)
         # zero out output for inactive agents
         q = q.reshape(bs, ts, self.args.n_agents, -1)
         # q = q.reshape(bs * self.args.n_agents, -1)
+        # arm q plus
         if zt is not None and self.args.add_q:
             self.adhoc_q = self.adhoc_q_net(zt)
             if not self.args.no_msg:
                 q += self.adhoc_q
         if h1 is not None:
-            hs = [h1, hs]
+            h = [h1, h]
         if return_F:
-            return q, hs, x2
-        return q, hs
+            return q, h, x2
+        return q, h
 
     def get_inputs_m(self, inputs, true_pre_mask=None):
-        entities, obs_mask = inputs
+        entities, obs_mask, entity_mask = inputs
         if true_pre_mask is not None:
             c_mask = self.logical_not(true_pre_mask)  # bs, ts, n_head, na, ne
-            inputs_m = (entities, c_mask)
+            inputs_m = (entities, c_mask, entity_mask)
         else:
             c_mask = self.logical_not(obs_mask)
             entities = entities.repeat(2, 1, 1, 1, 1)
             obs_mask = th.cat([obs_mask, c_mask], dim=0)
-            inputs_m = (entities, obs_mask)
+            entity_mask = entity_mask.repeat(2, 1, 1)
+            inputs_m = (entities, obs_mask, entity_mask)
         return inputs_m
 
-    def forward(self, inputs, hidden_state, return_F=False, only_F=False, randidx=None, ret_attn_weights=False):
-        own_feats, ally_feats, enemy_feats, last_actions, agent_id = inputs
-        batch_size, time_size, _, _ = own_feats.shape
-
-        # Feature embedding. (own_feats_dim, enemy_feats_dim, ally_feats_dim, ...) -> hidden_dim(entity_dim)
-        own_embedding = self.own_embed(own_feats)
-        ally_embedding = self.ally_embed(ally_feats)
-        enemy_embedding = self.enemy_embed(enemy_feats)
-
-        # TODO: pymarl3 use sum to concreate three own embeddings. Maybe a learnable weight is better.
-        if self.agent_id_embed is not None:
-            agent_id_embedding = self.agent_id_embed(agent_id)
-            own_embedding = own_embedding + agent_id_embedding
-
-        if self.last_action_embed is not None:
-            last_action_embedding = self.last_action_embed(last_actions)
-            own_embedding = own_embedding + last_action_embedding
-
-        entities = th.cat([own_embedding.unsqueeze(-2), ally_embedding, enemy_embedding], dim=-2)
+    def forward(self, inputs, hidden_state, imagine=False, return_F=False, only_F=False, randidx=None,
+                ret_attn_weights=False):
+        entities = torch.cat(
+            [layer(feature_input) for feature_input, layer in zip(inputs, self.embedding_layers)],
+            dim=-2
+        )  # batch * time * n_agents * n_entities * hidden_dim
 
         # with open(".tmp.txt", "w") as f:
         #     f.write(str(entities.shape))
         # print(entities.shape)
         batch_size, time_size, n_agents, n_entities, _ = entities.shape
+        obs_mask = th.ones(batch_size, time_size, n_entities, n_entities)
+        entity_mask = th.ones(batch_size, time_size, n_entities)
+        tmp_entity_mask = th.ones(batch_size, time_size, n_agents, n_entities)
+        if imagine:
+            # create random split of entities (once per episode)
+            groupin_probs = th.rand(batch_size, 1, n_agents, 1, device=entities.device).repeat(1, 1, 1, n_entities)
 
-        # create random split of entities (once per episode)
-        groupin_probs = th.rand(batch_size, 1, n_agents, 1, device=entities.device).repeat(1, 1, 1, n_entities)
+            groupin = th.bernoulli(groupin_probs).to(th.uint8)
+            groupout = self.logical_not(groupin)
 
-        groupin = th.bernoulli(groupin_probs).to(th.uint8)
-        groupout = self.logical_not(groupin)
+            # convert entity mask to attention mask
+            groupinattnmask = self.entitymask2attnmask(groupin)
+            groupoutattnmask = self.entitymask2attnmask(groupout)
+            # create attention mask for interactions between groups
+            interactattnmask = self.logical_or(self.logical_not(groupinattnmask),
+                                               self.logical_not(groupoutattnmask))
+            # get within group attention mask
+            withinattnmask = self.logical_not(interactattnmask)
 
-        # convert entity mask to attention mask
-        groupinattnmask = self.entitymask2attnmask(groupin)
-        groupoutattnmask = self.entitymask2attnmask(groupout)
-        # create attention mask for interactions between groups
-        interactattnmask = self.logical_or(self.logical_not(groupinattnmask),
-                                           self.logical_not(groupoutattnmask))
-        # get within group attention mask
-        withinattnmask = self.logical_not(interactattnmask)
+            entities = entities.repeat(3, 1, 1, 1, 1)
+            entity_mask = entity_mask.repeat(3, 1, 1)
+            # attn_mask = th.cat([withinattnmask, interactattnmask], dim=0)
+            # for i in range(n_agents):
+            #     tmp_mask[:, :, i, :] = attn_mask[:, :, i, i, :]
+            # # obs_mask = tmp_mask.repeat(1, time_size, 1, 1)
+            # obs_mask = th.cat([tmp_mask, obs_mask], dim=0)
+            # tmp_mask = attn_mask[:, :, 0, :, :]
+            # # obs_mask = tmp_mask.repeat(1, time_size, 1, 1)
+            # obs_mask = th.cat([tmp_mask, obs_mask], dim=0)
 
-        entities = entities.repeat(2, 1, 1, 1, 1)
-        # no obs_mask, so dim * 2 not like source code * 3
-        attn_mask = th.cat([withinattnmask, interactattnmask], dim=0)
+            # # na * ne * ne -> ne * ne, every agent use 1 * ne
+            t_withinattnmask = withinattnmask[:, :, 0, :, :]
+            t_interactattnmask = interactattnmask[:, :, 0, :, :]
+            for i in range(n_agents):
+                t_withinattnmask[:, :, i, :] = withinattnmask[:, :, i, i, :]
+                t_interactattnmask[:, :, i, :] = interactattnmask[:, :, i, i, :]
+            obs_mask = th.cat(
+                [t_withinattnmask.repeat(1, time_size, 1, 1), t_interactattnmask.repeat(1, time_size, 1, 1), obs_mask],
+                dim=0)
 
-        if self.args.rnn_message:
-            hidden_state = [h.repeat(2, 1, 1) for h in hidden_state]
-        else:
-            hidden_state = hidden_state.repeat(2, 1, 1)
+            if self.args.rnn_message:
+                hidden_state = [h.repeat(1, 3, 1, 1) for h in hidden_state]
+            else:
+                hidden_state = hidden_state.repeat(1, 3, 1, 1)
 
-        inputs = (entities, attn_mask)
+        inputs = (entities, obs_mask, entity_mask)
 
         if return_F and only_F:
             return self.get_feature(inputs, return_F=return_F, only_F=only_F, ret_attn_weights=ret_attn_weights)
@@ -396,25 +388,41 @@ class EntityAttnRNNAgentICM(Agent):
             if self.args.club_mi:
                 # msg_q_logits_i=f(s^g_i, s^l_j)
                 x2, batch_size, time_size, true_pre_mask = self.get_feature(inputs, return_F=return_F, only_F=only_F,
-                                                                         rank_percent=self.args.rank_percent,
-                                                                         ret_attn_weights=ret_attn_weights)
+                                                                            rank_percent=self.args.rank_percent,
+                                                                            ret_attn_weights=ret_attn_weights)
                 inputs_m = self.get_inputs_m(inputs, true_pre_mask=true_pre_mask)
+                # bs * ts * ne * ed
                 x2_m, _, _ = self.get_feature(inputs_m, return_F=return_F, only_F=only_F, pre_obs_mask=True)
-                zt, zt_logits, msg_q_logits, h1 = self.get_club_message(x2, x2_m, batch_size, time_size, randidx=randidx,
+                # zeta t
+                zt, zt_logits, msg_q_logits, h1 = self.get_club_message(x2, x2_m, batch_size, time_size,
+                                                                        randidx=randidx,
                                                                         hidden_state=h1)
             else:
                 inputs_m = self.get_inputs_m(inputs)
                 x2, batch_size, time_size = self.get_feature(inputs_m, return_F=return_F, only_F=only_F,
-                                                          ret_attn_weights=ret_attn_weights)
+                                                             ret_attn_weights=ret_attn_weights)
                 x2, x2_m = x2.chunk(2, dim=0)
                 batch_size //= 2
                 zt, zt_logits, msg_q_logits, h1 = self.get_coach_message(inputs, x2_m, hidden_state=h1)
-            return self.get_q(x2, batch_size, time_size, h2, return_F=return_F, zt=zt, h1=h1) + (
-                zt, zt_logits, msg_q_logits)
+            # q, h, f = self.get_q(x2, batch_size, time_size, h2, return_F=return_F, zt=zt, h1=h1)
+            if imagine:
+                q, h, f = self.get_q(x2, batch_size, time_size, h2, return_F=return_F, zt=zt,
+                                     h1=h1)
+                return q, h, f, zt, zt_logits, msg_q_logits, (
+                    t_withinattnmask.repeat(1, time_size, 1, 1), t_interactattnmask.repeat(1, time_size, 1, 1))
+            else:
+                q, h = self.get_q(x2, batch_size, time_size, h2, return_F=return_F, zt=zt,
+                                  h1=h1)
+                return q, h, zt, zt_logits, msg_q_logits
         else:
             x2, batch_size, time_size = self.get_feature(inputs, return_F=return_F, only_F=only_F,
-                                                      ret_attn_weights=ret_attn_weights)
-            return self.get_q(x2, batch_size, time_size, hidden_state, return_F=return_F)
+                                                         ret_attn_weights=ret_attn_weights)
+            # q, h, f = self.get_q(x2, batch_size, time_size, hidden_state, return_F=return_F)
+            if imagine:
+                return self.get_q(x2, batch_size, time_size, hidden_state, return_F=return_F), (
+                    withinattnmask.repeat(1, time_size, 1, 1), interactattnmask.repeat(1, time_size, 1, 1))
+            else:
+                return self.get_q(x2, batch_size, time_size, hidden_state, return_F=return_F)
             # return q, h, f, (withinattnmask.repeat(1, time_size, 1, 1), interactattnmask.repeat(1, time_size, 1, 1))
 
     def logical_not(self, inp):
@@ -441,35 +449,80 @@ class ImagineEntityAttnRNNAgentICM(EntityAttnRNNAgentICM):
             self.cos = nn.CosineSimilarity(dim=3)
             self.ally = None
 
-    def forward(self, inputs, hidden_state, imagine=False, inputs_p=None, return_F=False, only_F=False, randidx=None,
+    def forward(self, inputs, hidden_state, inputs_p=None, imagine=True, return_F=False, only_F=False, randidx=None,
                 ret_attn_logits=None, msg=None,
                 ret_attn_weights=False):
         # instead of ICM and MI_ICM
         if self.args.mi_message:
-            q, hs, xs, zt, zt_logits, msg_q_logits, m = super(ImagineEntityAttnRNNAgentICM, self).forward(inputs,
-                                                                                                          hidden_state,
-                                                                                                          return_F=return_F,
-                                                                                                          only_F=only_F,
-                                                                                                          randidx=randidx,
-                                                                                                          ret_attn_weights=ret_attn_weights)
-            xs = xs.chunk(3, dim=0)[0]
-            bs, ts, _, _ = inputs[0].shape
-            xs = xs.reshape(bs, ts, self.args.n_agents, self.args.attn_embed_dim)
+            if imagine:
+                q, hs, xs, zt, zt_logits, msg_q_logits, m = super(ImagineEntityAttnRNNAgentICM, self).forward(inputs,
+                                                                                                              hidden_state,
+                                                                                                              imagine=imagine,
+                                                                                                              return_F=True,
+                                                                                                              only_F=False,
+                                                                                                              randidx=randidx)
+                xs = xs.chunk(3, dim=0)[0]
+            else:
+                q, hs, xs, zt, zt_logits, msg_q_logits = super(ImagineEntityAttnRNNAgentICM, self).forward(inputs,
+                                                                                                           hidden_state,
+                                                                                                           imagine=imagine,
+                                                                                                           return_F=True,
+                                                                                                           only_F=False,
+                                                                                                           randidx=randidx)
+            bs, ts, _, _, _ = inputs[0].shape
+            xs = xs.reshape(bs, ts, self.args.n_agents, self.args.agent_attn_dim)
             xsp = th.cat([xs[:, 1:], xs[:, -1:]], dim=1)
             # xsp = self.forward(inputs_sp, None, return_F=True, only_F=True)
             x = F.relu(self.fc_a1(th.cat([xs, xsp], dim=-1)))
             logits = self.fc_a2(x)
             logits = logits.reshape(bs, ts, self.args.n_agents, self.args.n_actions)
-            return q, hs, m, logits, zt, zt_logits, msg_q_logits
-
+            if imagine:
+                return q, hs, m, logits, zt, zt_logits, msg_q_logits
+            else:
+                return q, hs, logits, zt, zt_logits, msg_q_logits
         else:
-            q, hs, xs, m = super(ImagineEntityAttnRNNAgentICM, self).forward(inputs, hidden_state, return_F=return_F,
-                                                                             only_F=only_F,
-                                                                             ret_attn_weights=ret_attn_weights)
-            xs = xs.chunk(3, dim=0)[0]
-            xsp = self.forward(inputs_p, None, return_F=True, only_F=True)
+            if imagine:
+                q, hs, xs, m = super(ImagineEntityAttnRNNAgentICM, self).forward(inputs, hidden_state, imagine=imagine,
+                                                                                 return_F=True, only_F=False)
+                xs = xs.chunk(3, dim=0)[0]
+            else:
+                q, hs, xs = super(ImagineEntityAttnRNNAgentICM, self).forward(inputs, hidden_state, imagine=imagine,
+                                                                              return_F=True, only_F=False)
+            xsp = super(ImagineEntityAttnRNNAgentICM, self).forward(inputs_p, None, return_F=True, only_F=True)
             x = F.relu(self.fc_a1(th.cat([xs, xsp], dim=-1)))
             logits = self.fc_a2(x)
             bs, ts, _, _ = inputs[0].shape
             logits = logits.reshape(bs, ts, self.args.n_agents, self.args.n_actions)
-            return q, hs, m, logits
+            if imagine:
+                return q, hs, m, logits
+            else:
+                return q, hs, logits
+
+            # q, hs, xs, zt, zt_logits, msg_q_logits, m = super(ImagineEntityAttnRNNAgentICM, self).forward(inputs,
+            #                                                                                               hidden_state,
+            #                                                                                               return_F=return_F,
+            #                                                                                               only_F=only_F,
+            #                                                                                               randidx=randidx,
+            #                                                                                               ret_attn_weights=ret_attn_weights,
+            #                                                                                               imagine=imagine)
+            # xs = xs.chunk(3, dim=0)[0]
+            # bs, ts, _, _ = inputs[0].shape
+            # xs = xs.reshape(bs, ts, self.args.n_agents, self.args.agent_attn_dim)
+            # xsp = th.cat([xs[:, 1:], xs[:, -1:]], dim=1)
+            # # xsp = self.forward(inputs_sp, None, return_F=True, only_F=True)
+            # x = F.relu(self.fc_a1(th.cat([xs, xsp], dim=-1)))
+            # logits = self.fc_a2(x)
+            # logits = logits.reshape(bs, ts, self.args.n_agents, self.args.n_actions)
+            # return q, hs, m, logits, zt, zt_logits, msg_q_logits
+
+            # q, hs, xs, m = super(ImagineEntityAttnRNNAgentICM, self).forward(inputs, hidden_state, return_F=return_F,
+            #                                                                              only_F=only_F,
+            #                                                                              ret_attn_weights=ret_attn_weights,
+            #                                                                              imagine=imagine)
+            #             xs = xs.chunk(3, dim=0)[0]
+            #             xsp = self.forward(inputs_p, None, return_F=True, only_F=True)
+            #             x = F.relu(self.fc_a1(th.cat([xs, xsp], dim=-1)))
+            #             logits = self.fc_a2(x)
+            #             bs, ts, _, _ = inputs[0].shape
+            #             logits = logits.reshape(bs, ts, self.args.n_agents, self.args.n_actions)
+            #             return q, hs, m, logits

@@ -109,6 +109,7 @@ if __name__ == "__main__":
     # Params order is command line -> algs -> envs -> defaults
     params = deepcopy(sys.argv)
     # th.set_num_threads(1)
+    params = ["src/main.py", "--config=cama", "--env-config=sc2v2", "with", "env_args.map_name='protoss_5_vs_5'"]
 
     # Get the defaults from default.yaml
     with open(
@@ -147,7 +148,7 @@ if __name__ == "__main__":
             experiment_name = param.split("=")[1]
 
     unique_token = (
-        f"{experiment_name}__{map_name}__{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}"
+        f"{experiment_name}__{map_name}__{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     )
 
     config_dict.update({"unique_token": unique_token})

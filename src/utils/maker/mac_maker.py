@@ -30,3 +30,9 @@ class MACMaker(Maker):
         """MAC Implementation from PyMARL2"""
         from controllers.pymarl2_nmac_controller import NMAC
         return NMAC(*args, **kwargs)
+
+    @staticmethod
+    def make_icm_mac(*args, **kwargs) -> MAC:
+        """MAC Implementation from PyMARL2"""
+        from controllers.icm_controller import ICMMAC
+        return ICMMAC(*args, **kwargs)

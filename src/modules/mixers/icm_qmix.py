@@ -56,7 +56,7 @@ class AttentionHyperNet(nn.Module):
 
         self.fc2 = nn.Linear(hypernet_embed, args.mixing_embed_dim)
 
-    def forward(self, entities, entity_mask=None, attn_mask=None):
+    def forward(self, entities, entity_mask=None, attn_mask=None, return_f=False):
         x1 = functional.relu(self.fc1(entities))
         # without entity_mask
         bs, ne, _ = entities.shape
@@ -67,7 +67,7 @@ class AttentionHyperNet(nn.Module):
             attn_mask = 1 - torch.bmm((1 - agent_mask.to(torch.float)).unsqueeze(2),
                                    (1 - entity_mask.to(torch.float)).unsqueeze(1))
         x2 = self.attn(x1, pre_mask=attn_mask.to(torch.uint8),
-                       post_mask=agent_mask) 
+                       post_mask=agent_mask)
         x3 = self.fc2(x2)
         x3 = x3.masked_fill(agent_mask.unsqueeze(2).bool(), 0) #[bs, na, edim]
         if self.mode == 'vector':
@@ -76,12 +76,15 @@ class AttentionHyperNet(nn.Module):
             return x3.mean(dim=2)
         elif self.mode == 'scalar':
             return x3.mean(dim=(1, 2))
+
+        if return_f:
+            return x3, x2
         return x3
 
 
-class FlexQMixer(nn.Module):
+class ICMQMixer(nn.Module):
     def __init__(self, args: SimpleNamespace):
-        super(FlexQMixer, self).__init__()
+        super(ICMQMixer, self).__init__()
         self.args = args
 
         # Initialize entity mapping.
@@ -120,17 +123,31 @@ class FlexQMixer(nn.Module):
 
         self.non_lin = functional.elu
 
-    def forward(self, agent_qs, inputs, ret_ingroup_prop=False):
+    def forward(self, agent_qs, inputs, return_f=False, imagine_groups=None):
         entities = self._build_entity_state(inputs)
         bs, max_t, ne, ed = entities.shape
 
         entities = entities.reshape(bs * max_t, ne, ed)
+        if imagine_groups is not None:
+            agent_qs = agent_qs.view(-1, 1, self.n_agents * 2) #[4800,1,16]
+            Wmask, Imask = imagine_groups
+            w1_W = self.hyper_w_1(entities,
+                                  attn_mask=Wmask[:, :, :ne, :ne].reshape(bs * max_t,
+                                                          ne, ne)) #[4800,8,32]
+            w1_I = self.hyper_w_1(entities,
+                                  attn_mask=Imask[:, :, :ne, :ne].reshape(bs * max_t,
+                                                          ne, ne)) #[4800,8,32]
+            w1 = torch.cat([w1_W, w1_I], dim=1) #[4800,16,32]
+        else:
+            agent_qs = agent_qs.reshape(-1, 1, self.n_agents)   #[4800,1,8]
 
-        agent_qs = agent_qs.reshape(-1, 1, self.n_agents)   #[4800,1,8]
-
-        # First layer
-        w1 = self.hyper_w_1(entities) # [4800,8,32]
-        b1 = self.hyper_b_1(entities) # [4800,32]
+            # First layer
+            w1 = self.hyper_w_1(entities, return_f = return_f) # [4800,8,32]
+            if return_f:
+                w1, x2_w1 = w1
+        b1 = self.hyper_b_1(entities, return_f = return_f) # [4800,32]
+        if return_f:
+            b1, x2_b1=b1
         w1 = w1.view(bs * max_t, -1, self.embed_dim)
         b1 = b1.view(-1, 1, self.embed_dim)
 
@@ -139,23 +156,25 @@ class FlexQMixer(nn.Module):
         hidden = self.non_lin(torch.bmm(agent_qs, w1) + b1) #[4800,1,32]
 
         # Second layer
-        w_final = functional.softmax(self.hyper_w_final(entities), dim=-1) #[4800,32]
+        w_final = self.hyper_w_final(entities, return_f = return_f) #[4800,32]
+        if return_f:
+            w_final, x2_wf = w_final
+        w_final = functional.softmax(w_final, dim=-1)
+        w_final = w_final.view(-1, self.embed_dim, 1)
 
-        w_final = w_final.view(-1, self.embed_dim, 1) 
+        v = self.V(entities, return_f = return_f)  # State-dependent bias
+        if return_f:
+            v, x2_v = v
 
-        v = self.V(entities)  # State-dependent bias
-
-
-        y = torch.bmm(hidden, w_final) + v  # Compute final output
+        y = torch.bmm(hidden, w_final) + v.unsqueeze(1).unsqueeze(2)  # Compute final output
 
 
         q_tot = y.view(bs, -1, 1)  # Reshape and return
 
-        if ret_ingroup_prop:
-            ingroup_w = w1.clone()
-            ingroup_w[:, self.n_agents:] = 0  # zero-out out of group weights
-            ingroup_prop = (ingroup_w.sum(dim=1)).mean()
-            return q_tot, ingroup_prop
+        if return_f:
+            x2 = torch.cat([x2_w1, x2_b1, x2_wf, x2_v], dim=2)  # [bs,na, hypernet_embed*4]
+            x2 = x2.reshape(bs, max_t, self.n_agents, self.args.hypernet_embed * 4)
+            return q_tot, x2
 
         return q_tot
 
