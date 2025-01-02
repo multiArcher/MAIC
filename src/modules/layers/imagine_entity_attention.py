@@ -51,9 +51,7 @@ class ImagineEntityAttnLayer(nn.Module):
         return f"embed_dim={self.embed_dim}, heads={self.num_heads}"
 
     def forward(
-            self,
-            entities: torch.Tensor,
-            agent_mask: torch.Tensor = None
+            self, entities: torch.Tensor, pre_mask=None, post_mask=None, ret_attn_logits=None
     ) -> torch.Tensor:
         """
         Args:
@@ -80,21 +78,33 @@ class ImagineEntityAttnLayer(nn.Module):
         attn_weights = q @ k.transpose(-2, -1)  # batch * time * agents * heads * 1  * n_entities
 
         batch_size, time_size, n_agents, n_entities, _ = entities.shape
-        agent_mask = agent_mask[..., 0, :].unsqueeze(-2)
+
+        attn_logits = attn_weights * self.scaling
 
         # attention masked -> if refil use agent mask
-        if agent_mask is not None and self.args.name == "refil":
-            agent_mask_repeat = agent_mask.unsqueeze(-3).repeat(1, 1, 1, self.num_heads, 1, 1)
-            # print(agent_mask.shape)
-            # print(agent_mask_repeat.shape)
-            attn_weights = attn_weights.masked_fill(agent_mask_repeat.bool(), -float('Inf'))
+        if pre_mask is not None:
+            agent_mask_repeat = pre_mask.unsqueeze(-2).unsqueeze(-2).repeat(1, 1, 1, self.num_heads, 1, 1)
+            attn_logits = attn_weights.masked_fill(agent_mask_repeat[:, :, :n_agents, :, : ,:].bool(), -float('Inf'))
 
-        attn_weights = attn_weights * self.scaling
-        attn_weights = functional.softmax(attn_weights, dim=-1)
+        attn_weights = functional.softmax(attn_logits, dim=-1)
 
         attn = attn_weights @ v     # batch * time * agents * heads * 1  * head_dim
         attn = attn.transpose(-2, -3).reshape(*attn.shape[:-3], self.num_heads * self.head_dim)
 
         attn = self.out_proj(attn)  # batch * agents * embedding_dim
+
+        if post_mask is not None:
+            attn_outs = attn.masked_fill(post_mask.unsqueeze(2).bool(), 0)
+        if ret_attn_logits is not None:
+            # bs * n_heads, nq, ne
+            attn_logits = attn_logits.reshape(batch_size, self.num_heads,
+                                              n_agents, n_entities)
+            if ret_attn_logits == 'max':
+                attn_logits = attn_logits.max(dim=1)[0]
+            elif ret_attn_logits == 'mean':
+                attn_logits = attn_logits.mean(dim=1)
+            elif ret_attn_logits == 'norm':
+                attn_logits = attn_logits.mean(dim=1)
+            return attn_outs, attn_logits
 
         return attn

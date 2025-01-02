@@ -36,6 +36,10 @@ class MACMaker(Maker):
         from controllers.entity_maic_controller import EntityMAICMAC
         return EntityMAICMAC(*args, **kwargs)
 
+    def make_imagine_mac(*args, **kwargs) -> MAC:
+        from controllers.imagine_controller import ImagineMAC
+        return ImagineMAC(*args, **kwargs)
+
     @staticmethod
     def make_icm_mac(*args, **kwargs) -> MAC:
         """MAC Implementation from PyMARL2"""

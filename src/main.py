@@ -109,7 +109,7 @@ if __name__ == "__main__":
     # Params order is command line -> algs -> envs -> defaults
     params = deepcopy(sys.argv)
     # th.set_num_threads(1)
-    params = ["src/main.py", "--config=cama", "--env-config=sc2v2", "with", "env_args.map_name='protoss_5_vs_5'"]
+    # params = ["src/main.py", "--config=refil", "--env-config=sc2v2", "with", "env_args.map_name='protoss_5_vs_5'"]
 
     # Get the defaults from default.yaml
     with open(
