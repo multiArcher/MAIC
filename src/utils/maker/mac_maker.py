@@ -45,3 +45,9 @@ class MACMaker(Maker):
         """MAC Implementation from PyMARL2"""
         from controllers.icm_controller import ICMMAC
         return ICMMAC(*args, **kwargs)
+
+    @staticmethod
+    def make_entity_state_as_obs_mac(*args, **kwargs) -> MAC:
+        from controllers.entity_state_as_obs_controller import EntityStateAsObsMAC
+        return EntityStateAsObsMAC(*args, **kwargs)
+
