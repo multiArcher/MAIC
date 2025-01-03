@@ -60,3 +60,14 @@ class LearnerMaker(Maker):
     def make_maic_learner(*args, **kwargs) -> 'Learner':
         from learners.maic_learner import MAICLearner
         return MAICLearner(*args, **kwargs)
+
+    @staticmethod
+    def make_icm_q_learner(*args, **kwargs) -> 'Learner':
+        """Q-learner from PyMARL2."""
+        from learners.icm_q_learner import ICMQLearner
+        return ICMQLearner(*args, **kwargs)
+
+    def make_refil_q_learner(*args, **kwargs) -> 'Learner':
+        """Q-learner from PyMARL2."""
+        from learners.refil_q_learning import RefilQLearner
+        return RefilQLearner(*args, **kwargs)

@@ -55,3 +55,15 @@ class AgentMaker(Maker):
         """MAIC agent with entity scheme."""
         from modules.agents.entity_maic_agent import EntityMAICAgent
         return EntityMAICAgent(*args, **kwargs)
+
+    @staticmethod
+    def make_imagine_entity_attend_rnn_agent(*args, **kwargs) -> Agent:
+        """Entity agent using feature attention to merge obs."""
+        from modules.agents.imagine_entity_attend_rnn_agent import ImagineEntityAttnRNNAgent
+        return ImagineEntityAttnRNNAgent(*args, **kwargs)
+
+    @staticmethod
+    def make_imagine_entity_attend_rnn_icm_agent(*args, **kwargs) -> Agent:
+        """Entity agent using feature attention to merge obs."""
+        from modules.agents.imagine_entity_attend_rnn_icm_agent import ImagineEntityAttnRNNAgentICM
+        return ImagineEntityAttnRNNAgentICM(*args, **kwargs)

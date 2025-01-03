@@ -1,6 +1,7 @@
 __pycache__
 *.code-workspace
 /results
+/src/results
 /.idea
 /.vscode
 /log
