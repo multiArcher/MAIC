@@ -3,7 +3,7 @@
 # ------------------------------------------------------------------------------
 name: "refil"
 
-runner: "episode"
+runner: "parallel"
 batch_size_run: 8
 
 entity_scheme: True
