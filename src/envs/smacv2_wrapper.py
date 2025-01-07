@@ -26,6 +26,7 @@ def load_scenario(map_name, **kwargs):
     scenario_args["env_args"]["seed"] = kwargs.get("seed", None)
     scenario_args["env_args"]["window_size_x"] = kwargs.get("window_size_x", None)
     scenario_args["env_args"]["window_size_y"] = kwargs.get("window_size_y", None)
+    scenario_args["env_args"]["fully_observable"] = kwargs.get("fully_observable", False)
 
     return StarCraftCapabilityEnvWrapper(**scenario_args["env_args"])
 
