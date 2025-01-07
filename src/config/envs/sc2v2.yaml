@@ -3,6 +3,7 @@ env: "sc2v2"
 env_args:
   map_name: null
   time_limit: 150
+  fully_observable: False
 
 test_greedy: True
 test_nepisode: 100
