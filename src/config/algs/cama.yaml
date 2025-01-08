@@ -49,7 +49,7 @@ agent_gru_layers: 1   # Number of GRU layers in default rnn agent
 agent_hidden_dim: 64 # Size of hidden state for default rnn agent
 obs_agent_id: True # Include the agent's one_hot id in the observation
 obs_last_action: True # Include the agent's last action (one_hot) in the observation
-agent_attn_dim: 128
+agent_attn_dim: 32
 agent_attn_heads: 4
 double_attn: False
 #pooling_type: null
@@ -70,7 +70,7 @@ optim_eps: 0.00001 # RMSProp epsilon
 
 grad_norm_clip: 10 # Reduce magnitude of gradients above this L2 norm
 
-batch_size: 64 # Number of episodes to train on
+batch_size: 32 # Number of episodes to train on
 buffer_size: 5000 # Size of the replay buffer
 
 double_q: True
@@ -79,12 +79,12 @@ target_update_interval_or_tau: 200  # update the target network every {} episode
 # ------------------------------------------------------------------------------
 # --- Mixer specific parameters ---
 # ------------------------------------------------------------------------------
-mixing_attn_dim: 128
+mixing_attn_dim: 32
 mixing_attn_heads: 4
 mixing_embed_dim: 32
 
 hypernet_layers: 2
-hypernet_embed: 128
+hypernet_embed: 64
 softmax_mixing_weights: True
 
 # ------------------------------------------------------------------------------
@@ -116,7 +116,7 @@ group: "random"
 rank_percent: 0.8
 save_entities_and_msg: False
 
-global_icm: False
+global_icm: True
 gce_weight: 0.005
 
 # remember this parameter should in env config

@@ -60,7 +60,7 @@ class AttentionHyperNet(nn.Module):
         x1 = functional.relu(self.fc1(entities))
         # without entity_mask
         bs, ne, _ = entities.shape
-        entity_mask = torch.ones(bs, ne)
+        entity_mask = torch.zeros(bs, ne)
         agent_mask = entity_mask[:, :self.args.n_agents]
         if attn_mask is None:
             # create attn_mask from entity mask
@@ -69,13 +69,13 @@ class AttentionHyperNet(nn.Module):
         x2 = self.attn(x1, pre_mask=attn_mask.to(torch.uint8),
                        post_mask=agent_mask)
         x3 = self.fc2(x2)
-        x3 = x3.masked_fill(agent_mask.unsqueeze(2).bool(), 0) #[bs, na, edim]
+        x3 = x3.masked_fill(agent_mask.unsqueeze(2).bool().to(x3.device), 0) #[bs, na, edim]
         if self.mode == 'vector':
-            return x3.mean(dim=1)
+            x3 = x3.mean(dim=1)
         elif self.mode == 'alt_vector':
-            return x3.mean(dim=2)
+            x3 = x3.mean(dim=2)
         elif self.mode == 'scalar':
-            return x3.mean(dim=(1, 2))
+            x3 = x3.mean(dim=(1, 2))
 
         if return_f:
             return x3, x2
@@ -122,6 +122,14 @@ class ICMQMixer(nn.Module):
         self.V = AttentionHyperNet(args, mode='scalar')
 
         self.non_lin = functional.elu
+        if args.global_icm:
+            self.hyper_fc1 = nn.Linear(args.hypernet_embed * 8, args.hypernet_embed * 2)
+            self.hyper_fc2 = nn.Linear(args.hypernet_embed * 2, args.n_actions)
+
+    def predict_action(self, s, sp):
+        ac = self.hyper_fc1(torch.cat([s, sp], dim=3))
+        ac = self.hyper_fc2(ac)  # [bs, t, n_agent, na]
+        return ac
 
     def forward(self, agent_qs, inputs, return_f=False, imagine_groups=None):
         entities = self._build_entity_state(inputs)
