@@ -94,7 +94,7 @@ class ICMQLearner(Learner):
     def train(self, batch: EpisodeBatch, t_env: int, episode_num: int):
         # Get the relevant quantities
         rewards = batch["reward"][:, :-1]
-        actions = batch["actions"][:, :-1]
+        actions = batch["actions"]
         terminated = batch["terminated"][:, :-1].float()
         mask = batch["filled"][:, :-1].float()
         mask[:, 1:] = mask[:, 1:] * (1 - terminated[:, :-1])
@@ -132,8 +132,8 @@ class ICMQLearner(Learner):
             all_chosen_action_qvals = th.gather(all_mac_out, dim=3, index=rep_actions).squeeze(3)  # Remove the last dim
             mac_out = all_mac_out.chunk(3, dim=0)[0]
             chosen_action_qvals, caqW, caqI = all_chosen_action_qvals.chunk(3, dim=0)
-            # caqW, caqI = caqW[:, :-1], caqI[:, :-1]
-            caqW, caqI = caqW, caqI
+            caqW, caqI = caqW[:, :-1], caqI[:, :-1]
+            # caqW, caqI = caqW, caqI
             caq_imagine = th.cat([caqW, caqI], dim=2)
         else:
             if self.args.mi_message:
@@ -181,7 +181,7 @@ class ICMQLearner(Learner):
                     #                                             keep_last_dim=True)  # mix_ins has one more dim on t.
                     # global_action_qvals, x2 = self.mixer(chosen_action_qvals, mix_ins, return_f=True)
                     global_action_qvals, x2 = self.mixer(
-                        chosen_action_qvals, batch["state"][:, :-1], return_f=True
+                        chosen_action_qvals, batch["state"], return_f=True
                     )
                     # don't need last timestep
                     groups = [gr[:, :-1] for gr in groups]
@@ -194,12 +194,12 @@ class ICMQLearner(Learner):
                     # mix_ins, targ_mix_ins = self._get_mixer_ins(batch, keep_last_dim=True)
                     # global_action_qvals, x2 = self.mixer(chosen_action_qvals, mix_ins, return_f=True)
                     global_action_qvals, x2 = self.mixer(
-                        chosen_action_qvals, batch["state"][:, :-1], return_f=True
+                        chosen_action_qvals, batch["state"], return_f=True
                     )
                 global_action_qvals = global_action_qvals[:, :-1]
                 a_logits = self.mixer.predict_action(x2[:, :-1], x2[:, 1:])  # [bs,t,n_agents, na]
                 bs, ts, n_agent, na = a_logits.shape
-                gce = CE(a_logits.reshape(-1, na), actions.reshape(-1), reduction="none")
+                gce = CE(a_logits.reshape(-1, na), actions[:, :-1].reshape(-1), reduction="none")
                 lg_mask = mask.expand_as(a_logits[:, :, :, 0])
                 gce = gce.reshape(bs, ts, n_agent) * lg_mask * agent_mask
                 gce_loss = gce.sum() / agent_mask.sum() * self.args.gce_weight
@@ -209,7 +209,7 @@ class ICMQLearner(Learner):
                     # mix_ins, targ_mix_ins = self._get_mixer_ins(batch)
                     # global_action_qvals = self.mixer(chosen_action_qvals[:, :-1],
                     #                                  mix_ins)
-                    global_action_qvals = self.mixer(chosen_action_qvals, batch["state"][:, :-1])
+                    global_action_qvals = self.mixer(chosen_action_qvals[:, :-1], batch["state"][:, :-1])
                     # don't need last timestep
                     groups = [gr[:, :-1] for gr in groups]
                     # caq_imagine = self.mixer(caq_imagine, mix_ins, imagine_groups=groups)
@@ -218,7 +218,7 @@ class ICMQLearner(Learner):
                     # mix_ins, targ_mix_ins = self._get_mixer_ins(batch)
                     # global_action_qvals = self.mixer(chosen_action_qvals[:, :-1], mix_ins)
                     global_action_qvals = self.mixer(
-                        chosen_action_qvals, batch["state"][:, :-1]
+                        chosen_action_qvals[:, :-1], batch["state"][:, :-1]
                     )
 
             target_max_qvals = self.target_mixer(target_max_qvals, batch["state"][:, 1:])
@@ -248,7 +248,7 @@ class ICMQLearner(Learner):
 
         # [bs,t,n_agent, na]
         bs, ts, n_agent, na = logits.shape
-        ce = CE(logits.reshape(-1, na), actions.reshape(-1), reduction="none")
+        ce = CE(logits.reshape(-1, na), actions[:,:-1].reshape(-1), reduction="none")
 
         ce = ce.reshape(bs, ts, n_agent) * l_mask * agent_mask
         ce_loss = ce.sum() / agent_mask.sum() * self.args.ce_weight
@@ -309,7 +309,7 @@ class ICMQLearner(Learner):
             zt = zt_ori.permute(1, 0, 2, 3).reshape(t, bs * ne, 1, msg_d)
             mi_logits = zt_dis.log_prob(zt)  # t*(bs*ne)*(bs*ne)*msg_d
             mi_logits = mi_logits.sum(-1)  # t*(bs*ne)*(bs*ne)
-            mi_logits = mi_logits.masked_fill((1 - mi_mask).unsqueeze(1).bool(), -float('Inf'))
+            mi_logits = mi_logits.masked_fill((1 - mi_mask).unsqueeze(1).bool(), -1e8)
             mi_logits = mi_logits.masked_fill(th.logical_not(valid_t_mask).unsqueeze(1).unsqueeze(1),
                                               0)  # In case the whole batch is -inf.
             ince = D.Categorical(logits=mi_logits)  # t*(bs*ne)
@@ -330,7 +330,7 @@ class ICMQLearner(Learner):
             self.optimiser_logq.zero_grad()
         self.optimiser.zero_grad()
         loss.backward()
-        grad_norm = th.nn.utils.clip_grad_norm_(self.params_logq, self.args.grad_norm_clip)
+        grad_norm = th.nn.utils.clip_grad_norm_(self.params, self.args.grad_norm_clip)
         # try:
         #     grad_norm = grad_norm.item()
         # except:
@@ -360,7 +360,7 @@ class ICMQLearner(Learner):
             )
             self.logger.log_stat(
                 "q_taken_mean",
-                (chosen_action_qvals * mask).sum().item()
+                (chosen_action_qvals[:, :-1] * mask).sum().item()
                 / (mask_elems * self.args.n_agents),
                 t_env,
             )

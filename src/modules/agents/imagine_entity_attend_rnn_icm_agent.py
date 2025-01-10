@@ -331,8 +331,8 @@ class EntityAttnRNNAgentICM(Agent):
         #     f.write(str(entities.shape))
         # print(entities.shape)
         batch_size, time_size, n_agents, n_entities, _ = entities.shape
-        obs_mask = th.ones(batch_size, time_size, n_entities, n_entities)
-        entity_mask = th.ones(batch_size, time_size, n_entities)
+        obs_mask = th.zeros(batch_size, time_size, n_entities, n_entities).to(entities.device)
+        entity_mask = th.zeros(batch_size, time_size, n_entities).to(entities.device)
         tmp_entity_mask = th.ones(batch_size, time_size, n_agents, n_entities)
         if imagine:
             # create random split of entities (once per episode)
@@ -368,7 +368,7 @@ class EntityAttnRNNAgentICM(Agent):
                 t_withinattnmask[:, :, i, :] = withinattnmask[:, :, i, i, :]
                 t_interactattnmask[:, :, i, :] = interactattnmask[:, :, i, i, :]
             obs_mask = th.cat(
-                [t_withinattnmask.repeat(1, time_size, 1, 1), t_interactattnmask.repeat(1, time_size, 1, 1), obs_mask],
+                [obs_mask, t_withinattnmask.repeat(1, time_size, 1, 1), t_interactattnmask.repeat(1, time_size, 1, 1)],
                 dim=0)
 
             if self.args.rnn_message:

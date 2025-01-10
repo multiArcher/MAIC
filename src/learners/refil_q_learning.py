@@ -78,7 +78,6 @@ class RefilQLearner(Learner):
             rep_actions = actions.repeat(3, 1, 1, 1)
             all_chosen_action_qvals = th.gather(all_mac_out[:, :-1], dim=3, index=rep_actions).squeeze(
                 3)  # Remove the last dim
-
             mac_out, moW, moI = all_mac_out.chunk(3, dim=0)
             chosen_action_qvals, caqW, caqI = all_chosen_action_qvals.chunk(3, dim=0)
             caq_imagine = th.cat([caqW, caqI], dim=2)
@@ -117,6 +116,7 @@ class RefilQLearner(Learner):
                 groups = [gr[:, :-1] for gr in groups]
                 caq_imagine = self.mixer(caq_imagine, batch["state"][:, :-1],
                                          imagine_groups=groups)
+
             else:
                 # mix_ins, targ_mix_ins = self._get_mixer_ins(batch)
                 chosen_action_qvals = self.mixer(chosen_action_qvals, batch["state"][:, :-1])

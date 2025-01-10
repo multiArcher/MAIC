@@ -80,7 +80,7 @@ class EntityAttentionLayer(nn.Module):
                     pre_mask_rep = pre_mask
                 else:
                     pre_mask_rep = pre_mask.repeat_interleave(self.n_heads, dim=0)  # (bs*n_head)*na*ne
-                masked_attn_logits = attn_logits.masked_fill(pre_mask_rep[:, :, :ne].bool(), -float('Inf'))
+                masked_attn_logits = attn_logits.masked_fill(pre_mask_rep[:, :, :ne].bool().to(attn_logits.device), -1e8)
                 if rank_percent is not None:
                     _, ind = masked_attn_logits.sort(2)  # (bs*n_head)*na*ne
                     with th.no_grad():
@@ -99,7 +99,7 @@ class EntityAttentionLayer(nn.Module):
                         left_mask[(dk + ind)[expanded_left_ind == 0]] = 0
                         left_mask = left_mask.reshape(bs * self.n_heads, self.n_agents,
                                                       ne)  # 1 need mask, 0 remains valid. bs*nhead, na, ne
-                    masked_attn_logits = masked_attn_logits.masked_fill(left_mask.bool(), -float('Inf'))
+                    masked_attn_logits = masked_attn_logits.masked_fill(left_mask.bool(), -1e8)
                     true_pre_mask = left_mask + pre_mask_rep  # should be the intersection of left_mask and pre_mask_rep
                     true_pre_mask[true_pre_mask > 1] = 1
 
@@ -112,7 +112,7 @@ class EntityAttentionLayer(nn.Module):
             attn_outs = attn_outs.transpose(0, 1) #bs*na*ed
             attn_outs = self.out_trans(attn_outs) #bs*na*od
             if post_mask is not None:
-                attn_outs = attn_outs.masked_fill(post_mask.unsqueeze(2).bool(), 0)
+                attn_outs = attn_outs.masked_fill(post_mask.unsqueeze(2).bool().to(attn_outs.device), 0)
             if ret_attn_logits is not None:
                 # bs * n_heads, nq, ne
                 attn_logits = attn_logits.reshape(bs, self.n_heads,
@@ -165,14 +165,14 @@ class EntityAttentionLayer(nn.Module):
                 pre_mask_rep = pre_mask
             else:
                 pre_mask_rep = pre_mask.repeat_interleave(self.n_heads, dim=0)  # (bs*n_head)*na*ne
-            masked_attn_logits = attn_logits.masked_fill(pre_mask_rep[:, :, :ne].bool(), -float('Inf'))
+            masked_attn_logits = attn_logits.masked_fill(pre_mask_rep[:, :, :ne].bool().to(attn_logits.device), -1e8)
             if rank_percent is not None:
                 _, ind = masked_attn_logits.sort(2)  # (bs*n_head)*na*ne
                 with th.no_grad():
                     max_n = (1 - entity_mask).sum(1)  # bs
                     left_n = (max_n * rank_percent).ceil().long()  # bs
                     arange_ind = th.arange(ne).unsqueeze(0).repeat(bs, 1).to(self.args.device)  # bs, ne
-                    left_ind = th.where((arange_ind >= (ne - left_n).unsqueeze(1)), 0, 1)  # bs, ne
+                    left_ind = th.where((arange_ind >= (ne - left_n).unsqueeze(1).to(self.args.device)), 0, 1)  # bs, ne
                     expanded_left_ind = left_ind.repeat_interleave(self.n_heads, dim=0).unsqueeze(1).repeat(1,
                                                                                                             self.n_agents,
                                                                                                             1)  # bs*nhead, na, ne
@@ -182,15 +182,15 @@ class EntityAttentionLayer(nn.Module):
                     left_mask[(dk + ind)[expanded_left_ind == 0]] = 0
                     left_mask = left_mask.reshape(bs * self.n_heads, self.n_agents,
                                                   ne)  # 1 need mask, 0 remains valid. bs*nhead, na, ne
-                masked_attn_logits = masked_attn_logits.masked_fill(left_mask.bool(), -float('Inf'))
-                true_pre_mask = left_mask + pre_mask_rep  # should be the intersection of left_mask and pre_mask_rep
+                masked_attn_logits = masked_attn_logits.masked_fill(left_mask.bool(), -1e8)
+                true_pre_mask = left_mask + pre_mask_rep.to(self.args.device) # should be the intersection of left_mask and pre_mask_rep
                 true_pre_mask[true_pre_mask > 1] = 1
 
         # some weights might be NaN (if agent is inactive and all entities were masked)
         attn_weights = attn_weights.masked_fill(attn_weights != attn_weights, 0)
 
         if post_mask is not None:
-            attn = attn.masked_fill(post_mask.unsqueeze(2).bool(), 0)
+            attn = attn.masked_fill(post_mask.unsqueeze(2).bool().to(attn.device), 0)
         if ret_attn_logits is not None:
             # bs * n_heads, nq, ne
             attn_logits = attn_logits.reshape(bs, self.n_heads,

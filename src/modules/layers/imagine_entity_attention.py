@@ -80,14 +80,12 @@ class ImagineEntityAttnLayer(nn.Module):
         batch_size, time_size, n_agents, n_entities, _ = entities.shape
 
         attn_logits = attn_weights * self.scaling
-
         # attention masked -> if refil use agent mask
         if pre_mask is not None:
-            agent_mask_repeat = pre_mask.unsqueeze(-2).unsqueeze(-2).repeat(1, 1, 1, self.num_heads, 1, 1)
-            attn_logits = attn_weights.masked_fill(agent_mask_repeat[:, :, :n_agents, :, : ,:].bool(), -float('Inf'))
-
+            agent_mask_repeat = pre_mask.unsqueeze(-2).unsqueeze(-2).repeat(1, 1, 1, self.num_heads, 1, 1).to(attn_weights.device)
+            # attn_logits = attn_weights.masked_fill(agent_mask_repeat[:, :, :n_agents, :, : ,:].bool(), -float('Inf'))
+            attn_logits = attn_weights.masked_fill(agent_mask_repeat[:, :, :n_agents, :, :, :].bool(), -1e8)
         attn_weights = functional.softmax(attn_logits, dim=-1)
-
         attn = attn_weights @ v     # batch * time * agents * heads * 1  * head_dim
         attn = attn.transpose(-2, -3).reshape(*attn.shape[:-3], self.num_heads * self.head_dim)
 

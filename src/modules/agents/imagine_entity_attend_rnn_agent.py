@@ -45,8 +45,8 @@ class ImagineEntityAttnRNNAgent(EntityAttnRNNAgent):
         #     f.write(str(entities.shape))
         # print(entities.shape)
         batch_size, time_size, n_agents, n_entities, _ = entities.shape
-        obs_mask = th.ones(batch_size, time_size, n_entities, n_entities)
-        entity_mask = th.ones(batch_size, time_size, n_entities)
+        obs_mask = th.zeros(batch_size, time_size, n_entities, n_entities).to(entities.device)
+        entity_mask = th.zeros(batch_size, time_size, n_entities).to(entities.device)
 
         if imagine:
             # create random split of entities (once per episode)
@@ -74,7 +74,7 @@ class ImagineEntityAttnRNNAgent(EntityAttnRNNAgent):
                 t_withinattnmask[:, :, i, :] = withinattnmask[:, :, i, i, :]
                 t_interactattnmask[:, :, i, :] = interactattnmask[:, :, i, i, :]
             obs_mask = th.cat(
-                [t_withinattnmask.repeat(1, time_size, 1, 1), t_interactattnmask.repeat(1, time_size, 1, 1), obs_mask],
+                [obs_mask, t_withinattnmask.repeat(1, time_size, 1, 1), t_interactattnmask.repeat(1, time_size, 1, 1)],
                 dim=0)
 
             hidden_state = hidden_state.repeat(1, 3, 1, 1)
@@ -86,7 +86,6 @@ class ImagineEntityAttnRNNAgent(EntityAttnRNNAgent):
         x = self.encoding(entities)  # TODO: Maybe not useful because all information has already been embedded.
         x = self.norm1(x[..., 0, :] + self.attn(x, obs_mask))
         x = self.norm2(x + self.feedforward(x))
-
         # TODO: After the first entity attention layer, the rest should be self attention layer. Not implemented.
 
         # Output.   attn_dim -> n_actions
@@ -109,4 +108,5 @@ class ImagineEntityAttnRNNAgent(EntityAttnRNNAgent):
         q = q.reshape(batch_size, time_size, self.args.n_agents, -1)
         if not imagine:
             return q, h
+
         return q, h, (t_withinattnmask.repeat(1, time_size, 1, 1), t_interactattnmask.repeat(1, time_size, 1, 1))
