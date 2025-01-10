@@ -87,3 +87,4 @@ hypernet_embed: 128
 softmax_mixing_weights: True
 lmbda: 0.5
 state_last_actions: True
+global_icm: False
