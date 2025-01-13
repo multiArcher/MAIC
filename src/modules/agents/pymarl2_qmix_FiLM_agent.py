@@ -20,8 +20,7 @@ class FiLMAgent(nn.Module):
         self.rnn = nn.GRUCell(args.rnn_hidden_dim, args.rnn_hidden_dim)
         self.fc2 = nn.Linear(args.rnn_hidden_dim, args.n_actions)
 
-        self.FiLM1 = FiLMLayer(self.unit_types, args.rnn_hidden_dim)
-        self.FiLM2 = FiLMLayer(self.unit_types, args.n_actions)
+        self.FiLM_layer = FiLMLayer(self.unit_types, args.n_actions)
 
         if getattr(args, "use_layer_norm", False):
             self.layer_norm = LayerNorm(args.rnn_hidden_dim)
@@ -41,7 +40,6 @@ class FiLMAgent(nn.Module):
 
         inputs = inputs.view(-1, e)
         x = F.relu(self.fc1(inputs), inplace=True)
-        x = self.FiLM1(x, torch.argmax(inputs[:, self.unit_type_slice], dim=1).detach())
         h_in = hidden_state.reshape(-1, self.args.rnn_hidden_dim)
         hh = self.rnn(x, h_in)
 
@@ -49,7 +47,7 @@ class FiLMAgent(nn.Module):
             hh = self.layer_norm(hh)
 
         q = self.fc2(hh)
-        q = self.FiLM2(q, torch.argmax(inputs[:, self.unit_type_slice], dim=1).detach())
+        q = self.FiLM_layer(q, torch.argmax(inputs[:, self.unit_type_slice], dim=1).detach())
 
         return q.view(b, a, -1), hh.view(b, a, -1)
 
@@ -78,9 +76,19 @@ class FiLMLayer(nn.Module):
             hidden_dim (int): Dimension of the features to be modulated.
         """
         super(FiLMLayer, self).__init__()
-        self.category_embedding = nn.Embedding(num_categories, hidden_dim)
-        self.gamma = nn.Linear(hidden_dim, hidden_dim)
-        self.beta = nn.Linear(hidden_dim, hidden_dim)
+        self.gamma = nn.Sequential(
+            nn.Embedding(num_categories, hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LeakyReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+        self.beta = nn.Sequential(
+            nn.Embedding(num_categories, hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LeakyReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+        self.out_proj = nn.Linear(hidden_dim, hidden_dim)
 
     def forward(self, features: torch.Tensor, category: torch.Tensor) -> torch.Tensor:
         """
@@ -93,8 +101,6 @@ class FiLMLayer(nn.Module):
         Returns:
             torch.Tensor: Modulated features of shape (batch_size, hidden_dim).
         """
-        gamma = self.gamma(self.category_embedding(category))
-        beta = self.beta(self.category_embedding(category))
-
-        modulated_features = gamma * features + beta
-        return modulated_features
+        return self.out_proj(
+            self.gamma(category) * features + self.beta(category)
+        )
