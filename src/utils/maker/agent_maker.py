@@ -1,3 +1,4 @@
+from modules.agents.pymarl2_qmix_FiLM_agent import FiLMAgent
 from .maker import Maker
 from modules.agents.agent import Agent
 
@@ -67,3 +68,9 @@ class AgentMaker(Maker):
         """Entity agent using feature attention to merge obs."""
         from modules.agents.imagine_entity_attend_rnn_icm_agent import ImagineEntityAttnRNNAgentICM
         return ImagineEntityAttnRNNAgentICM(*args, **kwargs)
+
+    @staticmethod
+    def make_pymarl2_qmix_FiLM_agent(*args, **kwargs) -> "FiLMAgent":
+        """PyMARL2 QMix agent with FiLM."""
+        from modules.agents.pymarl2_qmix_FiLM_agent import FiLMAgent
+        return FiLMAgent(*args, **kwargs)
