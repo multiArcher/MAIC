@@ -12,6 +12,7 @@ class FiLMAgent(nn.Module):
     def __init__(self, input_shape, args: SimpleNamespace):
         super(FiLMAgent, self).__init__()
         self.args = args
+        self.device = getattr(args, "device", torch.device("cpu"))
         self.unit_types, self.unit_type_slice = self._initialize_unit_type_slice()
 
         self.obs_encoding = nn.Sequential(
@@ -32,7 +33,7 @@ class FiLMAgent(nn.Module):
 
     def init_hidden(self):
         # make hidden states on same device as model
-        return self.obs_encoding.weight.new(1, self.args.rnn_hidden_dim).zero_()
+        return torch.zeros(1, self.args.rnn_hidden_dim, device=self.device)
 
     def forward(self, inputs, hidden_state):
         batch_size, n_agents, input_dim = inputs.size()
@@ -43,7 +44,6 @@ class FiLMAgent(nn.Module):
         hh = self.rnn(x, h_in)
 
         q = self.q_projection(hh)
-        q = self.q_norm(q)
 
         q = self.FiLM_layer(q, torch.argmax(inputs[:, self.unit_type_slice], dim=1).detach())
 
@@ -103,5 +103,5 @@ class FiLMLayer(nn.Module):
             torch.Tensor: Modulated features of shape (batch_size, hidden_dim).
         """
         return self.out_proj(
-            self.gamma(category) * features + self.beta(category)
+            self.gamma(self.embedding(category)) * features + self.beta(self.embedding(category))
         )
