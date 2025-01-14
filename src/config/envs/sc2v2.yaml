@@ -4,6 +4,8 @@ env_args:
   map_name: null
   time_limit: 150
   fully_observable: False
+  replay_dir: null
+  replay_prefix: null
 
 test_greedy: True
 test_nepisode: 100

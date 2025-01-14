@@ -3,10 +3,8 @@ from types import SimpleNamespace
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch.nn import LayerNorm
 
-from utils.th_utils import orthogonal_init_, get_parameters_num
+from utils.th_utils import get_parameters_num
 from utils.custom_logging import PyMARLLogger
 
 
@@ -16,40 +14,40 @@ class FiLMAgent(nn.Module):
         self.args = args
         self.unit_types, self.unit_type_slice = self._initialize_unit_type_slice()
 
-        self.fc1 = nn.Linear(input_shape, args.rnn_hidden_dim)
+        self.obs_encoding = nn.Sequential(
+            nn.Linear(input_shape, args.rnn_hidden_dim),
+            nn.LeakyReLU(inplace=True),
+        )
+
         self.rnn = nn.GRUCell(args.rnn_hidden_dim, args.rnn_hidden_dim)
-        self.fc2 = nn.Linear(args.rnn_hidden_dim, args.n_actions)
+
+        self.q_projection = nn.Sequential(
+            nn.Linear(args.rnn_hidden_dim, args.n_actions),
+            nn.LayerNorm(args.n_actions),
+        )
 
         self.FiLM_layer = FiLMLayer(self.unit_types, args.n_actions)
-
-        if getattr(args, "use_layer_norm", False):
-            self.layer_norm = LayerNorm(args.rnn_hidden_dim)
-
-        if getattr(args, "use_orthogonal", False):
-            orthogonal_init_(self.fc1)
-            orthogonal_init_(self.fc2, gain=args.gain)
 
         PyMARLLogger("main").get_child_logger("FiLMAgent").info(f"FiLMAgent Size: {get_parameters_num(self.parameters())}")
 
     def init_hidden(self):
         # make hidden states on same device as model
-        return self.fc1.weight.new(1, self.args.rnn_hidden_dim).zero_()
+        return self.obs_encoding.weight.new(1, self.args.rnn_hidden_dim).zero_()
 
     def forward(self, inputs, hidden_state):
-        b, a, e = inputs.size()
+        batch_size, n_agents, input_dim = inputs.size()
+        inputs = inputs.view(-1, input_dim)
 
-        inputs = inputs.view(-1, e)
-        x = F.relu(self.fc1(inputs), inplace=True)
+        x = self.obs_encoding(inputs)
         h_in = hidden_state.reshape(-1, self.args.rnn_hidden_dim)
         hh = self.rnn(x, h_in)
 
-        if getattr(self.args, "use_layer_norm", False):
-            hh = self.layer_norm(hh)
+        q = self.q_projection(hh)
+        q = self.q_norm(q)
 
-        q = self.fc2(hh)
         q = self.FiLM_layer(q, torch.argmax(inputs[:, self.unit_type_slice], dim=1).detach())
 
-        return q.view(b, a, -1), hh.view(b, a, -1)
+        return q.view(batch_size, n_agents, -1), hh.view(batch_size, n_agents, -1)
 
     def _initialize_unit_type_slice(self) -> tuple[int, slice]:
         """Calculate the slice of the unit type feature in the observation."""
@@ -75,20 +73,23 @@ class FiLMLayer(nn.Module):
             num_categories (int): Number of distinct categories.
             hidden_dim (int): Dimension of the features to be modulated.
         """
-        super(FiLMLayer, self).__init__()
+        super().__init__()
+        self.embedding = nn.Embedding(num_categories, hidden_dim)
         self.gamma = nn.Sequential(
-            nn.Embedding(num_categories, hidden_dim),
             nn.Linear(hidden_dim, hidden_dim),
             nn.LeakyReLU(),
             nn.Linear(hidden_dim, hidden_dim),
         )
         self.beta = nn.Sequential(
-            nn.Embedding(num_categories, hidden_dim),
             nn.Linear(hidden_dim, hidden_dim),
             nn.LeakyReLU(),
             nn.Linear(hidden_dim, hidden_dim),
         )
-        self.out_proj = nn.Linear(hidden_dim, hidden_dim)
+        self.out_proj = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ELU(),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
 
     def forward(self, features: torch.Tensor, category: torch.Tensor) -> torch.Tensor:
         """
