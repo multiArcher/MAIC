@@ -33,17 +33,13 @@ class FiLMAgent(nn.Module):
 
         self.obs_encoding = nn.Sequential(
             nn.Linear(input_shape, args.rnn_hidden_dim, **factory_kwargs),
-            nn.LeakyReLU(inplace=True),
+            nn.ELU(inplace=True),
         )
         self.rnn = nn.GRUCell(args.rnn_hidden_dim, args.rnn_hidden_dim, **factory_kwargs)
 
-        self.FiLM_layer = FiLMLayer(self.unit_types, args.rnn_hidden_dim, **factory_kwargs)
+        self.q_projection = nn.Linear(args.rnn_hidden_dim, args.n_actions, **factory_kwargs)
 
-        self.q_projection = nn.Sequential(
-            nn.Linear(args.rnn_hidden_dim, args.n_actions, **factory_kwargs),
-            nn.LeakyReLU(inplace=True),
-            nn.Linear(args.n_actions, args.n_actions, **factory_kwargs),
-        )
+        self.FiLM_layer = FiLMLayer(self.unit_types, args.n_actions, **factory_kwargs)
 
         PyMARLLogger("main").get_child_logger("FiLMAgent").info(f"FiLMAgent Size: {self.size}")
 
@@ -64,9 +60,8 @@ class FiLMAgent(nn.Module):
         h_in = hidden_state.reshape(-1, self.args.rnn_hidden_dim)
         hh = self.rnn(x, h_in)
 
-        q_in = self.FiLM_layer(hh, unit_types)
-
-        q = self.q_projection(q_in)
+        q = self.q_projection(hh)
+        q = self.FiLM_layer(q, unit_types)
 
         return q.view(batch_size, n_agents, -1), hh.view(batch_size, n_agents, -1)
 
@@ -102,14 +97,9 @@ class FiLMLayer(nn.Module):
         self.norm1 = nn.LayerNorm(hidden_dim, elementwise_affine=False, eps=1e-6, **factory_kwargs)
         self.norm2 = nn.LayerNorm(hidden_dim, elementwise_affine=False, eps=1e-6, **factory_kwargs)
 
-        self.FiLM_modulation1 = nn.Sequential(
+        self.FiLM_modulation = nn.Sequential(
             nn.SiLU(),
-            nn.Linear(hidden_dim, 3 * hidden_dim, **factory_kwargs),
-        )
-
-        self.FiLM_modulation2 = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(hidden_dim, 2 * hidden_dim, **factory_kwargs),
+            nn.Linear(hidden_dim, 5 * hidden_dim, **factory_kwargs),
         )
 
         self.feed_forward = nn.Sequential(
@@ -117,6 +107,8 @@ class FiLMLayer(nn.Module):
             nn.GELU(approximate="tanh"),
             nn.Linear(hidden_dim, hidden_dim, **factory_kwargs),
         )
+
+        self.out_projection = nn.Linear(hidden_dim, hidden_dim, **factory_kwargs)
 
     def forward(self, x: torch.Tensor, category: torch.Tensor) -> torch.Tensor:
         """
@@ -130,11 +122,10 @@ class FiLMLayer(nn.Module):
             torch.Tensor: Modulated features of shape (batch_size, hidden_dim).
         """
         # First Modulation
-        alpha, beta1, gamma1 = self.FiLM_modulation1(self.embedding(category)).chunk(3, dim=-1)
+        alpha, beta1, gamma1, beta2, gamma2 = self.FiLM_modulation(self.embedding(category)).chunk(5, dim=-1)
         x = x + alpha * self.feed_forward(self.norm1(x) * (1 + gamma1) + beta1)
 
         # Output Modulation
-        beta2, gamma2 = self.FiLM_modulation2(self.embedding(category)).chunk(2, dim=-1)
         x = self.norm2(x) * (1 + gamma2) + beta2
 
-        return x
+        return self.out_projection(x)
