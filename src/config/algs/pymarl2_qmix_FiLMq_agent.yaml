@@ -22,7 +22,7 @@ target_update_interval: 200
 
 # use the Q_Learner to train
 mac: "pymarl2_nmac_controller"
-agent: "pymarl2_qmix_double_FiLM_agent"
+agent: "pymarl2_qmix_FiLMq_agent"
 agent_output_type: q
 
 learner: "pymarl2_q_learner"
