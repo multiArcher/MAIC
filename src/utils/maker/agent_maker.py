@@ -1,4 +1,4 @@
-from modules.agents.pymarl2_qmix_FiLM_agent import FiLMAgent
+from modules.agents.pymarl2_qmix_FiLMq_agent import FiLMAgent
 from .maker import Maker
 from modules.agents.agent import Agent
 
@@ -70,13 +70,13 @@ class AgentMaker(Maker):
         return ImagineEntityAttnRNNAgentICM(*args, **kwargs)
 
     @staticmethod
-    def make_pymarl2_qmix_FiLM_agent(*args, **kwargs) -> "FiLMAgent":
+    def make_pymarl2_qmix_FiLMq_agent(*args, **kwargs) -> "FiLMAgent":
         """PyMARL2 QMix agent with FiLM."""
-        from modules.agents.pymarl2_qmix_FiLM_agent import FiLMAgent
+        from modules.agents.pymarl2_qmix_FiLMq_agent import FiLMAgent
         return FiLMAgent(*args, **kwargs)
 
     @staticmethod
-    def make_pymarl2_qmix_double_FiLM_agent(*args, **kwargs) -> "FiLMAgent":
+    def make_pymarl2_qmix_DiT_FiLM(*args, **kwargs) -> "FiLMAgent":
         """PyMARL2 QMix agent with FiLM."""
-        from modules.agents.pymarl2_qmix__double_FiLM_agent import  FiLMAgent
+        from modules.agents.pymarl2_qmix_DiT_FiLM import FiLMAgent
         return FiLMAgent(*args, **kwargs)
