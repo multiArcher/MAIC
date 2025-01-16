@@ -75,6 +75,12 @@ class AgentMaker(Maker):
         return FiLMAgent(*args, **kwargs)
 
     @staticmethod
+    def make_pymarl2_qmix_FiLMq_agent_with_t(*args, **kwargs) -> "FiLMTAgent":
+        """PyMARL2 QMix agent with FiLM."""
+        from modules.agents.pymarl2_qmix_FiLMq_agent_with_t import FiLMTAgent
+        return FiLMTAgent(*args, **kwargs)
+
+    @staticmethod
     def make_pymarl2_qmix_DiT_FiLM(*args, **kwargs) -> "FiLMAgent":
         """PyMARL2 QMix agent with FiLM."""
         from modules.agents.pymarl2_qmix_DiT_FiLM import FiLMAgent
