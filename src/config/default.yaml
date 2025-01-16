@@ -8,7 +8,8 @@ common_reward: True  # Run experiment with common reward setup
 reward_scalarisation: "sum"  # How to aggregate rewards to single common reward (only used if common_reward is True)
 env_args: {
   window_size_x: 400,
-  window_size_y: 300
+  window_size_y: 300,
+  state_timestep_number: False,
 } # Arguments for the environment
 batch_size_run: 1 # Number of environments to run in parallel
 test_nepisode: 20 # Number of episodes to test for
