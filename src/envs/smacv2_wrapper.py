@@ -27,6 +27,10 @@ def load_scenario(map_name, **kwargs):
     scenario_args["env_args"]["window_size_x"] = kwargs.get("window_size_x", None)
     scenario_args["env_args"]["window_size_y"] = kwargs.get("window_size_y", None)
     scenario_args["env_args"]["fully_observable"] = kwargs.get("fully_observable", False)
+    if replay_dir := kwargs.get("replay_dir", None):
+        scenario_args["env_args"]["replay_dir"] = replay_dir
+    if replay_prefix := kwargs.get("replay_prefix", None):
+        scenario_args["env_args"]["replay_prefix"] = replay_prefix
 
     return StarCraftCapabilityEnvWrapper(**scenario_args["env_args"])
 

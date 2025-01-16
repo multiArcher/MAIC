@@ -1,5 +1,6 @@
 import re
 from types import SimpleNamespace
+from functools import partial
 
 import torch
 import torch.nn as nn
@@ -29,17 +30,30 @@ class FiLMAgent(nn.Module):
         super().__init__()
         self.args = args
         self.device = getattr(args, "device", torch.device("cpu"))
-        self.unit_types, self.unit_type_slice = self._initialize_unit_type_slice()
+        self.hidden_dim = args.rnn_hidden_dim
+        self.number_of_unit_types, self.unit_type_slice = self._initialize_unit_type_slice()
 
+        # obs encoding part
         self.obs_encoding = nn.Sequential(
-            nn.Linear(input_shape, args.rnn_hidden_dim, **factory_kwargs),
-            nn.ELU(inplace=True),
+            nn.Linear(input_shape, self.hidden_dim, **factory_kwargs),
+            nn.LeakyReLU(inplace=True),
         )
-        self.rnn = nn.GRUCell(args.rnn_hidden_dim, args.rnn_hidden_dim, **factory_kwargs)
+        self.rnn = nn.GRUCell(self.hidden_dim, self.hidden_dim, **factory_kwargs)
 
-        self.q_projection = nn.Linear(args.rnn_hidden_dim, args.n_actions, **factory_kwargs)
+        # out normal q
+        self.q_projection = nn.Linear(self.hidden_dim, args.n_actions, **factory_kwargs)
 
-        self.FiLM_layer = FiLMLayer(self.unit_types, args.n_actions, **factory_kwargs)
+        # modulation.
+        self.modulation = nn.Sequential(
+            nn.Linear(self.number_of_unit_types, self.hidden_dim, **factory_kwargs),
+            nn.LeakyReLU(inplace=True),
+            nn.Linear(self.hidden_dim, self.hidden_dim, **factory_kwargs),
+            nn.LeakyReLU(inplace=True),
+            nn.Linear(self.hidden_dim, args.n_actions * (args.n_actions + 1), **factory_kwargs),
+        )
+
+        # merging.
+        self.merge = nn.Linear(input_shape, 3, **factory_kwargs)
 
         PyMARLLogger("main").get_child_logger("FiLMAgent").info(f"FiLMAgent Size: {self.size}")
 
@@ -49,19 +63,31 @@ class FiLMAgent(nn.Module):
 
     def init_hidden(self):
         # make hidden states on same device as model
-        return torch.zeros(1, self.args.rnn_hidden_dim, device=self.device)
+        return torch.zeros(1, self.hidden_dim, device=self.device)
 
     def forward(self, inputs, hidden_state):
         batch_size, n_agents, input_dim = inputs.size()
         inputs = inputs.view(-1, input_dim)
-        unit_types = self._unit_type_from_obs(inputs)
+        # unit_types = self._unit_type_from_obs(inputs).float()
+        unit_types = inputs[:, self.unit_type_slice].detach()
 
+        # q forward.
         x = self.obs_encoding(inputs)
-        h_in = hidden_state.reshape(-1, self.args.rnn_hidden_dim)
+        h_in = hidden_state.reshape(-1, self.hidden_dim)
         hh = self.rnn(x, h_in)
-
         q = self.q_projection(hh)
-        q = self.FiLM_layer(q, unit_types)
+
+        # modulation forward.
+        modulation_weights, modulation_bias = (
+            self.modulation(unit_types)
+            .reshape(-1, self.args.n_actions + 1, self.args.n_actions)
+            .split([self.args.n_actions, 1], dim=-2)
+        )
+        q_modulated = (q.unsqueeze(-2) @ modulation_weights + modulation_bias).squeeze(-2)
+
+        # merging forward.
+        alpha, beta, gamma = self.merge(inputs).chunk(3, dim=-1)
+        q = q + alpha * ((1 + gamma) * q_modulated + beta)
 
         return q.view(batch_size, n_agents, -1), hh.view(batch_size, n_agents, -1)
 
@@ -93,18 +119,22 @@ class FiLMLayer(nn.Module):
     def __init__(self, num_categories, hidden_dim, device=None, dtype=None):
         super().__init__()
         factory_kwargs = {"device": device, "dtype": dtype}
-        self.embedding = nn.Embedding(num_categories, hidden_dim, **factory_kwargs)
-        self.norm1 = nn.LayerNorm(hidden_dim, elementwise_affine=False, eps=1e-6, **factory_kwargs)
-        self.norm2 = nn.LayerNorm(hidden_dim, elementwise_affine=False, eps=1e-6, **factory_kwargs)
+        # self.embedding = nn.Embedding(num_categories, hidden_dim, **factory_kwargs)
+        self.embedding = partial(nn.functional.one_hot, num_classes=num_categories)
+        self.norm = nn.LayerNorm(hidden_dim, elementwise_affine=False, eps=1e-6, **factory_kwargs)
 
         self.FiLM_modulation = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(hidden_dim, 5 * hidden_dim, **factory_kwargs),
+            nn.Linear(num_categories, 3 * hidden_dim + 3, **factory_kwargs),
+            nn.LeakyReLU(inplace=True),
+            nn.Linear(3 * hidden_dim + 3, 3 * hidden_dim + 3, **factory_kwargs),
+            nn.LeakyReLU(inplace=True),
+            nn.Linear(3 * hidden_dim + 3, 3 * hidden_dim + 3, **factory_kwargs),
         )
+        self.modulation_split = [hidden_dim, hidden_dim, hidden_dim, 1, 1, 1]
 
         self.feed_forward = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim, **factory_kwargs),
-            nn.GELU(approximate="tanh"),
+            nn.LeakyReLU(),
             nn.Linear(hidden_dim, hidden_dim, **factory_kwargs),
         )
 
@@ -121,11 +151,15 @@ class FiLMLayer(nn.Module):
         Returns:
             torch.Tensor: Modulated features of shape (batch_size, hidden_dim).
         """
+        alpha1, beta1, gamma1, alpha2, beta2, gamma2 = (
+            self.FiLM_modulation(self.embedding(category))
+            .split(self.modulation_split, dim=-1)
+        )
+
         # First Modulation
-        alpha, beta1, gamma1, beta2, gamma2 = self.FiLM_modulation(self.embedding(category)).chunk(5, dim=-1)
-        x = x + alpha * self.feed_forward(self.norm1(x) * (1 + gamma1) + beta1)
+        x = x + alpha1 * self.feed_forward(self.norm(x) * (1 + gamma1) + beta1)
 
         # Output Modulation
-        x = self.norm2(x) * (1 + gamma2) + beta2
+        x = alpha2 * ((1 + gamma2) * x + beta2)
 
-        return self.out_projection(x)
+        return x
