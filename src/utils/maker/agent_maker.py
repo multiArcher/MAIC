@@ -79,3 +79,9 @@ class AgentMaker(Maker):
         """PyMARL2 QMix agent with FiLM."""
         from modules.agents.pymarl2_qmix_DiT_FiLM import FiLMAgent
         return FiLMAgent(*args, **kwargs)
+
+    @staticmethod
+    def make_pymarl2_qmix_agent_with_t(*args, **kwargs) -> "NRNNAgent":
+        """PyMARL2 QMix agent with T-Net."""
+        from modules.agents.pymarl2_qmix_agent_with_t import NRNNAgent
+        return NRNNAgent(*args, **kwargs)

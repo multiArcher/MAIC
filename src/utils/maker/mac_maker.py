@@ -51,3 +51,8 @@ class MACMaker(Maker):
         from controllers.entity_state_as_obs_controller import EntityStateAsObsMAC
         return EntityStateAsObsMAC(*args, **kwargs)
 
+    @staticmethod
+    def make_pymarl2_nmac_controller_with_t(*args, **kwargs) -> "NMAC":
+        """MAC Implementation from PyMARL2"""
+        from controllers.pymarl2_nmac_controller_with_t import NMAC
+        return NMAC(*args, **kwargs)
