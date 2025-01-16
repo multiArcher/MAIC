@@ -1,4 +1,3 @@
-from modules.agents.pymarl2_qmix_FiLMq_agent import FiLMAgent
 from .maker import Maker
 from modules.agents.agent import Agent
 
