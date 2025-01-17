@@ -177,6 +177,7 @@ def run_sequential(args, logger):
     progress_bar = None
     tqdm_output = open("/dev/tty", "w") if sys.platform.startswith('linux') else sys.stdout
 
+    max_winrate = 0
     while runner.t_env <= args.t_max:
         with torch.no_grad():
             # Run for a whole episode at a time
@@ -209,10 +210,19 @@ def run_sequential(args, logger):
             for _ in range(n_test_runs):
                 runner.run(test_mode=True)
 
+        new_max_winrate = max(
+            range(len(logger.stats["test_battle_won_mean"])),
+            key=lambda i: logger.stats["test_battle_won_mean"][i][1]
+        )
+
+        best_model = True if new_max_winrate >= max_winrate else False
+        max_winrate = new_max_winrate
+
         # Save models to unique token directory
         if args.save_model and (
             runner.t_env - model_save_time >= args.save_model_interval
             or model_save_time == 0
+            or best_model
         ):
             model_save_time = runner.t_env
             save_path = os.path.join(
