@@ -104,7 +104,6 @@ class PyMARLLogger(CustomLogger):
 
     def print_recent_stats(self):
         """Log recent stats stored in self.stats."""
-        print("", end="\n", flush=True) # flush tqdm bar
         log_str = "t_env: {} | Episode: {}\n".format(*self.stats["episode"][-1])
         log_str += " " * 33
         i = 0

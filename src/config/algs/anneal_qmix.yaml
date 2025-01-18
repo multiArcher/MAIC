@@ -1,0 +1,75 @@
+# ------------------------------------------------------------------------------
+# Experiment specific parameters
+# ------------------------------------------------------------------------------
+name: "qmix"
+
+runner: "parallel"
+batch_size_run: 16
+
+mac: "basic_mac" # Basic controller
+agent: "rnn" # Default rnn agent
+learner: "q_learner"
+use_rnn: True
+
+test_nepisode: 160
+test_interval: 50000
+log_interval: 50000
+runner_log_interval: 50000
+learner_log_interval: 50000
+t_max: 10050000
+
+save_model: True # Save the models to disk
+save_model_interval: 1000000 # Save models after this many timesteps
+
+use_tensorboard: True # Log results to tensorboard
+buffer_cpu_only: False # If true we won't keep all of the replay buffer in vram
+
+anneal_training: True # Anneal the learning rate over time
+patience: 1000000 # Number of timesteps to wait before stopping training if validation loss doesn't improve
+anneal_rate: 0.9 # Rate at which to anneal the learning rate
+
+# ------------------------------------------------------------------------------
+# --- RL specific parameters ---
+# ------------------------------------------------------------------------------
+optimiser: AdamW
+gamma: 0.99
+batch_size: 32 # Number of episodes to train on
+buffer_size: 5000 # Size of the replay buffer
+lr: 0.0005 # Learning rate for agents
+optim_alpha: 0.99 # RMSProp alpha
+optim_eps: 0.00001 # RMSProp epsilon
+grad_norm_clip: 10 # Reduce magnitude of gradients above this L2 norm
+add_value_last_step: True
+
+# ------------------------------------------------------------------------------
+# --- Agent specific parameters ---
+# ------------------------------------------------------------------------------
+hidden_dim: 64 # Size of hidden state for default rnn agent
+obs_agent_id: True # Include the agent's one_hot id in the observation
+obs_last_action: True # Include the agent's last action (one_hot) in the observation
+
+# ------------------------------------------------------------------------------
+# --- QMix specific parameters ---
+# ------------------------------------------------------------------------------
+# use epsilon greedy action selector
+action_selector: "epsilon_greedy"
+epsilon_start: 1.0
+epsilon_finish: 0.05
+epsilon_anneal_time: 100000
+evaluation_epsilon: 0.0
+
+# update the target network every {} episodes
+target_update_interval_or_tau: 200
+
+obs_individual_obs: False
+
+# use the Q_Learner to train
+standardise_returns: False
+standardise_rewards: True
+
+agent_output_type: "q"
+double_q: True
+mixer: "qmix"
+mixing_embed_dim: 32
+hypernet_layers: 2
+hypernet_embed: 64
