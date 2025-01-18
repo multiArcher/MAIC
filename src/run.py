@@ -83,9 +83,9 @@ def evaluate_sequential(args, runner):
 
 def run_sequential(args, logger):
     # Init runner so we can get env info
-    # TODO: Environment is initialized in runner. It's difficult for other parts to get env_info. 
+    # TODO: Environment is initialized in runner. It's difficult for other parts to get env_info.
     #       Now, we are using args_env_info for communicating between modules. It's not a good design.
-    runner = RunnerMaker.make(args.runner, args=args, logger=logger)    
+    runner = RunnerMaker.make(args.runner, args=args, logger=logger)
     logger.debug(f"Running with {runner.__class__.__name__}.")
 
     # Set up schemes and groups here
@@ -186,6 +186,8 @@ def run_sequential(args, logger):
         file=tqdm_output,
     )
     max_winrate = 0
+    last_improvement_step = 0
+
     while runner.t_env <= args.t_max:
         with torch.no_grad():
             # Run for a whole episode at a time
@@ -219,7 +221,7 @@ def run_sequential(args, logger):
                 runner.run(test_mode=True)
 
         new_winrate = logger.stats["test_battle_won_mean"][-1][1]
-        best_model = new_winrate > max_winrate
+        best_model = (new_winrate > max_winrate) or (episode == 0)
 
         # Save models to unique token directory
         if args.save_model and (
@@ -247,6 +249,8 @@ def run_sequential(args, logger):
                 logger.console_logger.info(
                     f"Best model updated, winrate: {max_winrate} -> {new_winrate}"
                 )
+                last_improvement_step = runner.t_env
+                max_winrate = new_winrate
 
             if args.use_wandb and args.wandb_save_model:
                 wandb_save_dir = os.path.join(
@@ -257,9 +261,33 @@ def run_sequential(args, logger):
                     shutil.copyfile(
                         os.path.join(save_path, f), os.path.join(wandb_save_dir, f)
                     )
-            max_winrate = new_winrate
 
         episode += args.batch_size_run
+        if getattr(args, "anneal_training", False):
+            if runner.t_env - last_improvement_step > args.patience:
+                progress_bar.clear()
+                logger.console_logger.info(
+                    f"No improvement over {args.patience} steps. Pushing back."
+                )
+
+                def anneal_weights(best_model_path: Path):
+                    saved_agent = torch.load(best_model_path / "agent.th", weights_only=True)
+                    saved_mixer = torch.load(best_model_path / "mixer.th", weights_only=True)
+
+                    for saved_param, current_param in zip(
+                        learner.mac.parameters(), saved_agent.values()
+                    ):
+                        current_param.data.copy_(saved_param * (1 - args.anneal_rate) + current_param * args.anneal_rate)
+
+                    for saved_param, current_param in zip(
+                        learner.mixer.parameters(), saved_mixer.values()
+                    ):
+                        current_param.data.copy_(saved_param * (1 - args.anneal_rate) + current_param * args.anneal_rate)
+
+                if best_model_path.exists():
+                    anneal_weights(best_model_path)
+
+                last_improvement_step = runner.t_env
 
         if (runner.t_env - last_log_t) >= args.log_interval:
             logger.log_stat("episode", episode, runner.t_env)
