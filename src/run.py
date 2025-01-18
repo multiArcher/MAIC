@@ -174,9 +174,17 @@ def run_sequential(args, logger):
     logger.console_logger.info("-" * 30 + "TRAINING_START" + "-" * 30)
 
     # Delay init tqdm bar
-    progress_bar = None
     tqdm_output = open("/dev/tty", "w") if sys.platform.startswith('linux') else sys.stdout
-
+    logger.info("Train process started")
+    progress_bar = tqdm.tqdm(
+        total=(args.t_max + args.batch_size_run * args.env_info["episode_limit"]),
+        mininterval=1,
+        unit="step",
+        bar_format="{desc}{bar:12} | {n_fmt}/{total_fmt} steps{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}]{postfix}",
+        desc=f"{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')} | TRAINING | ",
+        postfix={"episode": 0.0},
+        file=tqdm_output,
+    )
     max_winrate = 0
     while runner.t_env <= args.t_max:
         with torch.no_grad():
@@ -210,32 +218,35 @@ def run_sequential(args, logger):
             for _ in range(n_test_runs):
                 runner.run(test_mode=True)
 
-        new_max_winrate = max(
-            range(len(logger.stats["test_battle_won_mean"])),
-            key=lambda i: logger.stats["test_battle_won_mean"][i][1]
-        )
-
-        best_model = True if new_max_winrate >= max_winrate else False
-        max_winrate = new_max_winrate
+        new_winrate = logger.stats["test_battle_won_mean"][-1][1]
+        best_model = new_winrate > max_winrate
 
         # Save models to unique token directory
         if args.save_model and (
             runner.t_env - model_save_time >= args.save_model_interval
             or model_save_time == 0
-            or best_model
+            or best_model is True
         ):
             model_save_time = runner.t_env
-            save_path = os.path.join(
-                args.local_results_path, "models", args.unique_token, str(runner.t_env)
-            )
-            # "results/models/{}".format(unique_token)
-            os.makedirs(save_path, exist_ok=True)
-            print("\n", file=tqdm_output)
+            model_save_dir = Path(args.local_results_path) / "models" / args.unique_token
+            model_token = str(model_save_time)
+            save_path = model_save_dir / model_token
+            save_path.mkdir(parents=True, exist_ok=True)
+
+            progress_bar.clear()
             logger.console_logger.info("Saving models to {}".format(save_path))
 
             # learner should handle saving/loading -- delegate actor save/load to mac,
             # use appropriate filenames to do critics, optimizer states
             learner.save_models(save_path)
+
+            if best_model is True:
+                best_model_path = model_save_dir / "best_model"
+                best_model_path.mkdir(parents=True, exist_ok=True)
+                learner.save_models(best_model_path)
+                logger.console_logger.info(
+                    f"Best model updated, winrate: {max_winrate} -> {new_winrate}"
+                )
 
             if args.use_wandb and args.wandb_save_model:
                 wandb_save_dir = os.path.join(
@@ -246,32 +257,25 @@ def run_sequential(args, logger):
                     shutil.copyfile(
                         os.path.join(save_path, f), os.path.join(wandb_save_dir, f)
                     )
+            max_winrate = new_winrate
 
         episode += args.batch_size_run
 
         if (runner.t_env - last_log_t) >= args.log_interval:
             logger.log_stat("episode", episode, runner.t_env)
+            progress_bar.clear()
             logger.print_recent_stats()
             last_log_t = runner.t_env
 
-        # display process
-        if progress_bar is None:
-            logger.console_logger.info("Train process started")
-            progress_bar = tqdm.tqdm(
-                total=(args.t_max + args.batch_size_run * args.env_info["episode_limit"]),
-                mininterval=3,
-                unit="step",
-                bar_format="{desc}{bar:12} | {n_fmt}/{total_fmt} steps{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}]{postfix}",
-                desc=f"{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')} | TRAINING | ",
-                postfix={"episode": episode},
-                file=tqdm_output
-            )
-
         # Watch CPU usage.
         memory_info = psutil.virtual_memory()
-        total_memory = memory_info.total / 1024 ** 3  # 总内存，单位GB
-        free_memory = memory_info.free / 1024 ** 3  # 可用内存，单位GB
-        used_memory = memory_info.used / 1024 ** 3  # 已用内存，单位GB
+        total_memory = memory_info.total / 1024 ** 3  # total memory in GB
+        free_memory = memory_info.free / 1024 ** 3  # free memory in GB
+        used_memory = memory_info.used / 1024 ** 3  # used memory in GB
+        progress_bar_postfix = {
+            "episode": episode,
+            "memory": f"{used_memory:2.1f}/{free_memory:2.1f}/{total_memory:2.1f} GB"
+        }
 
         # Watch GPU usage.
         if args.use_cuda:
@@ -280,22 +284,12 @@ def run_sequential(args, logger):
             gpu_total_memory = gpu_total_memory / 1024 ** 3
             gpu_memory_allocated = torch.cuda.memory_allocated() / 1024 ** 3
             gpu_memory_reserved = torch.cuda.memory_reserved() / 1024 ** 3
-
-            progress_bar.set_postfix(
+            progress_bar_postfix.update(
                 {
-                    "episode": episode,
-                    "memory": f"{used_memory:2.1f}/{free_memory:2.1f}/{total_memory:2.1f} GB",
                     "gpu": f"{gpu_memory_allocated:2.1f}/{gpu_memory_reserved:2.1f}/{gpu_available_memory:2.1f}/{gpu_total_memory:2.1f} GB"
                 }
             )
-        else:
-            progress_bar.set_postfix(
-                {
-                    "episode": episode,
-                    "memory": f"{used_memory:2.1f}/{free_memory:2.1f}/{total_memory:2.1f} GB",
-                    "gpu": f"0 GB"
-                }
-            )
+        progress_bar.set_postfix(progress_bar_postfix)
 
         progress_bar.set_description_str(
             f"{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')} | TRAINING | "
