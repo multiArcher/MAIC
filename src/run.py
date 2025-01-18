@@ -252,6 +252,11 @@ def run_sequential(args, logger):
                 last_improvement_step = runner.t_env
                 max_winrate = new_winrate
 
+                best_model_full_model_path = model_save_dir / "best_model_full_model"
+                best_model_full_model_path.mkdir(parents=True, exist_ok=True)
+                torch.save(learner.mac, best_model_full_model_path / "mac.th")
+
+
             if args.use_wandb and args.wandb_save_model:
                 wandb_save_dir = os.path.join(
                     logger.wandb.dir, "models", args.unique_token, str(runner.t_env)
