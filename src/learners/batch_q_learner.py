@@ -32,7 +32,10 @@ class QLearner(Learner):
         self.optimiser = Adam(params=self.params, lr=args.lr)
 
         # a little wasteful to deepcopy (e.g. duplicates action selector), but should work for any MAC
-        self.target_mac = copy.deepcopy(mac)
+        if getattr(args, "double_agent", True):
+            self.target_mac = copy.deepcopy(mac)
+        else:
+            self.target_mac = self.mac
 
         self.training_steps = 0
         self.last_target_update_step = 0

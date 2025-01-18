@@ -13,7 +13,7 @@ class EntityAttnRNNAgent(Agent):
         super().__init__(input_scheme, args)
 
         self.args = args
-        self.device = args.device
+        self.device: torch.device = torch.device(getattr(args, "device", "cpu"))
         self.n_heads: int = getattr(args, "agent_attn_heads")   # Attention heads.
         self.hidden_dim: int = getattr(args, "agent_hidden_dim")    # Dimension of embedding andRNN.
         self.attn_dim: int = getattr(args, "agent_attn_dim")    # Dimension of full attention layer
@@ -21,10 +21,17 @@ class EntityAttnRNNAgent(Agent):
 
         # Embedding layers: scheme -> hidden_dim
         self.embedding_layers = nn.ModuleList()
+        self.own_feats_slice = None
+        self_feature_count = 0
         for feat_name, feat_shape in input_scheme[0].items():
+            if feat_name == "own_feats_size":
+                # prepare own_feats_slice for attention.
+                self.own_feats_slice = slice(self_feature_count, self_feature_count + 1)
             self.embedding_layers.append(
                 nn.Linear(feat_shape[1], self.hidden_dim, bias=False, device=self.device)
             )
+            self_feature_count += feat_shape[0] # count the number of other features before self features.
+
 
         # Embedding layers: 1 -> hidden_dim
         for feat_name, feat_shape in input_scheme[1].items():
@@ -45,7 +52,7 @@ class EntityAttnRNNAgent(Agent):
 
         # Output layers: attn_dim -> hidden_dim -> n_actions q
         self.rnn_proj = nn.Linear(self.attn_dim, self.hidden_dim, device=self.device)
-        # TODO: RNN might not be advanced. Transformer decoder seems to work here.
+        # TODO: RNN might not be advanced. Transformer encoder seems to work here.
         self.rnn = nn.GRU(self.hidden_dim, self.hidden_dim, num_layers=self.gru_layers, batch_first=True, device=self.device)
         self.decoding = nn.Linear(self.hidden_dim, args.n_actions, device=self.device)
 
@@ -65,7 +72,7 @@ class EntityAttnRNNAgent(Agent):
         # A single transformer encoder.
         # TODO: Test multiple structure of attention.
         entities = self.encoding(entities)
-        attn = self.norm1(entities[..., 0, :] + self.attn(entities))
+        attn = self.norm1(entities[..., self.own_feats_slice, :].squeeze(-2) + self.attn(entities))
         attn = self.norm2(attn + self.feedforward(attn))    # batch * time * n_agents * attn_dim
 
         # TODO: After the first entity attention layer, the rest should be self attention layer. Not implemented.
