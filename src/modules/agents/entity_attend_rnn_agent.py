@@ -21,15 +21,16 @@ class EntityAttnRNNAgent(Agent):
 
         # Embedding layers: scheme -> hidden_dim
         self.embedding_layers = nn.ModuleList()
-        self.own_feats_slice = None
+        self.own_feature_index: int = 0
         self_feature_count = 0
         for feat_name, feat_shape in input_scheme[0].items():
-            if feat_name == "own_feats_size":
-                # prepare own_feats_slice for attention.
-                self.own_feats_slice = slice(self_feature_count, self_feature_count + 1)
             self.embedding_layers.append(
                 nn.Linear(feat_shape[1], self.hidden_dim, bias=False, device=self.device)
             )
+
+            if feat_name == "own_feats_size":
+                # prepare own_feats_slice for attention.
+                self.own_feature_index = self_feature_count
             self_feature_count += feat_shape[0] # count the number of other features before self features.
 
 
@@ -45,7 +46,7 @@ class EntityAttnRNNAgent(Agent):
             nn.LeakyReLU(inplace=True),
         )
 
-        self.attn = EntityAttnLayer(args, self.attn_dim, self.n_heads)
+        self.attn = EntityAttnLayer(self.attn_dim, self.n_heads, self.own_feature_index, device=self.device)
         self.norm1 = RMSNorm(self.attn_dim, eps=1e-5, elementwise_affine=True).to(self.device)
         self.feedforward = nn.Linear(self.attn_dim, self.attn_dim, bias=False, device=self.device)
         self.norm2 = RMSNorm(self.attn_dim, eps=1e-5, elementwise_affine=True).to(self.device)
@@ -72,7 +73,9 @@ class EntityAttnRNNAgent(Agent):
         # A single transformer encoder.
         # TODO: Test multiple structure of attention.
         entities = self.encoding(entities)
-        attn = self.norm1(entities[..., self.own_feats_slice, :].squeeze(-2) + self.attn(entities))
+        attn = self.norm1(
+            entities[..., self.own_feature_index, :] + self.attn(entities)
+        )
         attn = self.norm2(attn + self.feedforward(attn))    # batch * time * n_agents * attn_dim
 
         # TODO: After the first entity attention layer, the rest should be self attention layer. Not implemented.
