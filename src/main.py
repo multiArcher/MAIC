@@ -52,8 +52,8 @@ def my_main(_run, _config, _log):
     torch.manual_seed(config["seed"])
     torch.cuda.manual_seed(config["seed"])
     torch.cuda.manual_seed_all(config["seed"])
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    # torch.backends.cudnn.deterministic = True
+    # torch.backends.cudnn.benchmark = False
     # SMAC seed.
     config["env_args"]["seed"] = config["seed"]
 
