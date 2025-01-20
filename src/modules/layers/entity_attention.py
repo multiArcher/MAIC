@@ -78,17 +78,20 @@ class EntityAttnLayer(nn.Module):
         k = k.transpose(-2, -3)  # batch * time * agents * heads * n_entities * head_dim
         v = v.transpose(-2, -3)  # batch * time * agents * heads * n_entities * head_dim
 
-        # Old implementation, use torch.nn.functional.scaled_dot_product_attention instead.
         # calculate attention weights.
+        # Equivalent implementation, use torch.nn.functional.scaled_dot_product_attention instead.
         # attn_weights = q @ k.transpose(-2, -1)  # batch * time * agents * heads * 1  * n_entities
         # attn_weights = attn_weights * self.scaling
         # attn_weights = functional.softmax(attn_weights, dim=-1)
-
         # attn = attn_weights @ v     # batch * time * agents * heads * 1  * head_dim
 
-        attn = self.score_function(q, k, v)
-        attn = attn.reshape(*attn.shape[:-3], *(1,) * self.keep_dim, self.num_heads * self.head_dim)
+        attn = self.score_function(q, k, v)  # batch * time * agents * heads * 1  * head_dim
+        attn = attn.reshape(
+            *attn.shape[:-3],
+            *(1,) * self.keep_dim,
+            self.num_heads * self.head_dim
+        )  # batch * time * agents * (1 if keep_dim)  * (heads * head_dim)
 
-        attn = self.out_proj(attn)  # batch * agents * embedding_dim
+        attn = self.out_proj(attn)  # batch * agents * (1 if keep_dim) * embedding_dim
 
         return attn
