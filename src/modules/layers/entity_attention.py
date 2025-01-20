@@ -6,8 +6,8 @@ from utils.custom_logging import PyMARLLogger
 
 
 class EntityAttnLayer(nn.Module):
-    """
-    Attention Layer for entity scheme multi-agent systems.
+    """Attention Layer for entity scheme multi-agent systems.
+
     Args:
         embed_dim: size of embedding feature.
         num_heads: number of attention heads.
@@ -15,6 +15,7 @@ class EntityAttnLayer(nn.Module):
         keep_dim: whether to keep the attention dimension or not.
         device: device to use.
     """
+
     def __init__(
             self,
             embed_dim: int,
@@ -46,6 +47,7 @@ class EntityAttnLayer(nn.Module):
         self.q_proj = nn.Linear(embed_dim, embed_dim, bias=False, **default_factory)
         self.k_proj = nn.Linear(embed_dim, embed_dim, bias=False, **default_factory)
         self.v_proj = nn.Linear(embed_dim, embed_dim, bias=False, **default_factory)
+        self.score_function = nn.functional.scaled_dot_product_attention
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=False, **default_factory)
 
     def extra_repr(self):
@@ -76,12 +78,15 @@ class EntityAttnLayer(nn.Module):
         k = k.transpose(-2, -3)  # batch * time * agents * heads * n_entities * head_dim
         v = v.transpose(-2, -3)  # batch * time * agents * heads * n_entities * head_dim
 
+        # Old implementation, use torch.nn.functional.scaled_dot_product_attention instead.
         # calculate attention weights.
-        attn_weights = q @ k.transpose(-2, -1)  # batch * time * agents * heads * 1  * n_entities
-        attn_weights = attn_weights * self.scaling
-        attn_weights = functional.softmax(attn_weights, dim=-1)
+        # attn_weights = q @ k.transpose(-2, -1)  # batch * time * agents * heads * 1  * n_entities
+        # attn_weights = attn_weights * self.scaling
+        # attn_weights = functional.softmax(attn_weights, dim=-1)
 
-        attn = attn_weights @ v     # batch * time * agents * heads * 1  * head_dim
+        # attn = attn_weights @ v     # batch * time * agents * heads * 1  * head_dim
+
+        attn = self.score_function(q, k, v)
         attn = attn.reshape(*attn.shape[:-3], *(1,) * self.keep_dim, self.num_heads * self.head_dim)
 
         attn = self.out_proj(attn)  # batch * agents * embedding_dim
