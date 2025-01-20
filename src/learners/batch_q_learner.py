@@ -1,14 +1,13 @@
 import copy
 
 import torch
-from torch.optim import Adam
 
 from components.episode_buffer import EpisodeBatch
 from components.standarize_stream import RunningMeanStd
 from learners.learner import Learner
-# from modules.mixers.vdn import VDNMixer
-# from modules.mixers.qmix import QMixer
+
 from utils.maker import MixerMaker
+from utils.th_utils import get_parameters_num
 
 
 class QLearner(Learner):
@@ -17,36 +16,42 @@ class QLearner(Learner):
         self.n_agents = args.n_agents
         self.mac = mac
         self.logger = logger
+        self.device = args.device
 
-        self.params = list(mac.parameters())
         self.last_target_update_episode = 0
+        self.params = list(mac.parameters())
 
         self.mixer = None
-
         if args.mixer is not None:
             self.mixer = MixerMaker.make(args.mixer, args)
 
-            self.params += list(self.mixer.parameters())
             self.target_mixer = copy.deepcopy(self.mixer)
+            self.params += list(self.mixer.parameters())
 
-        self.optimiser = Adam(params=self.params, lr=args.lr)
+            logger.info(f"Mixer Size: {get_parameters_num(self.mixer.parameters())}")
+
+        match getattr(self.args, "optimiser", "rms").lower():
+            case "adam":
+                self.optimiser = torch.optim.Adam(params=self.params, lr=args.lr, weight_decay=getattr(args, "weight_decay", 0))
+            case "adamw":
+                self.optimiser = torch.optim.AdamW(params=self.params, lr=args.lr)
+            case "sgd":
+                self.optimiser = torch.optim.SGD(params=self.params, lr=args.lr)
+            case _:
+                self.optimiser = torch.optim.RMSprop(params=self.params, lr=args.lr)
 
         # a little wasteful to deepcopy (e.g. duplicates action selector), but should work for any MAC
-        if getattr(args, "double_agent", True):
-            self.target_mac = copy.deepcopy(mac)
-        else:
-            self.target_mac = self.mac
+        self.target_mac = copy.deepcopy(mac)
+        self.log_stats_t = -self.args.learner_log_interval - 1
 
         self.training_steps = 0
         self.last_target_update_step = 0
-        self.log_stats_t = -self.args.learner_log_interval - 1
 
-        device = args.device
         if self.args.standardise_returns:
-            self.ret_ms = RunningMeanStd(shape=(self.n_agents,), device=device)
+            self.ret_ms = RunningMeanStd(shape=(self.n_agents,), device=self.device)
         if self.args.standardise_rewards:
             rew_shape = (1,) if self.args.common_reward else (self.n_agents,)
-            self.rew_ms = RunningMeanStd(shape=rew_shape, device=device)
+            self.rew_ms = RunningMeanStd(shape=rew_shape, device=self.device)
 
     def train(self, batch: EpisodeBatch, t_env: int, episode_num: int):
         # Get the relevant quantities
@@ -55,7 +60,7 @@ class QLearner(Learner):
         terminated = batch["terminated"][:, :-1].float()
         mask = batch["filled"][:, :-1].float()
         mask[:, 1:] = mask[:, 1:] * (1 - terminated[:, :-1])
-        avail_actions = batch["avail_actions"]
+        avail_actions: torch.Tensor = batch["avail_actions"]
 
         if self.args.standardise_rewards:
             self.rew_ms.update(rewards)
@@ -69,44 +74,46 @@ class QLearner(Learner):
             rewards = rewards.expand(-1, -1, self.n_agents)
 
         # Calculate estimated Q-Values
+        self.mac.agent.train()
         self.mac.init_hidden(batch.batch_size)
         t = slice(0, batch.max_seq_length)
         mac_out = self.mac.forward(batch, t=t)
 
         # Pick the Q-Values for the actions taken by each agent
-        chosen_action_qvals = torch.gather(mac_out[:, :-1], dim=3, index=actions).squeeze(
-            3
-        )  # Remove the last dim
+        chosen_action_qvals = torch.gather(mac_out[:, :-1], dim=3, index=actions).squeeze(3)  # Remove the last dim
 
         # Calculate the Q-Values necessary for the target
-        self.target_mac.init_hidden(batch.batch_size)
-        t = slice(0, batch.max_seq_length)
-        target_mac_out = self.target_mac.forward(batch, t=t)
+        with torch.no_grad():
+            self.target_mac.agent.train()
+            self.target_mac.init_hidden(batch.batch_size)
+            t = slice(0, batch.max_seq_length)
+            target_mac_out = self.target_mac.forward(batch, t=t)
 
-        # We don't need the first timesteps Q-Value estimate for calculating targets
-        target_mac_out = target_mac_out[:, 1:]
+            # We don't need the first timesteps Q-Value estimate for calculating targets
+            target_mac_out = target_mac_out[:, 1:]
 
-        # Mask out unavailable actions
-        target_mac_out[avail_actions[:, 1:] == 0] = -9999999
+            # Mask out unavailable actions
+            target_mac_out = torch.masked_fill(target_mac_out, avail_actions[:, 1:] == 0, -1e7)
 
-        # Max over target Q-Values
-        if self.args.double_q:
-            # Get actions that maximise live Q (for double q-learning)
-            mac_out_detach = mac_out.clone().detach()
-            mac_out_detach[avail_actions == 0] = -9999999
-            cur_max_actions = mac_out_detach[:, 1:].max(dim=3, keepdim=True)[1]
-            target_max_qvals = torch.gather(target_mac_out, 3, cur_max_actions).squeeze(3)
-        else:
-            target_max_qvals = target_mac_out.max(dim=3)[0]
+            # Max over target Q-Values
+            if self.args.double_q:
+                # Get actions that maximise live Q (for double q-learning)
+                mac_out_detach = mac_out.clone().detach()
+                mac_out_detach = torch.masked_fill(mac_out_detach, avail_actions==0, -1e7)
+                cur_max_actions = mac_out_detach[:, 1:].max(dim=3, keepdim=True)[1]
+                target_max_qvals = torch.gather(target_mac_out, 3, cur_max_actions).squeeze(3)
+            else:
+                target_max_qvals = target_mac_out.max(dim=3)[0]
 
         # Mix
         if self.mixer is not None:
             chosen_action_qvals = self.mixer(
                 chosen_action_qvals, batch["state"][:, :-1]
             )
-            target_max_qvals = self.target_mixer(
-                target_max_qvals, batch["state"][:, 1:]
-            )
+            with torch.no_grad():
+                target_max_qvals = self.target_mixer(
+                    target_max_qvals, batch["state"][:, 1:]
+                )
 
         if self.args.standardise_returns:
             target_max_qvals = (
@@ -190,11 +197,11 @@ class QLearner(Learner):
                 )
 
     def cuda(self):
-        self.mac.to(self.args.device)
-        self.target_mac.to(self.args.device)
+        self.mac.to(self.device)
+        self.target_mac.to(self.device)
         if self.mixer is not None:
-            self.mixer.to(self.args.device)
-            self.target_mixer.to(self.args.device)
+            self.mixer.to(self.device)
+            self.target_mixer.to(self.device)
 
     def save_models(self, path):
         self.mac.save_models(path)

@@ -5,7 +5,7 @@ from modules.mixers.pymarl2_qmix_mixer import Mixer
 # from modules.mixers.qatten import QattenMixer
 # from envs.matrix_game import print_matrix_status
 from utils.rl_utils import build_td_lambda_targets, build_q_lambda_targets
-import torch as th
+import torch
 from torch.optim import RMSprop, Adam
 import numpy as np
 from utils.th_utils import get_parameters_num
@@ -19,7 +19,7 @@ class NQLearner:
         self.logger = logger
 
         self.last_target_update_episode = 0
-        self.device = th.device('cuda' if args.use_cuda else 'cpu')
+        self.device = torch.device('cuda' if args.use_cuda else 'cpu')
         self.params = list(mac.parameters())
 
         if args.mixer == "pymarl2_qmix_mixer":
@@ -30,8 +30,7 @@ class NQLearner:
         self.target_mixer = copy.deepcopy(self.mixer)
         self.params += list(self.mixer.parameters())
 
-        print('Mixer Size: ')
-        print(get_parameters_num(self.mixer.parameters()))
+        logger.info(f"Mixer Size: {get_parameters_num(self.mixer.parameters())}")
 
         if self.args.optimizer == 'adam':
             self.optimiser = Adam(params=self.params, lr=args.lr, weight_decay=getattr(args, "weight_decay", 0))
@@ -68,14 +67,13 @@ class NQLearner:
         for t in range(batch.max_seq_length):
             agent_outs = self.mac.forward(batch, t=t)
             mac_out.append(agent_outs)
-        mac_out = th.stack(mac_out, dim=1)  # Concat over time
+        mac_out = torch.stack(mac_out, dim=1)  # Concat over time
 
         # Pick the Q-Values for the actions taken by each agent
-        chosen_action_qvals = th.gather(mac_out[:, :-1], dim=3, index=actions).squeeze(3)  # Remove the last dim
-        chosen_action_qvals_ = chosen_action_qvals
+        chosen_action_qvals = torch.gather(mac_out[:, :-1], dim=3, index=actions).squeeze(3)  # Remove the last dim
 
         # Calculate the Q-Values necessary for the target
-        with th.no_grad():
+        with torch.no_grad():
             self.target_mac.agent.train()
             target_mac_out = []
             self.target_mac.init_hidden(batch.batch_size)
@@ -84,19 +82,19 @@ class NQLearner:
                 target_mac_out.append(target_agent_outs)
 
             # We don't need the first timesteps Q-Value estimate for calculating targets
-            target_mac_out = th.stack(target_mac_out, dim=1)  # Concat across time
+            target_mac_out = torch.stack(target_mac_out, dim=1)  # Concat across time
 
             # Max over target Q-Values/ Double q learning
             mac_out_detach = mac_out.clone().detach()
             mac_out_detach[avail_actions == 0] = -9999999
             cur_max_actions = mac_out_detach.max(dim=3, keepdim=True)[1]
-            target_max_qvals = th.gather(target_mac_out, 3, cur_max_actions).squeeze(3)
+            target_max_qvals = torch.gather(target_mac_out, 3, cur_max_actions).squeeze(3)
 
             # Calculate n-step Q-Learning targets
             target_max_qvals = self.target_mixer(target_max_qvals, batch["state"])
 
             if getattr(self.args, 'q_lambda', False):
-                qvals = th.gather(target_mac_out, 3, batch["actions"]).squeeze(3)
+                qvals = torch.gather(target_mac_out, 3, batch["actions"]).squeeze(3)
                 qvals = self.target_mixer(qvals, batch["state"])
 
                 targets = build_q_lambda_targets(rewards, terminated, mask, target_max_qvals, qvals,
@@ -116,7 +114,7 @@ class NQLearner:
 
         # important sampling for PER
         if self.use_per:
-            per_weight = th.from_numpy(per_weight).unsqueeze(-1).to(device=self.device)
+            per_weight = torch.from_numpy(per_weight).unsqueeze(-1).to(device=self.device)
             masked_td_error = masked_td_error.sum(1) * per_weight
 
         loss = L_td = masked_td_error.sum() / mask.sum()
@@ -124,7 +122,7 @@ class NQLearner:
         # Optimise
         self.optimiser.zero_grad()
         loss.backward()
-        grad_norm = th.nn.utils.clip_grad_norm_(self.params, self.args.grad_norm_clip)
+        grad_norm = torch.nn.utils.clip_grad_norm_(self.params, self.args.grad_norm_clip)
         self.optimiser.step()
 
         if (episode_num - self.last_target_update_episode) / self.args.target_update_interval >= 1.0:
@@ -153,13 +151,13 @@ class NQLearner:
             if self.return_priority:
                 info["td_errors_abs"] = rewards.sum(1).detach().to('cpu')
                 # normalize to [0, 1]
-                self.priority_max = max(th.max(info["td_errors_abs"]).item(), self.priority_max)
-                self.priority_min = min(th.min(info["td_errors_abs"]).item(), self.priority_min)
+                self.priority_max = max(torch.max(info["td_errors_abs"]).item(), self.priority_max)
+                self.priority_min = min(torch.min(info["td_errors_abs"]).item(), self.priority_min)
                 info["td_errors_abs"] = (info["td_errors_abs"] - self.priority_min) \
                                         / (self.priority_max - self.priority_min + 1e-5)
             else:
                 info["td_errors_abs"] = ((td_error.abs() * mask).sum(1) \
-                                         / th.sqrt(mask.sum(1))).detach().to('cpu')
+                                         / torch.sqrt(mask.sum(1))).detach().to('cpu')
 
         return info
 
@@ -182,13 +180,13 @@ class NQLearner:
     def save_models(self, path):
         self.mac.save_models(path)
         if self.mixer is not None:
-            th.save(self.mixer.state_dict(), "{}/mixer.th".format(path))
-        th.save(self.optimiser.state_dict(), "{}/opt.th".format(path))
+            torch.save(self.mixer.state_dict(), "{}/mixer.th".format(path))
+        torch.save(self.optimiser.state_dict(), "{}/opt.th".format(path))
 
     def load_models(self, path):
         self.mac.load_models(path)
         # Not quite right but I don't want to save target networks
         self.target_mac.load_models(path)
         if self.mixer is not None:
-            self.mixer.load_state_dict(th.load("{}/mixer.th".format(path), map_location=lambda storage, loc: storage))
-        self.optimiser.load_state_dict(th.load("{}/opt.th".format(path), map_location=lambda storage, loc: storage))
+            self.mixer.load_state_dict(torch.load("{}/mixer.th".format(path), map_location=lambda storage, loc: storage))
+        self.optimiser.load_state_dict(torch.load("{}/opt.th".format(path), map_location=lambda storage, loc: storage))
