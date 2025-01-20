@@ -24,14 +24,14 @@ class FiLMAgent(nn.Module):
         args (SimpleNamespace): Arguments for the agent.
     """
 
-    def __init__(self, input_shape, args: SimpleNamespace, device=None, dtype=None):
+    def __init__(self, input_shape, args: SimpleNamespace):
         """Initialize the FiLMAgent."""
-        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
-        self.args = args
         self.device = getattr(args, "device", torch.device("cpu"))
+        self.args = args
         self.hidden_dim = args.rnn_hidden_dim
         self.number_of_unit_types, self.unit_type_slice = self._initialize_unit_type_slice()
+        factory_kwargs = {"device": self.device}
 
         # obs encoding part
         self.obs_encoding = nn.Sequential(

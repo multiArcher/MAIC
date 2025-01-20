@@ -15,3 +15,7 @@ class Agent(torch.nn.Module, ABC):
     @abstractmethod
     def forward(self, inputs, hidden_state):
         pass
+
+    @property
+    def size(self):
+        return str(sum(p.numel() for p in self.parameters()) / 1000) + 'K'

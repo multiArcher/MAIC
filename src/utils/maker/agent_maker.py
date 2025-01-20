@@ -91,3 +91,9 @@ class AgentMaker(Maker):
         """PyMARL2 QMix agent with T-Net."""
         from modules.agents.pymarl2_qmix_agent_with_t import NRNNAgent
         return NRNNAgent(*args, **kwargs)
+
+    @staticmethod
+    def make_entity_attend_FiLMq_agent(*args, **kwargs) -> "FiLMAgent":
+        """Entity agent using attention to merge obs."""
+        from modules.agents.entity_attend_FiLMq_agent import EntityFiLMAgent
+        return EntityFiLMAgent(*args, **kwargs)

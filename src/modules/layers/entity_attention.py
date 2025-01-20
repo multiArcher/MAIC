@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as functional
 
 from utils.custom_logging import PyMARLLogger
 
@@ -79,13 +78,13 @@ class EntityAttnLayer(nn.Module):
         v = v.transpose(-2, -3)  # batch * time * agents * heads * n_entities * head_dim
 
         # calculate attention weights.
+        attn = self.score_function(q, k, v)  # batch * time * agents * heads * 1  * head_dim
         # Equivalent implementation, use torch.nn.functional.scaled_dot_product_attention instead.
         # attn_weights = q @ k.transpose(-2, -1)  # batch * time * agents * heads * 1  * n_entities
         # attn_weights = attn_weights * self.scaling
         # attn_weights = functional.softmax(attn_weights, dim=-1)
         # attn = attn_weights @ v     # batch * time * agents * heads * 1  * head_dim
 
-        attn = self.score_function(q, k, v)  # batch * time * agents * heads * 1  * head_dim
         attn = attn.reshape(
             *attn.shape[:-3],
             *(1,) * self.keep_dim,
