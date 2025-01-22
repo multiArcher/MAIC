@@ -223,11 +223,27 @@ def run_sequential(args, logger):
         new_winrate = logger.stats["test_battle_won_mean"][-1][1]
         best_model = (new_winrate > max_winrate) or (episode == 0)
 
+        if best_model is True:
+            model_save_dir = Path(args.local_results_path) / "models" / args.unique_token
+            best_model_path = model_save_dir / "best_model"
+            best_model_path.mkdir(parents=True, exist_ok=True)
+            learner.save_models(best_model_path)
+            progress_bar.clear()
+            logger.console_logger.info(
+                f"Best model updated, winrate: {max_winrate} -> {new_winrate}"
+            )
+            last_improvement_step = runner.t_env
+            max_winrate = new_winrate
+
+            best_model_full_model_path = model_save_dir / "best_model_full_model"
+            best_model_full_model_path.mkdir(parents=True, exist_ok=True)
+            # torch.jit.save(torch.jit.script(learner.mac), best_model_full_model_path / "mac.pth")
+            torch.save(learner.mac, best_model_full_model_path / "mac.th")
+
         # Save models to unique token directory
         if args.save_model and (
             runner.t_env - model_save_time >= args.save_model_interval
             or model_save_time == 0
-            or best_model is True
         ):
             model_save_time = runner.t_env
             model_save_dir = Path(args.local_results_path) / "models" / args.unique_token
@@ -242,19 +258,7 @@ def run_sequential(args, logger):
             # use appropriate filenames to do critics, optimizer states
             learner.save_models(save_path)
 
-            if best_model is True:
-                best_model_path = model_save_dir / "best_model"
-                best_model_path.mkdir(parents=True, exist_ok=True)
-                learner.save_models(best_model_path)
-                logger.console_logger.info(
-                    f"Best model updated, winrate: {max_winrate} -> {new_winrate}"
-                )
-                last_improvement_step = runner.t_env
-                max_winrate = new_winrate
 
-                best_model_full_model_path = model_save_dir / "best_model_full_model"
-                best_model_full_model_path.mkdir(parents=True, exist_ok=True)
-                torch.save(learner.mac, best_model_full_model_path / "mac.th")
 
 
             if args.use_wandb and args.wandb_save_model:
@@ -354,7 +358,7 @@ def args_sanity_check(config, logger):
         ) * config["batch_size_run"]
 
     # Check entity scheme availability.
-    entity_env_implemented_list = ["sc2v2"]
+    entity_env_implemented_list = ["sc2v2", "emulate_sc2v2"]
     if config.get("entity_scheme", False) and config["env"] not in entity_env_implemented_list:
         logger.critical(f"Entity scheme is not available in selected env: {config['env']}")
         raise NotImplementedError(f"Entity scheme is only available in {entity_env_implemented_list}. Selected env: {config['env']}")
