@@ -12,6 +12,7 @@ from types import SimpleNamespace as SN
 from pathlib import Path
 
 import torch
+import numpy
 
 from components.episode_buffer import ReplayBuffer
 from components.transforms import OneHot
@@ -72,8 +73,36 @@ def run(_run, _config, _log):
 
 
 def evaluate_sequential(args, runner):
-    for _ in range(args.test_nepisode):
-        runner.run(test_mode=True)
+    state_record_data = []
+    obs_record_data = []
+    available_actions_data = []
+    for runs in tqdm.trange(
+        args.test_nepisode,
+        mininterval=1,
+        unit="episode",
+        bar_format="{desc}{bar:12} | {n_fmt}/{total_fmt} episodes{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}]{postfix}",
+        desc=f"{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')} | EVALUATE | ",
+    ):
+        batch = runner.run(test_mode=True)
+        if getattr(args, "save_evaluate_state", False) is True:
+            batch_max_sequence_len = batch.max_t_filled()
+            batch = batch[:, :batch_max_sequence_len]
+
+            for i in range(batch.batch_size):
+                state_record_data.append(batch["state"][i].cpu().numpy())
+                obs_record_data.append(batch["obs"][i].cpu().numpy())
+                available_actions_data.append(batch["avail_actions"][i].cpu().numpy())
+
+    trace_data_save_dir = Path(args.local_results_path) / "traces" / args.unique_token
+    trace_data_save_dir.mkdir(parents=True, exist_ok=True)
+
+    state_record_data_path = trace_data_save_dir / "state_data.npy"
+    obs_record_data_path = trace_data_save_dir / "obs_data.npy"
+    available_actions_data_path = trace_data_save_dir / "available_actions_data.npy"
+
+    numpy.save(state_record_data_path, numpy.array(state_record_data, dtype=object))
+    numpy.save(obs_record_data_path, numpy.array(obs_record_data, dtype=object))
+    numpy.save(available_actions_data_path, numpy.array(available_actions_data, dtype=object))
 
     if args.save_replay:
         runner.save_replay()

@@ -7,4 +7,4 @@ __pycache__
 /log
 .ipynb_checkpoints
 *nohup.out
-/history_data/
+/history_data
