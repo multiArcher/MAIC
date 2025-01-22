@@ -17,6 +17,7 @@ class QLearner(Learner):
         self.n_agents = args.n_agents
         self.mac = mac
         self.logger = logger
+        self.device = args.device
 
         self.params = list(mac.parameters())
         self.last_target_update_episode = 0
@@ -38,12 +39,11 @@ class QLearner(Learner):
         self.last_target_update_step = 0
         self.log_stats_t = -self.args.learner_log_interval - 1
 
-        device = args.device
         if self.args.standardise_returns:
-            self.ret_ms = RunningMeanStd(shape=(self.n_agents,), device=device)
+            self.ret_ms = RunningMeanStd(shape=(self.n_agents,), device=self.device)
         if self.args.standardise_rewards:
             rew_shape = (1,) if self.args.common_reward else (self.n_agents,)
-            self.rew_ms = RunningMeanStd(shape=rew_shape, device=device)
+            self.rew_ms = RunningMeanStd(shape=rew_shape, device=self.device)
 
     def train(self, batch: EpisodeBatch, t_env: int, episode_num: int):
         # Get the relevant quantities

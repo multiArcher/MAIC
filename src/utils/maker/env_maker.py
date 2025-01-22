@@ -53,3 +53,9 @@ class EnvMaker(Maker):
         kwargs = EnvMaker._check_and_prepare_smac_kwargs(kwargs)
 
         return SMACv2Wrapper(*args, **kwargs)
+
+    @staticmethod
+    def make_emulate_sc2v2(*args, **kwargs) -> MultiAgentEnv:
+        from envs.emulate_sc2v2 import EmulateSMACv2
+        kwargs = EnvMaker._check_and_prepare_smac_kwargs(kwargs)
+        return EmulateSMACv2(*args, **kwargs)

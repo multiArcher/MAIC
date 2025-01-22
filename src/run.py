@@ -12,6 +12,7 @@ from types import SimpleNamespace as SN
 from pathlib import Path
 
 import torch
+import numpy
 
 from components.episode_buffer import ReplayBuffer
 from components.transforms import OneHot
@@ -72,8 +73,36 @@ def run(_run, _config, _log):
 
 
 def evaluate_sequential(args, runner):
-    for _ in range(args.test_nepisode):
-        runner.run(test_mode=True)
+    state_record_data = []
+    obs_record_data = []
+    available_actions_data = []
+    for runs in tqdm.trange(
+        args.test_nepisode,
+        mininterval=1,
+        unit="episode",
+        bar_format="{desc}{bar:12} | {n_fmt}/{total_fmt} episodes{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}]{postfix}",
+        desc=f"{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')} | EVALUATE | ",
+    ):
+        batch = runner.run(test_mode=True)
+        if getattr(args, "save_evaluate_state", False) is True:
+            batch_max_sequence_len = batch.max_t_filled()
+            batch = batch[:, :batch_max_sequence_len]
+
+            for i in range(batch.batch_size):
+                state_record_data.append(batch["state"][i].cpu().numpy())
+                obs_record_data.append(batch["obs"][i].cpu().numpy())
+                available_actions_data.append(batch["avail_actions"][i].cpu().numpy())
+
+    trace_data_save_dir = Path(args.local_results_path) / "traces" / args.unique_token
+    trace_data_save_dir.mkdir(parents=True, exist_ok=True)
+
+    state_record_data_path = trace_data_save_dir / "state_data.npy"
+    obs_record_data_path = trace_data_save_dir / "obs_data.npy"
+    available_actions_data_path = trace_data_save_dir / "available_actions_data.npy"
+
+    numpy.save(state_record_data_path, numpy.array(state_record_data, dtype=object))
+    numpy.save(obs_record_data_path, numpy.array(obs_record_data, dtype=object))
+    numpy.save(available_actions_data_path, numpy.array(available_actions_data, dtype=object))
 
     if args.save_replay:
         runner.save_replay()
@@ -223,11 +252,27 @@ def run_sequential(args, logger):
         new_winrate = logger.stats["test_battle_won_mean"][-1][1]
         best_model = (new_winrate > max_winrate) or (episode == 0)
 
+        if best_model is True:
+            model_save_dir = Path(args.local_results_path) / "models" / args.unique_token
+            best_model_path = model_save_dir / "best_model"
+            best_model_path.mkdir(parents=True, exist_ok=True)
+            learner.save_models(best_model_path)
+            progress_bar.clear()
+            logger.console_logger.info(
+                f"Best model updated, winrate: {max_winrate} -> {new_winrate}"
+            )
+            last_improvement_step = runner.t_env
+            max_winrate = new_winrate
+
+            best_model_full_model_path = model_save_dir / "best_model_full_model"
+            best_model_full_model_path.mkdir(parents=True, exist_ok=True)
+            # torch.jit.save(torch.jit.script(learner.mac), best_model_full_model_path / "mac.pth")
+            torch.save(learner.mac, best_model_full_model_path / "mac.th")
+
         # Save models to unique token directory
         if args.save_model and (
             runner.t_env - model_save_time >= args.save_model_interval
             or model_save_time == 0
-            or best_model is True
         ):
             model_save_time = runner.t_env
             model_save_dir = Path(args.local_results_path) / "models" / args.unique_token
@@ -242,19 +287,7 @@ def run_sequential(args, logger):
             # use appropriate filenames to do critics, optimizer states
             learner.save_models(save_path)
 
-            if best_model is True:
-                best_model_path = model_save_dir / "best_model"
-                best_model_path.mkdir(parents=True, exist_ok=True)
-                learner.save_models(best_model_path)
-                logger.console_logger.info(
-                    f"Best model updated, winrate: {max_winrate} -> {new_winrate}"
-                )
-                last_improvement_step = runner.t_env
-                max_winrate = new_winrate
 
-                best_model_full_model_path = model_save_dir / "best_model_full_model"
-                best_model_full_model_path.mkdir(parents=True, exist_ok=True)
-                torch.save(learner.mac, best_model_full_model_path / "mac.th")
 
 
             if args.use_wandb and args.wandb_save_model:
@@ -354,7 +387,7 @@ def args_sanity_check(config, logger):
         ) * config["batch_size_run"]
 
     # Check entity scheme availability.
-    entity_env_implemented_list = ["sc2v2"]
+    entity_env_implemented_list = ["sc2v2", "emulate_sc2v2"]
     if config.get("entity_scheme", False) and config["env"] not in entity_env_implemented_list:
         logger.critical(f"Entity scheme is not available in selected env: {config['env']}")
         raise NotImplementedError(f"Entity scheme is only available in {entity_env_implemented_list}. Selected env: {config['env']}")

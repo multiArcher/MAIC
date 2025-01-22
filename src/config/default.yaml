@@ -24,6 +24,7 @@ device: "cuda"  # Default cuda device to use.
 buffer_cpu_only: True # If true we won't keep the whole replay buffer in vram
 # TODO: Not a good implementation for parallel running. Related to TODO in run.py:line201.
 sample_times_per_run: null # Number of times to sample from buffer per run
+save_evaluate_state: False # Save the state of the environment when evaluating (only when evaluate == True)
 
 # --- Logging options ---
 use_tensorboard: True # Log results to tensorboard
