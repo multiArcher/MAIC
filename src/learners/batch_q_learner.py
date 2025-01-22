@@ -18,15 +18,15 @@ class QLearner(Learner):
         self.logger = logger
         self.device = args.device
 
-        self.last_target_update_episode = 0
         self.params = list(mac.parameters())
+        self.last_target_update_episode = 0
 
         self.mixer = None
         if args.mixer is not None:
             self.mixer = MixerMaker.make(args.mixer, args)
 
-            self.target_mixer = copy.deepcopy(self.mixer)
             self.params += list(self.mixer.parameters())
+            self.target_mixer = copy.deepcopy(self.mixer)
 
             logger.info(f"Mixer Size: {get_parameters_num(self.mixer.parameters())}")
 
@@ -42,10 +42,10 @@ class QLearner(Learner):
 
         # a little wasteful to deepcopy (e.g. duplicates action selector), but should work for any MAC
         self.target_mac = copy.deepcopy(mac)
-        self.log_stats_t = -self.args.learner_log_interval - 1
 
         self.training_steps = 0
         self.last_target_update_step = 0
+        self.log_stats_t = -self.args.learner_log_interval - 1
 
         if self.args.standardise_returns:
             self.ret_ms = RunningMeanStd(shape=(self.n_agents,), device=self.device)
