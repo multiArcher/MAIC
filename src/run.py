@@ -287,9 +287,6 @@ def run_sequential(args, logger):
             # use appropriate filenames to do critics, optimizer states
             learner.save_models(save_path)
 
-
-
-
             if args.use_wandb and args.wandb_save_model:
                 wandb_save_dir = os.path.join(
                     logger.wandb.dir, "models", args.unique_token, str(runner.t_env)
