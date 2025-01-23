@@ -1,6 +1,8 @@
-import torch as th
-import numpy as np
+from typing import Union
 from types import SimpleNamespace as SN
+
+import numpy as np
+import torch as th
 
 
 class EpisodeBatch:
@@ -121,7 +123,7 @@ class EpisodeBatch:
             else:
                 idx -= 1
 
-    def __getitem__(self, item):
+    def __getitem__(self, item) -> Union["EpisodeBatch", th.Tensor]:
         if isinstance(item, str):
             if item in self.data.episode_data:
                 return self.data.episode_data[item]
