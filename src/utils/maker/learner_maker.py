@@ -46,11 +46,6 @@ class LearnerMaker(Maker):
         return PPOLearner(*args, **kwargs)
 
     @staticmethod
-    def make_batch_q_learner(*args, **kwargs) -> 'Learner':
-        from learners.batch_q_learner import QLearner
-        return QLearner(*args, **kwargs)
-
-    @staticmethod
     def make_pymarl2_q_learner(*args, **kwargs) -> 'Learner':
         """Q-learner from PyMARL2."""
         from learners.pymarl2_q_learner import NQLearner
@@ -67,7 +62,14 @@ class LearnerMaker(Maker):
         from learners.icm_q_learner import ICMQLearner
         return ICMQLearner(*args, **kwargs)
 
+    @staticmethod
     def make_refil_q_learner(*args, **kwargs) -> 'Learner':
         """Q-learner from PyMARL2."""
         from learners.refil_q_learning import RefilQLearner
         return RefilQLearner(*args, **kwargs)
+
+    @staticmethod
+    def make_new_q_learner(*args, **kwargs) -> 'Learner':
+        """A more efficient Q-learner implementation."""
+        from learners.new_q_learner import QLearner
+        return QLearner(*args, **kwargs)
