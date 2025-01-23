@@ -8,7 +8,7 @@ from learners.learner import Learner
 
 from utils.maker import MixerMaker
 from utils.th_utils import get_parameters_num
-from utils.rl_utils import build_q_lambda_targets, build_td_lambda_targets
+from utils.rl_utils import build_q_lambda_targets, build_td_lambda_targets, new_build_td_lambda_targets
 
 
 class QLearner(Learner):
@@ -118,7 +118,7 @@ class QLearner(Learner):
                 case "td":
                     targets = rewards + self.args.gamma * (1 - terminated) * target_max_qvals.detach()
                 case "td_lambda":
-                    targets = build_td_lambda_targets(rewards, terminated, mask, target_max_qvals,
+                    targets = new_build_td_lambda_targets(rewards, terminated, mask, target_max_qvals,
                                                       self.args.gamma, self.args.td_lambda)
                 case "q_lambda":
                     qvals = torch.gather(target_mac_out, 3, batch["actions"]).squeeze(3)
