@@ -56,3 +56,9 @@ class MACMaker(Maker):
         """MAC Implementation from PyMARL2"""
         from controllers.pymarl2_nmac_controller_with_t import NMAC
         return NMAC(*args, **kwargs)
+
+    @staticmethod
+    def make_new_basic_mac(*args, **kwargs) -> MAC:
+        """A more efficient BasicMAC along with new q learner."""
+        from controllers.new_basic_controller import BasicMAC
+        return BasicMAC(*args, **kwargs)

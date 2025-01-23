@@ -26,9 +26,8 @@ buffer_cpu_only: True # If true we won't keep all the replay buffer in vram
 # ------------------------------------------------------------------------------
 mac: "entity_mac" # Basic controller
 agent: "entity_pooling_rnn" # Default rnn agent
-learner: "batch_q_learner"  # use the Q_Learner to train
+learner: "new_q_learner"  # use the Q_Learner to train
 mixer: "qmix"  # Mixing network.
-#mixer: "flex_qmix"  # Mixing network.
 
 # ------------------------------------------------------------------------------
 # --- Controller specific parameters ---
@@ -55,6 +54,9 @@ agent_attn_heads: 4
 # ------------------------------------------------------------------------------
 # --- Learner specific parameters ---
 # ------------------------------------------------------------------------------
+target_type: "td_lambda"
+td_lambda: 0.4
+
 standardise_returns: False
 standardise_rewards: True
 

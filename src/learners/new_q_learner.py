@@ -8,6 +8,7 @@ from learners.learner import Learner
 
 from utils.maker import MixerMaker
 from utils.th_utils import get_parameters_num
+from utils.rl_utils import build_q_lambda_targets, build_td_lambda_targets
 
 
 class QLearner(Learner):
@@ -21,14 +22,14 @@ class QLearner(Learner):
         self.params = list(mac.parameters())
         self.last_target_update_episode = 0
 
-        self.mixer = None
         if args.mixer is not None:
             self.mixer = MixerMaker.make(args.mixer, args)
+        else:
+            self.mixer = torch.nn.Identity()
 
-            self.params += list(self.mixer.parameters())
-            self.target_mixer = copy.deepcopy(self.mixer)
-
-            logger.info(f"Mixer Size: {get_parameters_num(self.mixer.parameters())}")
+        self.params += list(self.mixer.parameters())
+        self.target_mixer = copy.deepcopy(self.mixer)
+        logger.info(f"Mixer Size: {get_parameters_num(self.mixer.parameters())}")
 
         match getattr(self.args, "optimiser", "rms").lower():
             case "adam":
@@ -59,7 +60,7 @@ class QLearner(Learner):
         actions = batch["actions"][:, :-1]
         terminated = batch["terminated"][:, :-1].float()
         mask = batch["filled"][:, :-1].float()
-        mask[:, 1:] = mask[:, 1:] * (1 - terminated[:, :-1])
+        mask[:, 1:] = mask[:, 1:] * (1 - terminated[:, :-1])    # Mask the final step.
         avail_actions: torch.Tensor = batch["avail_actions"]
 
         if self.args.standardise_rewards:
@@ -71,7 +72,7 @@ class QLearner(Learner):
                 rewards.size(2) == 1
             ), "Expected singular agent dimension for common rewards"
             # reshape rewards to be of shape (batch_size, episode_length, n_agents)
-            rewards = rewards.expand(-1, -1, self.n_agents)
+            # rewards = rewards.expand(-1, -1, self.n_agents)
 
         # Calculate estimated Q-Values
         self.mac.agent.train()
@@ -80,54 +81,56 @@ class QLearner(Learner):
         mac_out = self.mac.forward(batch, t=t)
 
         # Pick the Q-Values for the actions taken by each agent
-        chosen_action_qvals = torch.gather(mac_out[:, :-1], dim=3, index=actions).squeeze(3)  # Remove the last dim
+        chosen_action_qvals = torch.gather(mac_out, dim=3, index=actions).squeeze(3)  # Remove the last dim
+        # Mix
+        chosen_action_qvals = self.mixer(chosen_action_qvals, batch["state"][:, :-1])
 
         # Calculate the Q-Values necessary for the target
         with torch.no_grad():
             self.target_mac.agent.train()
+
+            # mac forward.
             self.target_mac.init_hidden(batch.batch_size)
             t = slice(0, batch.max_seq_length)
             target_mac_out = self.target_mac.forward(batch, t=t)
 
-            # We don't need the first timesteps Q-Value estimate for calculating targets
-            target_mac_out = target_mac_out[:, 1:]
-
             # Mask out unavailable actions
-            target_mac_out = torch.masked_fill(target_mac_out, avail_actions[:, 1:] == 0, -1e7)
+            target_mac_out = torch.masked_fill(target_mac_out, avail_actions == 0, -1e7)
 
             # Max over target Q-Values
             if self.args.double_q:
                 # Get actions that maximise live Q (for double q-learning)
-                mac_out_detach = mac_out.clone().detach()
+                mac_out_detach = mac_out.detach().clone()
                 mac_out_detach = torch.masked_fill(mac_out_detach, avail_actions==0, -1e7)
-                cur_max_actions = mac_out_detach[:, 1:].max(dim=3, keepdim=True)[1]
+                cur_max_actions = mac_out_detach.max(dim=3, keepdim=True)[1]
                 target_max_qvals = torch.gather(target_mac_out, 3, cur_max_actions).squeeze(3)
             else:
                 target_max_qvals = target_mac_out.max(dim=3)[0]
 
-        # Mix
-        if self.mixer is not None:
-            chosen_action_qvals = self.mixer(
-                chosen_action_qvals, batch["state"][:, :-1]
-            )
-            with torch.no_grad():
-                target_max_qvals = self.target_mixer(
-                    target_max_qvals, batch["state"][:, 1:]
+            target_max_qvals = self.target_mixer(target_max_qvals, batch["state"])
+
+            if self.args.standardise_returns is True:
+                target_max_qvals = (
+                    target_max_qvals * torch.sqrt(self.ret_ms.var) + self.ret_ms.mean
                 )
 
-        if self.args.standardise_returns:
-            target_max_qvals = (
-                target_max_qvals * torch.sqrt(self.ret_ms.var) + self.ret_ms.mean
-            )
+            match target_type := getattr(self.args, "target_type", "td"):
+                case "td":
+                    targets = rewards + self.args.gamma * (1 - terminated) * target_max_qvals.detach()
+                case "td_lambda":
+                    targets = build_td_lambda_targets(rewards, terminated, mask, target_max_qvals,
+                                                      self.args.gamma, self.args.td_lambda)
+                case "q_lambda":
+                    qvals = torch.gather(target_mac_out, 3, batch["actions"]).squeeze(3)
+                    qvals = self.target_mixer(qvals, batch["state"])
+                    targets = build_q_lambda_targets(rewards, terminated, mask, target_max_qvals, qvals,
+                                                     self.args.gamma, self.args.td_lambda)
+                case _:
+                    raise ValueError(f"Invalid target type {target_type}")
 
-        # Calculate 1-step Q-Learning targets
-        targets = (
-            rewards + self.args.gamma * (1 - terminated) * target_max_qvals.detach()
-        )
-
-        if self.args.standardise_returns:
-            self.ret_ms.update(targets)
-            targets = (targets - self.ret_ms.mean) / torch.sqrt(self.ret_ms.var)
+            if self.args.standardise_returns:
+                self.ret_ms.update(targets)
+                targets = (targets - self.ret_ms.mean) / torch.sqrt(self.ret_ms.var)
 
         # Td-error
         td_error = chosen_action_qvals - targets.detach()

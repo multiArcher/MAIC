@@ -89,7 +89,7 @@ class EntityMAC(MAC):
                     # Zero out the unavailable actions
                     agent_outs[avail_actions == 0] = 0.0
         if int_t:
-            return agent_outs.squeeze(1)
+            return agent_outs.squeeze(1)    # TODO: No need to squeeze if t is int. For compatibility with old code. Will be removed.
 
         return agent_outs
 
