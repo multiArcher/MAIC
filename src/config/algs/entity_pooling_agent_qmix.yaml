@@ -26,8 +26,8 @@ buffer_cpu_only: True # If true we won't keep all the replay buffer in vram
 # ------------------------------------------------------------------------------
 mac: "entity_mac" # Basic controller
 agent: "entity_pooling_rnn" # Default rnn agent
-learner: "new_q_learner"  # use the Q_Learner to train
-mixer: "qmix"  # Mixing network.
+learner: "pymarl2_q_learner"  # use the Q_Learner to train
+mixer: "pymarl2_qmix_mixer"  # Mixing network.
 
 # ------------------------------------------------------------------------------
 # --- Controller specific parameters ---
@@ -63,6 +63,7 @@ standardise_rewards: True
 gamma: 0.99
 
 optimiser: Adam  # Not effective in some epymarl learner. They are fixed.
+optimizer: adam  # Not effective in some epymarl learner. They are fixed.
 lr: 0.001 # Learning rate for agents
 optim_alpha: 0.99 # RMSProp alpha
 optim_eps: 0.00001 # RMSProp epsilon
@@ -74,6 +75,7 @@ buffer_size: 5000 # Size of the replay buffer
 
 double_q: True
 target_update_interval_or_tau: 200  # update the target network every {} episodes
+target_update_interval: 200  # update the target network every {} episodes
 
 # ------------------------------------------------------------------------------
 # --- Mixer specific parameters ---
