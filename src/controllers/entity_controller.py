@@ -60,7 +60,7 @@ class EntityMAC(MAC):
         self.hidden_states = single_hidden_state.expand(-1, batch_size, self.n_agents, -1).contiguous()
 
     def forward(self, ep_batch, t, test_mode=False, *args, **kwargs):
-        if int_t:= isinstance(t, int):
+        if int_t := isinstance(t, int):
             t = slice(t, t + 1)
 
         agent_inputs = self._build_inputs(ep_batch, t)  # two list of tensor features.

@@ -62,3 +62,10 @@ class MACMaker(Maker):
         """A more efficient BasicMAC along with new q learner."""
         from controllers.new_basic_controller import BasicMAC
         return BasicMAC(*args, **kwargs)
+
+    @staticmethod
+    def make_code_mac(*args, **kwargs) -> MAC:
+        """Code MAC"""
+        from controllers.code_controller import CodeMAC
+        return CodeMAC(*args, **kwargs)
+    

@@ -38,7 +38,12 @@ if __name__ == '__main__':
 This initializes a logger named "test_logger" with a logging level of DEBUG, and demonstrates logging informational messages.
 """
 
-from .custom_logging import CustomLogger
-from .pymarl_logging import PyMARLLogger
+from .custom_logging import CustomLogger, CustomLoggerConfig
+from .pymarl_logging import PyMARLLogger, PyMARLLoggerConfig
 
-__all__ = ["CustomLogger", "PyMARLLogger"]
+__all__ = [
+    "CustomLogger",
+    "PyMARLLogger",
+    "CustomLoggerConfig",
+    "PyMARLLoggerConfig",
+]

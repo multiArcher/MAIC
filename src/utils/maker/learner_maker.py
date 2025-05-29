@@ -73,3 +73,10 @@ class LearnerMaker(Maker):
         """A more efficient Q-learner implementation."""
         from learners.new_q_learner import QLearner
         return QLearner(*args, **kwargs)
+
+    @staticmethod
+    def make_code_learner(*args, **kwargs) -> 'Learner':
+        """Q-learner from PyMARL2."""
+        from learners.code_learner import CodeLearner
+        return CodeLearner(*args, **kwargs)
+    

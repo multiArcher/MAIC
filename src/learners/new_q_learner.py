@@ -83,7 +83,7 @@ class QLearner(Learner):
         # Pick the Q-Values for the actions taken by each agent
         chosen_action_qvals = torch.gather(mac_out, dim=3, index=actions).squeeze(3)  # Remove the last dim
         # Mix
-        chosen_action_qvals = self.mixer(chosen_action_qvals, batch["state"][:, :-1])
+        chosen_action_qvals = self.mixer(chosen_action_qvals, batch["state"][:, :-1])   # joint action value
 
         # Calculate the Q-Values necessary for the target
         with torch.no_grad():
@@ -116,7 +116,7 @@ class QLearner(Learner):
 
             match target_type := getattr(self.args, "target_type", "td"):
                 case "td":
-                    targets = rewards + self.args.gamma * (1 - terminated) * target_max_qvals.detach()
+                    targets = rewards + self.args.gamma * (1 - terminated) * target_max_qvals[:,-1].detach()
                 case "td_lambda":
                     targets = new_build_td_lambda_targets(rewards, terminated, mask, target_max_qvals,
                                                       self.args.gamma, self.args.td_lambda)

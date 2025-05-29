@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from types import SimpleNamespace
+from typing import Any, Dict, Tuple
 
 from torch.nn import Module
 
@@ -16,7 +17,7 @@ class MAC(Module, ABC):
         pass
 
     @abstractmethod
-    def forward(self, ep_batch, t, test_mode, **kwargs):
+    def forward(self, ep_batch, t, test_mode, **kwargs) -> Any:
         pass
 
     @abstractmethod
@@ -40,7 +41,7 @@ class MAC(Module, ABC):
         pass
 
     @abstractmethod
-    def _build_inputs(self, batch, t):
+    def _build_inputs(self, batch, t) -> Any:
         pass
 
     @abstractmethod

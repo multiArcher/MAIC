@@ -5,3 +5,4 @@ from .entity_pooling import EntityPoolingLayer
 from .rms_norm import RMSNorm
 from .imagine_entity_attention import ImagineEntityAttnLayer
 from .entity_feature_attention import EntityFeatureAttentionLayer
+from .intent_decoder import IntentDecoder

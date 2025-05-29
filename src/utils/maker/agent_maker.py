@@ -97,3 +97,10 @@ class AgentMaker(Maker):
         """Entity agent using attention to merge obs."""
         from modules.agents.entity_attend_FiLMq_agent import EntityFiLMAgent
         return EntityFiLMAgent(*args, **kwargs)
+
+    @staticmethod
+    def make_code_agent(*args, **kwargs) -> Agent:
+        """Code agent using attention to merge obs."""
+        from modules.agents.code_agent import CodeAgent
+        return CodeAgent(*args, **kwargs)
+    

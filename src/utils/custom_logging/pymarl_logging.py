@@ -1,10 +1,46 @@
 import logging
 
+from collections import defaultdict
+from dataclasses import  dataclass
+from types import NoneType
+from pathlib import Path
+
 import torch
 import numpy
-from collections import defaultdict
 
-from utils.custom_logging import CustomLogger
+from utils.custom_logging.custom_logging import CustomLogger, CustomLoggerConfig
+
+
+@dataclass
+class PyMARLLoggerConfig(CustomLoggerConfig):
+    """
+    Configuration class for PyMARLLogger, which extends the base logging
+    configuration from `CustomLoggerConfig`. This class adds additional
+    configuration options for integrating TensorBoard, Sacred, and Weights and Biases (wandb)
+    logging frameworks.
+
+    In addition to the parameters defined in `CustomLoggerConfig`, the following parameters are introduced:
+        - use_tensorboard (bool): Whether to enable TensorBoard logging. Defaults to False.
+        - use_sacred (bool): Whether to use Sacred for experiment tracking. Defaults to False.
+        - use_wandb (bool): Whether to enable Weights and Biases (wandb) logging. Defaults to False.
+
+    """
+    use_tensorboard: bool = False
+    use_sacred: bool = False
+    use_wandb: bool = False
+
+    def __repr__(self):
+        return super().__repr__()
+
+    def __post_init__(self):
+        if self.use_sacred is True:
+            self.use_sacred = False
+            PyMARLLogger.fast_logger.info(f"Sacred logging is removed in new train structure.")
+
+        if self.use_wandb is True:
+            self.use_wandb = False
+            PyMARLLogger.fast_logger.warning(f"Wandb logging is not implemented yet.")
+            raise NotImplementedError("wandb logging is not implemented yet.")
 
 
 class PyMARLLogger(CustomLogger):
@@ -13,9 +49,8 @@ class PyMARLLogger(CustomLogger):
 
     Args:
         name (str): The name of the logger.
-        level (int): The level of the logger.
-        *args: The positional arguments passed to the logger.
-        **kwargs: The keyword arguments passed to the logger.
+        level (int): The level of the logger. Default is logging.NOTSET.
+        **configs: The keyword arguments passed to the logger.
 
     Attributes:
         stats (defaultdict): A default dict of empty list to storage stats fot plotting.
@@ -33,15 +68,24 @@ class PyMARLLogger(CustomLogger):
         - log_file_name (str): Name of the log file. Default is time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(time.time())).
         - propagate (bool): Whether to propagate through child loggers. Default is False.
     """
-    def __init__(self, name, level: int = logging.NOTSET, **kwargs):
+    _instance = {}
+
+    def __init__(self, name, level: int = logging.NOTSET, **configs):
         if hasattr(self, "_initialized"):
             return
-        super().__init__(name, level, **kwargs)
+        super().__init__(name, level, **configs)
+
+        valid_configs = {
+            k: v
+            for k, v in configs.items()
+            if k in PyMARLLoggerConfig.__annotations__
+        }
+        self.configs = PyMARLLoggerConfig(level=level, **valid_configs)
 
         # PyMarl Structure.
-        self.use_tensorboard: bool = kwargs.get("use_tensorboard", False)
-        self.use_sacred: bool = kwargs.get("use_sacred", False)
-        self.use_wandb: bool = kwargs.get("use_wandb", False)
+        self.use_tensorboard = self.configs.use_tensorboard
+        self.use_sacred = self.configs.use_sacred
+        self.use_wandb = self.configs.use_wandb
 
         self.tb_writer = None
 
@@ -54,14 +98,17 @@ class PyMARLLogger(CustomLogger):
 
         self.args_storage = None   # TODO: Temporary solution for args sharing. Will be removed after Config is implemented.
 
-    def setup_tensorboard_logging(self, directory_name: str):
+        # TODO: Due to the params passing method, loggers need to be initialized out of inti.
+        #  Consider refactoring after Config is implemented.
+
+    def setup_tensorboard_logging(self, directory_name: Path):
         """Initialize a SummaryWriter to log tensorboard data."""
         from torch.utils.tensorboard import SummaryWriter
 
         self.tb_writer = SummaryWriter(log_dir=directory_name)
         self.use_tensorboard = True
 
-        self.info(f"Tensorboard logging dir: \"{directory_name}\"")
+        self.info(f"Initialized tensorboard writer with logging dir: \"{directory_name}\"")
 
     def setup_sacred_logging(self, sacred_run_dict):
         """Initialize sacred variables"""
@@ -104,8 +151,9 @@ class PyMARLLogger(CustomLogger):
 
     def print_recent_stats(self):
         """Log recent stats stored in self.stats."""
-        log_str = "t_env: {} | Episode: {}\n".format(*self.stats["episode"][-1])
-        log_str += " " * 33
+        log_str = f"t_env: {self.stats['episode'][-1][0]}                     "
+        log_str += f"Episode: {self.stats['episode'][-1][1]}\n"
+        log_str += " " * 48
         i = 0
         for k, v in sorted(self.stats.items()):
             if k == "episode":
@@ -117,24 +165,23 @@ class PyMARLLogger(CustomLogger):
             except AttributeError:
                 item = "{:.4f}".format(numpy.mean([x[1].item() for x in self.stats[k][-window:]]))
             log_str += "{:<23}{:>8}".format(k + ":", item)
-            log_str += ("\n" + " " * 44) if i % 3 == 0 else "\t"
+            log_str += ("\n" + " " * 48) if i % 3 == 0 else "\t"
 
-        self.info(log_str)
+        self.info(log_str.strip())
 
     def finish(self, args):
         """Log final metrics in the training process."""
         if self.use_tensorboard:
-            import torch
             hparam_dict = {}
             for key, value in vars(args).items():
                 # TODO Use a param to control hparams to be logged.
                 if isinstance(value, dict):
                     for sub_key, sub_value in value.items():
-                        if not isinstance(sub_value, (bool, str, float, int, type(None), torch.Tensor)):
+                        if not isinstance(sub_value, (bool, str, float, int, NoneType, torch.Tensor)):
                             continue
                         hparam_dict[f"{key}.{sub_key}"] = sub_value
                 else:
-                    if isinstance(value, (bool, str, float, int, type(None), torch.Tensor)):
+                    if isinstance(value, (bool, str, float, int, NoneType, torch.Tensor)):
                         hparam_dict[key] = value
 
             metric_dict = {}
@@ -168,3 +215,12 @@ class PyMARLLogger(CustomLogger):
 
     def log_stat(self, *args, **kwargs):
         self.log_scalar(*args, **kwargs)
+
+if __name__ == '__main__':
+    # Test PyMARLLogger.
+    logger = PyMARLLogger("test_logger", use_tensorboard=True, level=logging.DEBUG)
+    logger.info("Test info message.")
+    logger.debug("Test debug message.")
+    logger.warning("Test warning message.")
+    logger.error("Test error message.")
+    logger.critical("Test critical message.")

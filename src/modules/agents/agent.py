@@ -1,19 +1,20 @@
 from abc import ABC, abstractmethod
+from typing import Any
 
 import torch
 
 
 class Agent(torch.nn.Module, ABC):
     @abstractmethod
-    def __init__(self, input_shape: any, args: any):
+    def __init__(self, *args, **kwargs):
         super(Agent, self).__init__()
 
     @abstractmethod
-    def init_hidden(self):
+    def init_hidden(self) -> Any:
         pass
 
     @abstractmethod
-    def forward(self, inputs, hidden_state):
+    def forward(self, *args, **kwargs) -> Any:
         pass
 
     @property
