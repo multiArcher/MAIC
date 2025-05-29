@@ -38,8 +38,10 @@ class QLearner(Learner):
                 self.optimiser = torch.optim.AdamW(params=self.params, lr=args.lr)
             case "sgd":
                 self.optimiser = torch.optim.SGD(params=self.params, lr=args.lr)
-            case _:
+            case "rms":
                 self.optimiser = torch.optim.RMSprop(params=self.params, lr=args.lr)
+            case _:
+                raise ValueError(f"Optimiser '{args.optimiser}' not recognised")
 
         # a little wasteful to deepcopy (e.g. duplicates action selector), but should work for any MAC
         self.target_mac = copy.deepcopy(mac)

@@ -251,7 +251,7 @@ def run_sequential(args, logger):
 
         new_winrate = logger.stats["test_battle_won_mean"][-1][1]
         best_model = (new_winrate > max_winrate) or (episode == 0)
-
+        
         if best_model is True:
             model_save_dir = Path(args.local_results_path) / "models" / args.unique_token
             best_model_path = model_save_dir / "best_model"
