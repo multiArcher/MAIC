@@ -123,8 +123,8 @@ class CodeMAC(MAC):
     def load_models(self, path): # For loading models
         self.agent.load_state_dict(torch.load("{}/agent.th".format(path), map_location=lambda storage, loc: storage))
 
-    def load_state(self, agent_state_dict): # Changed from load_state_dict to avoid nn.Module conflict if not inheriting
-        self.agent.load_state_dict(agent_state_dict)
+    def load_state(self, other_mac): # Changed from load_state_dict to avoid nn.Module conflict if not inheriting
+        self.agent.load_state_dict(other_mac.agent.state_dict())
     
     def _get_last_actions(self, batch, t: slice, batch_size, n_agents):
         """
