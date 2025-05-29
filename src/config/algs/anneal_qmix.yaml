@@ -25,8 +25,8 @@ use_tensorboard: True # Log results to tensorboard
 buffer_cpu_only: False # If true we won't keep all of the replay buffer in vram
 
 anneal_training: True # Anneal the learning rate over time
-patience: 1000000 # Number of timesteps to wait before stopping training if validation loss doesn't improve
-anneal_rate: 0.9 # Rate at which to anneal the learning rate
+patience: 500000 # Number of timesteps to wait before stopping training if validation loss doesn't improve
+anneal_rate: 0.5 # Rate at which to anneal the learning rate
 
 # ------------------------------------------------------------------------------
 # --- RL specific parameters ---

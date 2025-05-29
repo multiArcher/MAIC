@@ -4,14 +4,14 @@
 # ! Should check every time before running.
 # ! ============================================================================
 # Experiment parameters
-EXPERIMENT_NAME=pymarl2_qmix_with_rad_optimizer_br32_stpr_16  # Experiment name for logging.
+EXPERIMENT_NAME=pymarl2_qmix_with_rad_optimizer_fully_observable  # Experiment name for logging.
 CONFIG=pymarl2_qmix  # Algorithm config name in src/config/alg
 ENV_CONFIG=sc2v2  # Environment config in src/config/envs
 MAP_NAME=protoss_5_vs_5  # Map name, e.g., 3m in StarCraftII.
-REPEAT_TIMES=1  # Times to run the experiment.
+REPEAT_TIMES=2  # Times to run the experiment.
 OPTIMIZER=rad  # Optimizer name.
-BATCH_SIZE_RUN=32  # Batch size for each run.
-SAMPLE_TIMES_PER_RUN=16
+FULLY_OBSERVABLE=True  # Whether to use fully observation.
+
 
 # arguments in different runs.
 function update_hyperparams() {
@@ -27,8 +27,8 @@ function update_hyperparams() {
 
     arg_dict["map_name"]="env_args.map_name=$MAP_NAME"
     arg_dict["optimizer"]="optimizer=$OPTIMIZER"
-    arg_dict["batch_size_run"]="batch_size_run=$BATCH_SIZE_RUN"
-    arg_dict["sample_times_per_run"]="sample_times_per_run=$SAMPLE_TIMES_PER_RUN"
+    arg_dict["fully_observable"]="env_args.fully_observable=$FULLY_OBSERVABLE"
+
     }
 # ! ============================================================================
 # ? ============================================================================

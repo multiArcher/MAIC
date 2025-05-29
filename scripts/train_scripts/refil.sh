@@ -4,11 +4,12 @@
 # ! Should check every time before running.
 # ! ============================================================================
 # Experiment parameters
-EXPERIMENT_NAME=_linux_train_template  # Experiment name for logging.
-CONFIG=qmix  # Algorithm config name in src/config/alg
-ENV_CONFIG=sc2  # Environment config in src/config/envs
-MAP_NAME=3m  # Map name, e.g., 3m in StarCraftII.
-REPEAT_TIMES=3  # Times to run the experiment.
+EXPERIMENT_NAME=refil_no_obs_last_action  # Experiment name for logging.
+CONFIG=refil  # Algorithm config name in src/config/alg
+ENV_CONFIG=sc2v2  # Environment config in src/config/envs
+MAP_NAME=protoss_5_vs_5  # Map name, e.g., 3m in StarCraftII.
+REPEAT_TIMES=1  # Times to run the experiment.
+OBS_LAST_ACTION=False
 
 # arguments in different runs.
 function update_hyperparams() {
@@ -21,6 +22,7 @@ function update_hyperparams() {
 
     # arguments after "with"
     arg_dict["name"]="name=${EXPERIMENT_NAME}_run$((iter))"  # name in tensorboard, sacred, and wandb
+    arg_dict["obs_last_action"]="obs_last_action=$OBS_LAST_ACTION"
 
     arg_dict["map_name"]="env_args.map_name=$MAP_NAME"
     }
@@ -59,10 +61,6 @@ function update_env_params() {
 
 SEPERATOR="------------------------------------------------------------------------------------------------------------------------"
 
-timestamp() {
-    date +"%Y-%m-%d_%H-%M-%S"
-}
-
 export CUDA_VISIBLE_DEVICES=$CUDA_DEVICES
 
 # Check if work dir exists
@@ -85,6 +83,10 @@ fi
 
 # Create log directory if it doesn't exist
 mkdir -p "$LOG_DIR"
+
+timestamp() {
+    date +"%Y-%m-%d_%H-%M-%S"
+}
 
 # Python args passed to the Python command
 declare -A args

@@ -4,14 +4,12 @@
 # ! Should check every time before running.
 # ! ============================================================================
 # Experiment parameters
-EXPERIMENT_NAME=pymarl2_qmix_with_rad_optimizer_br32_stpr_16  # Experiment name for logging.
-CONFIG=pymarl2_qmix  # Algorithm config name in src/config/alg
+EXPERIMENT_NAME=pymarl2_qmix_time_shifting_FiLMq   # Experiment name for logging.
+CONFIG=pymarl2_qmix_FiLM_with_t  # Algorithm config name in src/config/alg
 ENV_CONFIG=sc2v2  # Environment config in src/config/envs
 MAP_NAME=protoss_5_vs_5  # Map name, e.g., 3m in StarCraftII.
 REPEAT_TIMES=1  # Times to run the experiment.
-OPTIMIZER=rad  # Optimizer name.
-BATCH_SIZE_RUN=32  # Batch size for each run.
-SAMPLE_TIMES_PER_RUN=16
+OPTIMIZER=adam  # Optimizer name.
 
 # arguments in different runs.
 function update_hyperparams() {
@@ -27,8 +25,6 @@ function update_hyperparams() {
 
     arg_dict["map_name"]="env_args.map_name=$MAP_NAME"
     arg_dict["optimizer"]="optimizer=$OPTIMIZER"
-    arg_dict["batch_size_run"]="batch_size_run=$BATCH_SIZE_RUN"
-    arg_dict["sample_times_per_run"]="sample_times_per_run=$SAMPLE_TIMES_PER_RUN"
     }
 # ! ============================================================================
 # ? ============================================================================
@@ -48,7 +44,7 @@ LOG_DIR="$WORK_DIR/log"     # Log directory
 PYTHON_SCRIPT="src/main.py"     # Relative path to python script in work dir.
 PYTHON_SCRIPT_PATH="${WORK_DIR}/${PYTHON_SCRIPT}"
 
-BUFFER_CPU_ONLY=False  # Whether to use CPU only buffer.
+BUFFER_CPU_ONLY=True  # Whether to use CPU only buffer.
 DEVICE="cuda"  # Device to use for training.
 
 # arguments for different environments.

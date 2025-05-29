@@ -4,11 +4,14 @@
 # ! Should check every time before running.
 # ! ============================================================================
 # Experiment parameters
-EXPERIMENT_NAME=entity_agent_smac2_test_p_5v5  # Experiment name for logging.
-CONFIG=entity_attnqmix  # Algorithm config name in src/config/alg
+EXPERIMENT_NAME=pymarl2_qmix_DiT_FiLM_Agent   # Experiment name for logging.
+CONFIG=pymarl2_qmix_DiT_FiLM_agent  # Algorithm config name in src/config/alg
 ENV_CONFIG=sc2v2  # Environment config in src/config/envs
 MAP_NAME=protoss_5_vs_5  # Map name, e.g., 3m in StarCraftII.
-REPEAT_TIMES=4  # Times to run the experiment.
+REPEAT_TIMES=2  # Times to run the experiment.
+OPTIMIZER=adam  # Optimizer name.
+BATCH_SIZE_RUN=16  # Batch size for each run.
+SAMPLE_TIMES_PER_RUN=8
 
 # arguments in different runs.
 function update_hyperparams() {
@@ -23,13 +26,16 @@ function update_hyperparams() {
     arg_dict["name"]="name=${EXPERIMENT_NAME}_run$((iter))"  # name in tensorboard, sacred, and wandb
 
     arg_dict["map_name"]="env_args.map_name=$MAP_NAME"
+    arg_dict["optimizer"]="optimizer=$OPTIMIZER"
+    arg_dict["batch_size_run"]="batch_size_run=$BATCH_SIZE_RUN"
+    arg_dict["sample_times_per_run"]="sample_times_per_run=$SAMPLE_TIMES_PER_RUN"
     }
 # ! ============================================================================
 # ? ============================================================================
 # ? Should check before running experiments in a new environment.
 # ? ============================================================================
 # Set environment variable
-CONDA_ENVNAME="marl_latest"                        # Conda environment name
+CONDA_ENVNAME="RAD_Opt"                        # Conda environment name
 
 # export SC2PATH="$HOME/.local/share/StarCraftII"  # Path to StarCraft II game.
 

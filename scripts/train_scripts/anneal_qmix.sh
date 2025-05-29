@@ -4,11 +4,11 @@
 # ! Should check every time before running.
 # ! ============================================================================
 # Experiment parameters
-EXPERIMENT_NAME=_linux_train_template  # Experiment name for logging.
-CONFIG=qmix  # Algorithm config name in src/config/alg
-ENV_CONFIG=sc2  # Environment config in src/config/envs
-MAP_NAME=3m  # Map name, e.g., 3m in StarCraftII.
-REPEAT_TIMES=3  # Times to run the experiment.
+EXPERIMENT_NAME=anneal_qmix_test  # Experiment name for logging.
+CONFIG=anneal_qmix  # Algorithm config name in src/config/alg
+ENV_CONFIG=sc2v2  # Environment config in src/config/envs
+MAP_NAME=protoss_5_vs_5  # Map name, e.g., 3m in StarCraftII.
+REPEAT_TIMES=1  # Times to run the experiment.
 
 # arguments in different runs.
 function update_hyperparams() {
@@ -59,10 +59,6 @@ function update_env_params() {
 
 SEPERATOR="------------------------------------------------------------------------------------------------------------------------"
 
-timestamp() {
-    date +"%Y-%m-%d_%H-%M-%S"
-}
-
 export CUDA_VISIBLE_DEVICES=$CUDA_DEVICES
 
 # Check if work dir exists
@@ -85,6 +81,10 @@ fi
 
 # Create log directory if it doesn't exist
 mkdir -p "$LOG_DIR"
+
+timestamp() {
+    date +"%Y-%m-%d_%H-%M-%S"
+}
 
 # Python args passed to the Python command
 declare -A args

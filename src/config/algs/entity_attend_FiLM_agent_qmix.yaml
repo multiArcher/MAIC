@@ -66,7 +66,8 @@ optim_eps: 0.00001 # RMSProp epsilon
 
 grad_norm_clip: 10 # Reduce magnitude of gradients above this L2 norm
 
-batch_size: 128 # Number of episodes to train on
+batch_size: 64 # Number of episodes to train on
+accumulate_grad_batches: 2  # Accumulate gradients over multiple batches
 buffer_size: 5000 # Size of the replay buffer
 
 double_q: True
