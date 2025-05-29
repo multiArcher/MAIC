@@ -118,7 +118,7 @@ class CodeLearner(Learner):
             _, _, target_q_values, _, _, _ = self.target_mac.forward(batch, t_target)
 
             # Mask out unavailable actions
-            target_q_values = torch.masked_fill(target_q_values, batch["avail_actions"].unsqueeze(-2)==0, -1e7)
+            target_q_values = torch.masked_fill(target_q_values, batch["avail_actions"].unsqueeze(-2)==0, -1e7)  # type: ignore
 
             # Max over target Q-Values
             if self.args.double_q is True:
@@ -167,7 +167,7 @@ class CodeLearner(Learner):
         # Inference loss.
         action_targets = [
             F.pad(
-                actions_onehot[:, idx:], 
+                actions_onehot[:, idx:],    # type: ignore
                 (*(0, 0), *(0, 0), *(0, idx)),     # pad last actions at step -1 along dim 1.
                 value=0
                 )  # b * t * n * 1 * n_actions
@@ -257,12 +257,22 @@ class CodeLearner(Learner):
             self.log_stats_t = t_env
 
     def _update_targets_hard(self):
-        self.logger.error("Hard target update not implemented yet.")
-        pass
+        self.target_mac.load_state(self.mac)
+        if self.mixer is not None:
+            self.target_mixer.load_state_dict(self.mixer.state_dict())
 
     def _update_targets_soft(self, tau):
-        self.logger.error("Soft target update not implemented yet.")
-        pass
+        for target_param, param in zip(
+            self.target_mac.parameters(), self.mac.parameters()
+        ):
+            target_param.data.copy_(target_param.data * (1.0 - tau) + param.data * tau)
+        if self.mixer is not None:
+            for target_param, param in zip(
+                self.target_mixer.parameters(), self.mixer.parameters()
+            ):
+                target_param.data.copy_(
+                    target_param.data * (1.0 - tau) + param.data * tau
+                )
         
     def cuda(self):
         self.mac.to(self.device)

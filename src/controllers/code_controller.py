@@ -118,15 +118,12 @@ class CodeMAC(MAC):
         self.communication_model.reset(batch_size)  # Reset communication cache.
 
     def save_models(self, path): # For saving models
-        PyMARLLogger.fast_logger().warning('Saving models is not tested yet.')
         torch.save(self.agent.state_dict(), "{}/agent.th".format(path))
 
     def load_models(self, path): # For loading models
-        PyMARLLogger.fast_logger().warning('Loading models is not tested yet.')
         self.agent.load_state_dict(torch.load("{}/agent.th".format(path), map_location=lambda storage, loc: storage))
 
     def load_state(self, agent_state_dict): # Changed from load_state_dict to avoid nn.Module conflict if not inheriting
-        PyMARLLogger.fast_logger().warning('Loading state is not tested yet.')
         self.agent.load_state_dict(agent_state_dict)
     
     def _get_last_actions(self, batch, t: slice, batch_size, n_agents):
