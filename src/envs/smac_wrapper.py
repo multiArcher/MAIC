@@ -8,9 +8,9 @@ from .multiagentenv import MultiAgentEnv
 class SMACWrapper(MultiAgentEnv):
     def __init__(self, map_name, seed, **kwargs):
         init_config = copy.deepcopy(kwargs)
-        init_config.pop("common_reward")
-        init_config.pop("reward_scalarisation")    
-        init_config.pop("args")    
+        init_config.pop("common_reward", None)
+        init_config.pop("reward_scalarisation", None)    
+        init_config.pop("args", None)
         
         self.env = StarCraft2Env(map_name=map_name, seed=seed, **init_config)
         self.episode_limit = self.env.episode_limit

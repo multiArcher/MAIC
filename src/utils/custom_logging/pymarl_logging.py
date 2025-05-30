@@ -151,23 +151,31 @@ class PyMARLLogger(CustomLogger):
 
     def print_recent_stats(self):
         """Log recent stats stored in self.stats."""
+        # First line with environment step and episode info
         log_str = f"t_env: {self.stats['episode'][-1][0]}                     "
         log_str += f"Episode: {self.stats['episode'][-1][1]}\n"
-        log_str += " " * 48
-        i = 0
+        
+        # Hanging indent for all subsequent variable lines
+        indent = " " * 8  # 8 spaces for hanging indent
+
         for k, v in sorted(self.stats.items()):
             if k == "episode":
                 continue
-            i += 1
-            window = 5 if k != "epsilon" else 1
+                
+            # Determine window size for averaging
+            window = 10 if k != "epsilon" else 1
+            
+            # Calculate mean value with error handling
             try:
                 item = "{:.4f}".format(numpy.mean([x[1] for x in self.stats[k][-window:]]))
             except AttributeError:
                 item = "{:.4f}".format(numpy.mean([x[1].item() for x in self.stats[k][-window:]]))
-            log_str += "{:<23}{:>8}".format(k + ":", item)
-            log_str += ("\n" + " " * 48) if i % 3 == 0 else "\t"
-
-        self.info(log_str.strip())
+            
+            # Add each variable on its own line with hanging indent
+            log_str += f"{indent}{k:<23}: {item:>8}\n"
+        
+        # Remove the trailing newline and log the result
+        self.info(log_str.rstrip())
 
     def finish(self, args):
         """Log final metrics in the training process."""

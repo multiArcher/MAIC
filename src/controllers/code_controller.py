@@ -23,21 +23,37 @@ from components.episode_buffer import EpisodeBatch
 
 
 class CodeMAC(MAC):
+    """
+    Multi-Agent Controller for CoDe Algorithm
+    
+    This controller orchestrates the CoDe multi-agent system:
+    1. Manages agent interactions and communication
+    2. Coordinates intent extraction and message passing
+    3. Handles action selection for all agents
+    4. Processes observations and builds agent inputs
+    """
+    
     def __init__(self, scheme: dict, groups: dict, args: SimpleNamespace):
         super(CodeMAC, self).__init__(scheme, groups, args)
         self.args: SimpleNamespace = args
         self.device: torch.device = args.device
         self.n_agents: int = args.n_agents
 
+        # Determine input shape for agents based on observation scheme
         self.input_shape = self._get_input_shape(scheme)
         self.agent_output_type: str = args.agent_output_type
+        
+        # Initialize action selector (e.g., epsilon-greedy)
         self.action_selector: ActionSelector = ActionSelectorMaker.make(args.action_selector, args)
 
-        self._build_agents(self.input_shape)  # Initialize the agents.
+        # Build the shared CodeAgent that all agents use
+        self._build_agents(self.input_shape)
 
+        # Initialize communication model for message passing between agents
         self.communication_model = CommunicationModel(args)
 
-        self.hidden_states: torch.Tensor    # Agent hidden states.
+        # Storage for agent hidden states across timesteps
+        self.hidden_states: torch.Tensor
 
     def select_actions(
             self, 
@@ -45,19 +61,35 @@ class CodeMAC(MAC):
             t_ep: int, 
             t_env: int, 
             bs=slice(None), 
-            test_mode: bool=False
+            test_mode: bool = False
         ) -> Any:
-        # Slice available actions.  
-        avail_actions = ep_batch["avail_actions"][:, t_ep]  # b * n * action_dim
+        """
+        Select actions for all agents at given timestep
+        
+        Args:
+            ep_batch: Episode batch containing observations and history
+            t_ep: Current episode timestep
+            t_env: Current environment timestep (for exploration scheduling)
+            bs: Batch slice selection
+            test_mode: Whether in evaluation mode
+            
+        Returns:
+            chosen_actions: Selected actions for each agent [B, N]
+        """
+        # Extract available actions for current timestep
+        avail_actions = ep_batch["avail_actions"][:, t_ep]  # [B, N, A]
 
-        # MAC Forward.
+        # Forward pass through MAC to get Q-values or policy logits
         _, _, agent_outputs, _, _, _ = self.forward(ep_batch, t_ep, test_mode=test_mode)
-        agent_outputs = agent_outputs.squeeze(1).squeeze(-2)  # b * n * action_dim
+        agent_outputs = agent_outputs.squeeze(1).squeeze(-2)  # [B, N, A]
 
-        chosen_actions = self.action_selector.select_action(agent_outputs[bs], 
-                                                            avail_actions[bs], 
-                                                            t_env, 
-                                                            test_mode=test_mode)   # b * n
+        # Select actions using the action selector (e.g., epsilon-greedy for Q-values)
+        chosen_actions = self.action_selector.select_action(
+            agent_outputs[bs], 
+            avail_actions[bs], 
+            t_env, 
+            test_mode=test_mode
+        )   # [B, N]
         
         return chosen_actions
     
@@ -68,119 +100,211 @@ class CodeMAC(MAC):
             test_mode=False, 
             **kwargs
         ):
-        #- 1. Prepare inputs.
+        """
+        Forward pass through the CoDe multi-agent system
+        
+        This implements the complete CoDe forward pass:
+        1. Build inputs from observations, actions, and agent IDs
+        2. Extract intents using variational encoding
+        3. Process communication with delay modeling
+        4. Compute Q-values using fused communication context
+        
+        Args:
+            ep_batch: Episode batch containing observations and history
+            t: Timestep(s) to process (int for single step, slice for sequence)
+            test_mode: Whether in evaluation mode
+            
+        Returns:
+            Tuple of (encoded_trajectory, intents, action_values, intents_mu, intents_std, attn_weights)
+        """
+        
+        # 1. Prepare inputs for the given timestep(s)
         if isinstance(t, int):
             t = slice(t, t + 1)
         
-        obs, last_actions, time_step_tensor, agent_id_tensor = self._build_inputs(ep_batch, t)  # b * t * n * 1 * d
-        avail_actions: torch.Tensor = ep_batch["avail_actions"][:, t].unsqueeze(-2)  # b * t * n * 1 * d  # type: ignore 
+        # Build structured inputs: observations, actions, timestamps, agent IDs
+        obs, last_actions, time_step_tensor, agent_id_tensor = self._build_inputs(ep_batch, t)
+        avail_actions: torch.Tensor = ep_batch["avail_actions"][:, t].unsqueeze(-2)  # [B, T, N, 1, A]
 
-        #- 2. Intent extraction.
-        encoded_trajectory, intents, sent_messages, intents_mu, intents_std = self.agent.extract_intent(obs, 
-                                                           self.hidden_states, 
-                                                           last_actions, 
-                                                           time_step_tensor, 
-                                                           agent_id_tensor)  # b * t * n * 1 * d
-        
-        #- 3. Communication.
-        received_messages = self.communication_model.process_communication(sent_messages, t)    # b * t * n * n-1 * d
+        # 2. Intent Extraction Phase
+        # Each agent extracts its intent from observations and previous actions
+        encoded_trajectory, intents, sent_messages, intents_mu, intents_std = self.agent.extract_intent(
+            obs,                    # Current observations
+            self.hidden_states,     # Previous hidden states
+            last_actions,           # Previous actions (one-hot)
+            time_step_tensor,       # Current timestamps
+            agent_id_tensor         # Agent identities
+        )
 
-        #- 4. Q value computation.
-        attn_weights, action_values = self.agent.forward(sent_messages, received_messages)  # b * t * n * 1 * d
+        # 3. Communication Phase
+        # Process message passing with delay modeling and topology constraints
+        received_messages = self.communication_model.process_communication(sent_messages, t)
 
-        # For politic action selection. Not tested yet.
+        # 4. Q-value Computation Phase
+        # Use dual alignment attention to fuse messages and compute action values
+        attn_weights, action_values = self.agent.forward(sent_messages, received_messages)
+
+        # 5. Handle different output types (Q-values vs policy logits)
         if self.agent_output_type == "pi_logits":
+            # For policy-based methods, convert logits to probabilities
             if getattr(self.args, "mask_before_softmax", True):
-                # Make the logits for unavailable actions very negative to minimise their affect on the softmax
+                # Mask unavailable actions before softmax to prevent selection
                 action_values[avail_actions == 0] = -1e10
 
             action_values = torch.nn.functional.softmax(action_values, dim=-1)
+            
             if not test_mode:
-                # Epsilon floor
+                # Apply epsilon-greedy exploration during training
                 epsilon_action_num = action_values.size(-1)
                 if getattr(self.args, "mask_before_softmax", True):
-                    # With probability epsilon, we will pick an available action uniformly
+                    # Only consider available actions for uniform exploration
                     epsilon_action_num = avail_actions.sum(dim=-1, keepdim=True).float()
 
-                action_values = ((1 - self.action_selector.epsilon) * action_values  # type: ignore
-                              + torch.ones_like(action_values) * self.action_selector.epsilon / epsilon_action_num)    # type: ignore
+                # Mix policy probabilities with uniform exploration
+                action_values = (
+                    (1 - self.action_selector.epsilon) * action_values +
+                    torch.ones_like(action_values) * self.action_selector.epsilon / epsilon_action_num
+                )
 
                 if getattr(self.args, "mask_before_softmax", True):
-                    # Zero out the unavailable actions
+                    # Zero out unavailable actions after exploration mixing
                     action_values[avail_actions == 0] = 0.0
         
         return encoded_trajectory, intents, action_values, intents_mu, intents_std, attn_weights
 
     def init_hidden(self, batch_size):
-        # hidden_states for the shared CodeAgent, for each agent in the team
-        # Shape: RNN_layers * (batch_size * n_agents), hidden_dim
+        """
+        Initialize hidden states for all agents
+        
+        Args:
+            batch_size: Batch size for initialization
+        """
+        # Create hidden states for all agents using the shared CodeAgent
+        # Shape: (num_layers, batch_size * n_agents, hidden_dim)
         self.hidden_states = self.agent.init_hidden(batch_size).repeat(1, self.n_agents, 1)
-        self.communication_model.reset(batch_size)  # Reset communication cache.
+        
+        # Reset communication model cache for new episodes
+        self.communication_model.reset(batch_size)
 
-    def save_models(self, path): # For saving models
+    def save_models(self, path):
+        """Save agent models to specified path"""
         torch.save(self.agent.state_dict(), "{}/agent.th".format(path))
 
-    def load_models(self, path): # For loading models
-        self.agent.load_state_dict(torch.load("{}/agent.th".format(path), map_location=lambda storage, loc: storage))
+    def load_models(self, path):
+        """Load agent models from specified path"""
+        self.agent.load_state_dict(
+            torch.load("{}/agent.th".format(path), map_location=lambda storage, loc: storage)
+        )
 
-    def load_state(self, other_mac): # Changed from load_state_dict to avoid nn.Module conflict if not inheriting
+    def load_state(self, other_mac):
+        """Load state from another MAC instance (for target networks)"""
         self.agent.load_state_dict(other_mac.agent.state_dict())
     
     def _get_last_actions(self, batch, t: slice, batch_size, n_agents):
         """
-        Return last actions of time slice t。
-
+        Extract last actions for the given time slice with proper padding
+        
         Args:
-            batch: PyMARL batch。
-            t (slice): time slice。
-            batch_size (int): batch size。
-            n_agents (int): agent number。
-
+            batch: Episode batch
+            t: Time slice to process
+            batch_size: Batch size
+            n_agents: Number of agents
+            
         Returns:
-            torch.Tensor: last actions of time slice t。
+            last_actions: One-hot encoded last actions [B, T, N, 1, A]
         """
         if t.start == 0:
-            zeros = torch.zeros(batch_size, 1, n_agents, 1, device=self.device)
+            # For the first timestep, there are no previous actions
+            # Pad with zeros at the beginning
+            zeros = torch.zeros(batch_size, 1, n_agents, 1, self.args.n_actions, device=self.device)
             sliced_actions = batch["actions"][:, slice(0, t.stop - 1)]
+            sliced_actions = one_hot(sliced_actions, num_classes=self.args.n_actions)
             last_actions = torch.cat([zeros, sliced_actions], dim=1).long()
         else:
+            # Extract actions from previous timesteps
             last_actions = batch["actions"][:, slice(t.start - 1, t.stop - 1)].long()
+            last_actions = one_hot(last_actions, num_classes=self.args.n_actions)
 
-        return one_hot(last_actions, num_classes=self.args.n_actions)
-
+        # Convert to one-hot encoding for neural network input
+        return last_actions
 
     def _get_input_shape(self, scheme):
-        # From scheme, determine the input shape for the agent's FC1 layer
+        """
+        Calculate total input shape for the agent based on observation scheme
+        
+        Args:
+            scheme: Data scheme from environment
+            
+        Returns:
+            input_shape: Total input dimension for agent networks
+        """
+        # Start with base observation shape
         input_shape = scheme["obs"]["vshape"]
+        
+        # Add agent ID dimension if enabled (one-hot encoding of agent identity)
         if self.args.obs_agent_id:
             input_shape += self.n_agents
+            
+        # Add last action dimension if enabled (one-hot encoding of previous action)
         if self.args.obs_last_action:
             input_shape += scheme["actions_onehot"]["vshape"][0] 
+            
         return input_shape
 
     def _build_agents(self, input_shape):
+        """
+        Build the shared CodeAgent used by all agents in the team
+        
+        Args:
+            input_shape: Input dimension for the agent networks
+        """
         self.agent: CodeAgent = AgentMaker.make(self.args.agent, input_shape, self.args)
         
     def _build_inputs(self, batch, t):
+        """
+        Build structured input tensors for the agents from batch data
+        
+        This function processes raw episode data into the structured format
+        required by the CoDe agents, including:
+        - Observations with optional agent ID and last action
+        - Last actions (one-hot encoded)
+        - Timestamps for temporal alignment
+        - Agent identity tensors
+        
+        Args:
+            batch: Episode batch from replay buffer
+            t: Time slice to process
+            
+        Returns:
+            Tuple of (observations, last_actions, time_step_tensor, agent_id_tensor)
+        """
         batch_size, max_length, n_agents, obs_size = batch["obs"].shape
-        obs_data = batch["obs"][:, t].unsqueeze(-2) # b * t * n_agents * 1 * obs_dim
-        time_size = obs_data.shape[1]   # sequence length
+        
+        # Extract observations and add sequence dimension for consistency
+        obs_data = batch["obs"][:, t].unsqueeze(-2)  # [B, T, N, 1, O]
+        time_size = obs_data.shape[1]
 
-        last_actions = self._get_last_actions(batch, t, batch_size, n_agents)   # b * t * n * 1 * n_actions
+        # Get last actions with proper padding and one-hot encoding
+        last_actions = self._get_last_actions(batch, t, batch_size, n_agents)  # [B, T, N, 1, A]
+        
+        # Create timestamp tensors for temporal alignment in communication
         time_indices = torch.arange(t.start, t.stop, device=self.device, dtype=torch.int)
+        time_step_tensor = time_indices.reshape(1, -1, 1, 1, 1).expand(
+            batch_size, -1, self.n_agents, -1, -1
+        )  # [B, T, N, 1, 1]
 
-        # time tensor shape b * t * n * 1 * 1
-        time_step_tensor = time_indices.reshape(1, -1, 1, 1, 1).expand(batch_size, -1, self.n_agents, -1, -1)
+        # Create agent identity tensors (one-hot encoded agent IDs)
+        agent_id = torch.arange(self.n_agents, dtype=torch.long, device=batch.device)
+        agent_id_one_hot = one_hot(agent_id, num_classes=self.n_agents).reshape(
+            1, 1, self.n_agents, 1, self.n_agents
+        ).repeat(batch_size, time_size, 1, 1, 1)  # [B, T, N, 1, N]
 
-        agent_id = torch.arange(self.n_agents, dtype=torch.long, device=batch.device)  # [1, 2, 3, 4, 5, ...]
-        agent_id_one_hot = one_hot(agent_id, num_classes=self.n_agents  # n * 1 * n
-                            ).reshape(1, 1, self.n_agents, 1, self.n_agents  # 1 * 1 * n * 1 * n
-                            ).repeat(batch_size, time_size, 1, 1, 1)    # b * t * n_agents * 1 * n_agents
-
+        # Optionally concatenate additional features to observations
         if self.args.obs_agent_id:
+            # Include agent identity in observations for agent-specific processing
             obs_data = torch.cat([obs_data, agent_id_one_hot], dim=-1)
         if self.args.obs_last_action:
+            # Include last action in observations for action-conditional processing
             obs_data = torch.cat([obs_data, last_actions], dim=-1)
 
         return obs_data, last_actions, time_step_tensor, agent_id_one_hot
-    
