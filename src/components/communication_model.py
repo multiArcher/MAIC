@@ -103,9 +103,7 @@ class CommunicationModel:
         has_arrived_mask = arrival_times_broadcast <= self.query_times
 
         # Find the latest arrived message for each agent at each timestep
-        received_message_sent_time = torch.max(
-            has_arrived_mask.logical_not(), dim=2, keepdim=False
-        )[1] - 1
+        received_message_sent_time = torch.min(has_arrived_mask, dim=2, keepdim=False)[1] - 1
 
         # Extract the latest received messages
         batch_idx = torch.arange(batch_size, device=self.device).reshape(batch_size, 1, 1, 1)
@@ -195,19 +193,9 @@ class CommunicationModel:
             self.comm_gaussian_delay_std,
             size=sent_times.shape,
             device=self.device
-        )
-        
-        # Clamp delays to reasonable bounds (3-sigma rule)
-        min_delay = max(0.0, self.comm_gaussian_delay_mean - 3 * self.comm_gaussian_delay_std)
-        max_delay = min(
-            self.max_cache_size, 
-            self.comm_gaussian_delay_mean + 3 * self.comm_gaussian_delay_std
-        )
-        
-        arrive_times = torch.clamp(
-            sent_times + delay_sample, 
-            min=min_delay, 
-            max=max_delay
-        )
+        ).clamp(min=0.0)
+
+        arrive_times = sent_times + delay_sample
+        arrive_times = torch.clamp(arrive_times.ceil(), max=self.max_cache_size)
 
         return arrive_times.long()

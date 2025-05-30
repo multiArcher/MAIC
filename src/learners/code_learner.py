@@ -225,7 +225,7 @@ class CodeLearner(Learner):
         continue_loss =  - masked_continuity.sum() / mask_continuity.sum()  # Mean cosine similarity
 
         # Auxiliary loss.
-        aux_error = -0.5 * (intent_mu**2 + intent_std**2 - torch.log(intent_std**2) - 1).sum(dim=-1)  # b * t * n
+        aux_error = 0.5 * (intent_mu**2 + intent_std**2 - torch.log(intent_std**2) - 1).sum(dim=-1)  # b * t * n
         mask_aux = mask.squeeze(-1).expand_as(aux_error)  # b * t * n
         masked_aux_error = aux_error * mask_aux  # b * t * n
         aux_loss = masked_aux_error.sum() / mask_aux.sum()  # Mean auxiliary loss

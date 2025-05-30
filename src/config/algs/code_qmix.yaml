@@ -4,7 +4,7 @@
 name: "CoDe_qmix"
 
 runner: "parallel"
-batch_size_run: 8
+batch_size_run: 16
 
 entity_scheme: False
 
@@ -37,11 +37,11 @@ agent_output_type: "q"
 action_selector: "epsilon_greedy" # use epsilon greedy action selector
 epsilon_start: 1.0
 epsilon_finish: 0.05
-epsilon_anneal_time: 500000
+epsilon_anneal_time: 1000000
 evaluation_epsilon: 0.0
 
 comm_type: "broadcast"  # Communication type: "broadcast", "no_comm"
-comm_gaussian_delay_mean: 0.0 # Mean of the Gaussian delay for communication
+comm_gaussian_delay_mean: 3.0 # Mean of the Gaussian delay for communication
 comm_gaussian_delay_std: 1.0  # Standard deviation of the Gaussian delay for communication
 
 # ------------------------------------------------------------------------------
@@ -58,7 +58,7 @@ intent_encoder_hidden_dim: 64 # List of hidden layer sizes for intent encoder ML
 intent_decoder_gru_hidden_dim: 64 # Hidden dim for intent decoder GRU
 dual_alignment_attn_dim: 64 # Size of the attention embedding for intent decoder
 
-predict_k_future_actions: 3   # K for future action prediction (L_inf)
+predict_k_future_actions: 5   # K for future action prediction (L_inf)
 intent_action_predictor_hidden_sizes: 64 # Hidden layer sizes for action predictor MLP
 
 temporal_discount_gamma_T: 0.8  # Used by agent for timeliness alignment
@@ -91,10 +91,10 @@ target_update_interval: 200  # update the target network every {} episodes
 
 # Loss component weights
 td_loss_weight: 1.0               # Weight for TD loss
-action_loss_weight: 0          # Weight for inference loss (future action prediction)
-continue_loss_weight: 0       # Weight for continuity loss (intent stability)
-aux_loss_weight: 0            # Weight for KL divergence loss (intent regularization)
-entropy_loss_weight: 0        # Weight for attention entropy regularization
+action_loss_weight: 0.1          # Weight for inference loss (future action prediction)
+continue_loss_weight: 0.1       # Weight for continuity loss (intent stability)
+aux_loss_weight: 0.1            # Weight for KL divergence loss (intent regularization)
+entropy_loss_weight: 0.1        # Weight for attention entropy regularization
 
 # ------------------------------------------------------------------------------
 # --- Mixer specific parameters ---
