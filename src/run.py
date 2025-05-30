@@ -206,7 +206,7 @@ def run_sequential(args, logger):
     tqdm_output = open("/dev/tty", "w") if sys.platform.startswith('linux') else sys.stdout
     logger.info("Train process started")
     progress_bar = tqdm.tqdm(
-        total=(args.t_max + args.batch_size_run * args.env_info["episode_limit"]),
+        total=(args.t_max),
         mininterval=1,
         unit="step",
         bar_format="{desc}{bar:12} | {n_fmt}/{total_fmt} steps{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}]{postfix}",
@@ -358,9 +358,8 @@ def run_sequential(args, logger):
             f"{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')} | TRAINING | "
         )
         update_steps = runner.t_env - progress_bar.n
-        progress_bar.update(update_steps)
+        progress_bar.update(min(update_steps, args.t_max - progress_bar.n))
         sys.stdout.flush()
-
 
     progress_bar.close()
     runner.close_env()
