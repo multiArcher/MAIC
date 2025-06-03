@@ -194,8 +194,15 @@ class CodeLearner(Learner):
             for idx in range(self.predict_k_future_actions+1)   # 0, 1, ..., k
         ]
         action_targets = torch.stack(action_targets, dim=-2)  # b * t * n * k+1 * n_actions
-        action_error = intent_actions - action_targets  # b * t * n * k+1 * n_actions
-        
+        action_error = F.cross_entropy(
+            intent_actions.view(-1, self.n_actions),  # Flatten to b * t * n * k+1 * n_actions
+            action_targets.view(-1, self.n_actions),  # Flatten to b * t * n * k+1 * n_actions
+            reduction='none'
+        ).view(
+            *intent_actions.shape[:-1],  # b * t * n * k+1
+            1
+        )  # b * t * n * k+1 * 1
+
         # Create triangular mask for future action prediction validity
         batch_size, time_size, n_agents = mask.shape[:3]
         k_steps = self.predict_k_future_actions + 1

@@ -90,7 +90,12 @@ class ParallelRunner(Runner):
         for parent_conn in self.parent_conns:
             parent_conn.send(("close", None))
 
-    def reset(self):
+    def reset(self, test_mode=False):
+        if test_mode is True:
+            self.mac.eval()
+        else:
+            self.mac.train()
+
         self.batch = self.new_batch()
 
         # Reset the envs
@@ -111,7 +116,7 @@ class ParallelRunner(Runner):
         self.env_steps_this_run = 0
 
     def run(self, test_mode=False):
-        self.reset()
+        self.reset(test_mode=test_mode)
 
         all_terminated = False
         if self.args.common_reward:
