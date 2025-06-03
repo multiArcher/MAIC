@@ -75,13 +75,18 @@ class EpisodeRunner(Runner):
     def close_env(self):
         self.env.close()
 
-    def reset(self):
+    def reset(self, test_mode=False):
+        if test_mode is True:
+            self.mac.eval()
+        else:
+            self.mac.train()
+            
         self.batch = self.new_batch()
         self.env.reset()
         self.t = 0
 
     def run(self, test_mode=False):
-        self.reset()
+        self.reset(test_mode=test_mode)
 
         terminated = False
         if self.args.common_reward:
