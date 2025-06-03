@@ -50,10 +50,16 @@ class CodeMAC(MAC):
         self._build_agents(self.input_shape)
 
         # Initialize communication model for message passing between agents
-        self.communication_model = CommunicationModel(args)
+        self.communication_model = CommunicationModel(
+            args, 
+            delay_mean=args.comm_gaussian_delay_mean, 
+            delay_std=args.comm_gaussian_delay_std
+            )
+
 
         # Storage for agent hidden states across timesteps
         self.hidden_states: torch.Tensor
+
 
     def select_actions(
             self, 
@@ -138,7 +144,7 @@ class CodeMAC(MAC):
 
         # 3. Communication Phase
         # Process message passing with delay modeling and topology constraints
-        received_messages = self.communication_model.process_communication(sent_messages, t)
+        received_messages = self.communication_model.process_communication(sent_messages, t, self.training)
 
         # 4. Q-value Computation Phase
         # Use dual alignment attention to fuse messages and compute action values

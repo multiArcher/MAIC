@@ -25,8 +25,8 @@ class CommunicationModel:
     2. Message caching and retrieval based on arrival times
     3. Support for different communication topologies
     """
-    
-    def __init__(self, args):
+
+    def __init__(self, args, delay_mean: float = 1, delay_std: float = 1):
         self.args: SN = args
         self.device: torch.device | str = args.device
         self.n_agents: int = args.n_agents
@@ -37,8 +37,8 @@ class CommunicationModel:
         self.comm_type: str = getattr(args, "comm_type", "broadcast")
 
         # Gaussian delay model parameters
-        self.comm_gaussian_delay_mean: float = float(getattr(args, "comm_gaussian_delay_mean", 1))
-        self.comm_gaussian_delay_std: float = max(0.0, float(getattr(args, "comm_gaussian_delay_std", 1)))
+        self.comm_gaussian_delay_mean: float = delay_mean
+        self.comm_gaussian_delay_std: float = max(0.0, delay_std)
 
         # Cache configuration
         self.max_cache_size: int = args.env_info["episode_limit"] + 1
@@ -74,7 +74,12 @@ class CommunicationModel:
             (*cache_shape, self.n_agents), dtype=torch.long, device=self.device
         )
 
-    def process_communication(self, broadcasts: CoDeBatchedMessageData, t: slice) -> CoDeBatchedMessageData:
+    def process_communication(
+            self, 
+            broadcasts: CoDeBatchedMessageData, 
+            t: slice,
+            training: bool = False
+            ) -> CoDeBatchedMessageData:
         """
         Process communication with delay modeling and message retrieval
         
@@ -92,7 +97,7 @@ class CommunicationModel:
         self.cache_sender_ids[:, t, ...] = broadcasts.sender_id
 
         # Calculate and store arrival times with Gaussian delay
-        arrival_times = self._calculate_arrival_times(broadcasts.sent_times)
+        arrival_times = self._calculate_arrival_times(broadcasts.sent_times, training=training)
         self.cache_arrival_times[:, t, ...] = arrival_times.long()
 
         # 2. Retrieve messages that have arrived by current timestep
@@ -182,15 +187,18 @@ class CommunicationModel:
             sent_times=torch.zeros(batch_size, time_len, n_agents, 0, 1, device=self.device)
         )
 
-    def _calculate_arrival_times(self, sent_times: torch.Tensor) -> torch.Tensor:
+    def _calculate_arrival_times(
+            self, sent_times: torch.Tensor, 
+            training: bool=False
+            ) -> torch.Tensor:
         """
         Calculate message arrival times using Gaussian delay model
         
         Clamps delays to reasonable bounds to prevent numerical issues
         """
         delay_sample = torch.normal(
-            self.comm_gaussian_delay_mean,
-            self.comm_gaussian_delay_std,
+            self.comm_gaussian_delay_mean if training is False else 0.0,
+            self.comm_gaussian_delay_std if training is False else 0.0,
             size=sent_times.shape,
             device=self.device
         ).clamp(min=0.0)

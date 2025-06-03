@@ -3,9 +3,11 @@ import torch.nn as nn
 from torch.distributions import Normal
 
 from modules.agents.agent import Agent
+from modules.layers import RMSNorm
 from components.communication_model import CoDeBatchedMessageData
 from utils.th_utils import get_parameters_num
 from utils.custom_logging import PyMARLLogger
+
 
 class CodeAgent(Agent):
     """
@@ -42,12 +44,13 @@ class CodeAgent(Agent):
         self.message_dim = self.args.n_agents + self.intent_dim + self.agent_hidden_dim + 1
 
         # --- Core Agent Architecture ---
+        self.activation = nn.LeakyReLU()
         
         # 1. RNN for history encoding h_i^t
         # Projects raw observations to hidden dimension before GRU processing
         self.rnn_projection = nn.Sequential(
             nn.Linear(input_shape, self.agent_hidden_dim),
-            nn.ReLU(),
+            self.activation,
         )
         # Remove duplicate line that was causing issues
         self.rnn = nn.GRU(
@@ -60,7 +63,8 @@ class CodeAgent(Agent):
         # 2. Intent Extraction: (h_i^t, a_i^{t-1}) -> μ, σ for variational intent e_i^t
         self.intent_encoder_fc = nn.Sequential(
             nn.Linear(self.agent_hidden_dim + self.n_actions, self.intent_encoder_hidden_dim),
-            nn.ReLU(),
+            RMSNorm(self.intent_encoder_hidden_dim),
+            self.activation,
             nn.Linear(self.intent_encoder_hidden_dim, self.intent_dim * 2) # mu and log_var
         )
 
@@ -79,7 +83,7 @@ class CodeAgent(Agent):
                 self.message_dim + self.dual_alignment_attn_dim, 
                 self.agent_hidden_dim
             ),
-            nn.ReLU(),
+            self.activation,
             nn.Linear(self.agent_hidden_dim, self.n_actions)
         )
 
@@ -159,6 +163,10 @@ class CodeAgent(Agent):
         
         # 2. Temporal Alignment with Message Age Discounting
         delta_t = sent_messages.sent_times - received_messages.sent_times   # Message age
+        if delta_t.min() < 0:
+            PyMARLLogger.fast_logger().fatal(f"Negative message age detected: {delta_t.min().item()}")
+            delta_t = torch.clamp(delta_t, min=0)  # Ensure non-negative age
+        
         gamma_t = (self.temporal_discount_gamma_T ** delta_t).transpose(-1, -2)  # Temporal discount
 
         # 3. Scaled Dot-Product Attention with Temporal Weighting

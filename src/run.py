@@ -73,6 +73,8 @@ def run(_run, _config, _log):
 
 
 def evaluate_sequential(args, runner):
+    runner.mac.eval()  # Set MAC to evaluation mode
+
     state_record_data = []
     obs_record_data = []
     available_actions_data = []
