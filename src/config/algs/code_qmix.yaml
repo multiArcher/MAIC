@@ -67,8 +67,8 @@ temporal_discount_gamma_T: 0.8  # Used by agent for timeliness alignment
 # ------------------------------------------------------------------------------
 # --- Learner specific parameters ---
 # ------------------------------------------------------------------------------
-target_type: "td_lambda"
-td_lambda: 0.4
+target_type: "td"
+# td_lambda: 0.4
 
 standardise_returns: False
 standardise_rewards: True
