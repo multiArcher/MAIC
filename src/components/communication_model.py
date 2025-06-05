@@ -105,10 +105,17 @@ class CommunicationModel:
         arrival_times_broadcast = self.cache_arrival_times.unsqueeze(1).expand(
             -1, self.max_cache_size, -1, -1, -1, -1
         )
-        has_arrived_mask = arrival_times_broadcast <= self.query_times
+        # has_arrived_mask = arrival_times_broadcast <= self.query_times
 
         # Find the latest arrived message for each agent at each timestep
-        received_message_sent_time = torch.min(has_arrived_mask, dim=2, keepdim=False)[1] - 1
+        # 2, 3, 1, 4, 5, 2 <= 3 -> T, T, T, F, F, T
+        # T -> arrive time, F -> -1
+        has_arrived_indices = torch.where(
+            arrival_times_broadcast <= self.query_times, 
+            arrival_times_broadcast, 
+            torch.tensor(-1, device=self.device)
+            )
+        received_message_sent_time = torch.max(has_arrived_indices, dim=2)[0]
 
         # Extract the latest received messages
         batch_idx = torch.arange(batch_size, device=self.device).reshape(batch_size, 1, 1, 1)
