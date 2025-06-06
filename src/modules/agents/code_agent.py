@@ -131,8 +131,7 @@ class CodeAgent(Agent):
         std = torch.exp(0.5 * log_var)
 
         # Sample intent using reparameterization trick for gradient flow
-        intent_distribution = Normal(mu, std)
-        intent = intent_distribution.rsample()  # Differentiable sampling
+        intent = Normal(mu, std).rsample()  # Differentiable sampling
 
         # 3. Message Packaging for Communication
         messages = CoDeBatchedMessageData(agent_id_tensor, intent, x, current_time_step_tensor)
