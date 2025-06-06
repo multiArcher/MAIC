@@ -56,7 +56,8 @@ class NewMixer(nn.Module):
             w2 = self.pos_func(w2)
 
         # Forward
-        hidden = F.elu(qvals.transpose(-3, -1) @ w1.transpose(-3, -2) + b1)  # b * t * 1 * 1 * d
+        # hidden = F.elu(qvals.transpose(-3, -1) @ w1.transpose(-3, -2) + b1)  # b * t * 1 * 1 * d
+        hidden = F.elu(torch.einsum("btnaq,btnaw->btaqw", qvals, w2) + b1)  # b * t * 1 * 1 * d
         y = hidden @ w2.transpose(-1, -2) + b2  # b * t * 1 * 1 * 1
 
         return y

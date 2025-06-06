@@ -162,7 +162,7 @@ class CodeLearner(Learner):
         with torch.no_grad():
             match target_type := getattr(self.args, "target_type", "td"):
                 case "td":
-                    td_targets = rewards + self.args.gamma * (1 - terminated) * target_joint_action_value.detach()
+                    td_targets = rewards[..., None, None] + self.args.gamma * (1 - terminated[..., None, None]) * target_joint_action_value.detach()
                 case "td_lambda":
                     td_targets = new_build_td_lambda_targets(rewards, terminated, mask, target_joint_action_value,
                                                       self.args.gamma, self.args.td_lambda)
@@ -180,7 +180,7 @@ class CodeLearner(Learner):
             
         mask = mask[..., None, None]  # Mask for terminated steps.
 
-        td_error = joint_action_value - td_targets[..., None, None].detach()
+        td_error = joint_action_value - td_targets
         masked_td_error = td_error * mask
         td_loss = (masked_td_error**2).sum() / mask.sum()
 
@@ -226,13 +226,13 @@ class CodeLearner(Learner):
         action_loss = (masked_action_error**2).sum() / combined_action_mask.sum()
 
         # Continuity loss.
-        cos_similarity = F.cosine_similarity(intents[:, 1:], intents[:, :-1], dim=-1, eps=1e-6)  # b * t-1 * n * 1
+        cos_similarity = F.cosine_similarity(intents[:, 1:], intents[:, :-1].detach(), dim=-1, eps=1e-6)  # b * t-1 * n * 1
         mask_continuity = mask[:, 1:].squeeze(-1).expand_as(cos_similarity)  # b * t-1 * n * 1
         masked_continuity = cos_similarity * mask_continuity  # b * t-1 * n * 1
         continue_loss =  - masked_continuity.sum() / mask_continuity.sum()  # Mean cosine similarity
 
         # Auxiliary loss.
-        aux_error = 0.5 * (intent_mu**2 + intent_std**2 - torch.log(intent_std**2) - 1).sum(dim=-1)  # b * t * n
+        aux_error = 0.5 * (intent_mu**2 + intent_std**2 - torch.log(intent_std**2 + 1e-6) - 1).sum(dim=-1)  # b * t * n
         mask_aux = mask.squeeze(-1).expand_as(aux_error)  # b * t * n
         masked_aux_error = aux_error * mask_aux  # b * t * n
         aux_loss = masked_aux_error.sum() / mask_aux.sum()  # Mean auxiliary loss
