@@ -146,9 +146,9 @@ class CodeLearner(Learner):
                 mac_out_detach = q_values.detach().clone()
                 mac_out_detach = torch.masked_fill(mac_out_detach, avail_actions.unsqueeze(-2)==0, -1e7)
                 cur_max_actions = mac_out_detach.max(dim=-1, keepdim=True)[1]
-                target_q_values = torch.gather(target_q_values[:, 1:], dim=-1, index=cur_max_actions)
+                target_q_values = torch.gather(target_q_values, dim=-1, index=cur_max_actions)
             else:
-                target_q_values = target_q_values[:, 1:].max(dim=-1)[0]
+                target_q_values, _ = target_q_values[:, 1:].max(dim=-1, keepdim=True)
             
             target_joint_action_value = self.target_mixer(target_q_values, batch["state"][:, 1:, None, None])
             
@@ -226,7 +226,7 @@ class CodeLearner(Learner):
         action_loss = (masked_action_error**2).sum() / combined_action_mask.sum()
 
         # Continuity loss.
-        cos_similarity = F.cosine_similarity(intents[:, 1:], intents[:, :-1].detach(), dim=-1, eps=1e-6)  # b * t-1 * n * 1
+        cos_similarity = F.cosine_similarity(intents[:, 1:].detach(), intents[:, :-1], dim=-1, eps=1e-6)  # b * t-1 * n * 1
         mask_continuity = mask[:, 1:].squeeze(-1).expand_as(cos_similarity)  # b * t-1 * n * 1
         masked_continuity = cos_similarity * mask_continuity  # b * t-1 * n * 1
         continue_loss =  - masked_continuity.sum() / mask_continuity.sum()  # Mean cosine similarity
