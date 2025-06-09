@@ -34,26 +34,20 @@ class IntentDecoder(nn.Module):
 
         # Create GRU modules for each prediction step
         # Each GRU processes (observation + action) sequences
-        self.gru_modules = nn.ModuleList([
-            nn.GRU(
+        self.gru =nn.GRU(
                 self.input_shape + self.n_actions,  # obs_dim + n_actions
                 self.agent_hidden_dim, 
                 self.gru_layers, 
                 batch_first=True, 
                 device=self.device
-            ) 
-            for _ in range(self.predict_k_future_actions+1)  # current + k future steps
-        ])
+            )         
         
         # MLP modules for action prediction from (intent + hidden_state)
-        self.mlp_modules = nn.ModuleList([
-            nn.Linear(
+        self.mlp = nn.Linear(
                 self.intent_dim + self.agent_hidden_dim, 
                 self.n_actions, 
                 device=self.device
             )
-            for _ in range(self.predict_k_future_actions+1)
-        ])
 
     def forward(
             self, 
@@ -77,48 +71,43 @@ class IntentDecoder(nn.Module):
         target_shape = observations.shape[:-1]  # [B, T, N, 1]
         batch_size, time_size, n_agents, _ = target_shape
 
+        initial_last_actions = F.pad(
+            actions.reshape(*target_shape, self.n_actions)[:, :-1], 
+            (*(0, 0), *(0, 0), *(0, 0), *(1, 0)),   # pad at beginning of time dimension
+            value=0.0
+        )
+
         # Initialize trajectory estimation storage
-        estimated_trajectory = torch.zeros_like(encoded_trajectory, device=self.device)
         estimated_actions_probs = []
+        last_actions_for_gru = initial_last_actions  # Start with padded last actions
+        hidden_state = encoded_trajectory.detach()  # [b, t, n, 1, d] - encoded trajectory
+        hidden_state = hidden_state.transpose(1, 2).reshape(1, batch_size * n_agents * time_size, -1)
 
         # Process each prediction step
-        for idx, (gru, mlp) in enumerate(zip(self.gru_modules, self.mlp_modules)):
-            if idx == 0:
-                # Step 0: Use actual encoded trajectory and pad actions with zeros at start
-                hidden_state = encoded_trajectory.detach()
-                last_actions = F.pad(
-                    actions.reshape(*target_shape, self.n_actions)[:, :-1], 
-                    (*(0, 0), *(0, 0), *(0, 0), *(1, 0)),   # pad at beginning of time dimension
-                    value=0.0
-                )
-                gru_inputs = torch.cat([observations, last_actions], dim=-1)
-            else:
-                # Step k>0: Use estimated trajectory and shift observations forward
-                hidden_state = estimated_trajectory
-                obs_vector = F.pad(
-                    observations[:, idx:], 
-                    (*(0, 0), *(0, 0), *(0, 0), *(0, idx)),  # pad at ending
-                    value=0.0
-                )
-                gru_inputs = torch.cat([obs_vector, estimated_action], dim=-1)
+        for idx in range(self.predict_k_future_actions + 1):
+            current_obs = F.pad(
+                observations[:, idx:],
+                (*(0, 0), *(0, 0), *(0, 0), *(0, idx)),  # pad at ending
+                value=0.0
+            )
+
+            gru_inputs = torch.cat([current_obs, last_actions_for_gru], dim=-1)
 
             # Reshape for GRU processing: (B*N*T, 1, input_dim)
             gru_inputs = gru_inputs.transpose(1, 2).reshape(batch_size * n_agents * time_size, 1, -1)
-            hidden_state = hidden_state.transpose(1, 2).reshape(1, batch_size * n_agents * time_size, -1)
             
             # GRU forward pass
-            estimated_trajectory, hidden_state = gru(gru_inputs, hidden_state)
+            estimated_trajectory, hidden_state = self.gru(gru_inputs, hidden_state)
 
             # Reshape back to original format
             estimated_trajectory = estimated_trajectory.reshape(batch_size, n_agents, time_size, 1, -1).transpose(1, 2)
-            hidden_state = hidden_state.reshape(batch_size, n_agents, time_size, 1, -1).transpose(1, 2)
 
             # Predict action probabilities from intent + hidden state
-            estimated_actions_prob = mlp(torch.cat([intents, estimated_trajectory], dim=-1))
+            estimated_actions_prob = self.mlp(torch.cat([intents, estimated_trajectory], dim=-1))
             estimated_actions_probs.append(estimated_actions_prob)
 
             # Convert probabilities to one-hot for next iteration
-            estimated_action = one_hot(
+            last_actions_for_gru = one_hot(
                 torch.argmax(estimated_actions_prob, dim=-1), 
                 num_classes=self.n_actions
             )
