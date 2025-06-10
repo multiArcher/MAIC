@@ -105,7 +105,6 @@ class CommunicationModel:
         arrival_times_broadcast = self.cache_arrival_times.unsqueeze(1).expand(
             -1, self.max_cache_size, -1, -1, -1, -1
         )
-        # has_arrived_mask = arrival_times_broadcast <= self.query_times
 
         # Find the latest arrived message for each agent at each timestep
         # 2, 3, 1, 4, 5, 2 <= 3 -> T, T, T, F, F, T
@@ -115,7 +114,7 @@ class CommunicationModel:
             arrival_times_broadcast, 
             torch.tensor(-1, device=self.device)
             )
-        received_message_sent_time = torch.max(has_arrived_indices, dim=2)[0]
+        received_message_sent_time, _ = torch.max(has_arrived_indices, dim=2)
 
         # Extract the latest received messages
         batch_idx = torch.arange(batch_size, device=self.device).reshape(batch_size, 1, 1, 1)
@@ -147,28 +146,20 @@ class CommunicationModel:
     def _broadcast_communication(
             self, 
             messages: CoDeBatchedMessageData, 
-            comm_matrix: Optional[torch.Tensor] = None,
-            batch_indices: Optional[torch.Tensor] = None,
-            time_indices: Optional[torch.Tensor] = None,
-            agent_indices: Optional[torch.Tensor] = None
         ) -> CoDeBatchedMessageData:
         """
         Implement broadcast communication (all-to-all except self)
         """
         batch_size, time_len, n_agents, _, _ = messages.intents.shape
 
-        if comm_matrix is None or comm_matrix.shape != (batch_size, time_len, n_agents, n_agents):
-            # Update related tensors.
-            comm_matrix = torch.eye(n_agents, device=self.device, dtype=torch.bool).logical_not()  # n * n
-            comm_matrix = comm_matrix.reshape(1, 1, n_agents, n_agents  # 1 * 1 * n * n
-                                    ).expand(batch_size, time_len, -1, -1)  # b * t * n * n
-            
-            batch_indices = torch.arange(batch_size, device=self.device).reshape(batch_size, 1, 1, 1)
+        # Update related tensors.
+        comm_matrix = torch.eye(n_agents, device=self.device, dtype=torch.bool).logical_not()  # n * n
+        comm_matrix = comm_matrix.reshape(1, 1, n_agents, n_agents  # 1 * 1 * n * n
+                                ).expand(batch_size, time_len, -1, -1)  # b * t * n * n
         
-        if time_indices is None:
-            time_indices = torch.arange(time_len, device=self.device).reshape(1, time_len, 1, 1)
-        if agent_indices is None:
-            agent_indices = torch.arange(n_agents).reshape(1, 1, 1, n_agents).repeat(1, 1, n_agents, 1)
+        batch_indices = torch.arange(batch_size, device=self.device).reshape(batch_size, 1, 1, 1)        
+        time_indices = torch.arange(time_len, device=self.device).reshape(1, time_len, 1, 1)
+        agent_indices = torch.arange(n_agents).reshape(1, 1, 1, n_agents).repeat(1, 1, n_agents, 1)
 
         def broadcast_func(m):
             """Apply broadcasting to message tensor"""
