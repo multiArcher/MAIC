@@ -152,18 +152,18 @@ class PyMARLLogger(CustomLogger):
     def print_recent_stats(self):
         """Log recent stats stored in self.stats."""
         # First line with environment step and episode info
-        log_str = f"t_env: {self.stats['episode'][-1][0]}                     "
-        log_str += f"Episode: {self.stats['episode'][-1][1]}\n"
-        
+        log_str = f"t_env: {self.stats['running/episode'][-1][0]}                     "
+        log_str += f"Episode: {self.stats['running/episode'][-1][1]}\n"
+
         # Hanging indent for all subsequent variable lines
         indent = " " * 8  # 8 spaces for hanging indent
 
         for k, v in sorted(self.stats.items()):
-            if k == "episode":
+            if k == "running/episode":
                 continue
                 
             # Determine window size for averaging
-            window = 10 if k != "epsilon" else 1
+            window = 10 if k != "running/episode" else 1
             
             # Calculate mean value with error handling
             try:

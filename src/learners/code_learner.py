@@ -162,7 +162,7 @@ class CodeLearner(Learner):
         with torch.no_grad():
             match target_type := getattr(self.args, "target_type", "td"):
                 case "td":
-                    td_targets = rewards[..., None, None] + self.args.gamma * (1 - terminated[..., None, None]) * target_joint_action_value.detach()
+                    td_targets = rewards[..., None, None] + self.args.gamma * target_joint_action_value * (1 - terminated[..., None, None])
                 case "td_lambda":
                     td_targets = new_build_td_lambda_targets(rewards, terminated, mask, target_joint_action_value,
                                                       self.args.gamma, self.args.td_lambda)
@@ -195,10 +195,10 @@ class CodeLearner(Learner):
         ]
         action_targets = torch.stack(action_targets, dim=-2)  # b * t * n * k+1 * n_actions
         action_error = F.cross_entropy(
-            intent_actions.view(-1, self.n_actions),  # Flatten to b * t * n * k+1 * n_actions
-            action_targets.view(-1, self.n_actions),  # Flatten to b * t * n * k+1 * n_actions
+            intent_actions.reshape(-1, self.n_actions),  # Flatten to b * t * n * k+1 * n_actions
+            action_targets.reshape(-1, self.n_actions),  # Flatten to b * t * n * k+1 * n_actions
             reduction='none'
-        ).view(
+        ).reshape(
             *intent_actions.shape[:-1],  # b * t * n * k+1
             1
         )  # b * t * n * k+1 * 1
@@ -223,11 +223,18 @@ class CodeLearner(Learner):
         combined_action_mask = episode_mask_expanded * action_validity_mask
         
         masked_action_error = action_error * combined_action_mask
-        action_loss = (masked_action_error**2).sum() / combined_action_mask.sum()
+        action_loss = masked_action_error.sum() / combined_action_mask.sum()
 
         # Continuity loss.
-        cos_similarity = F.cosine_similarity(intents[:, 1:].detach(), intents[:, :-1], dim=-1, eps=1e-6)  # b * t-1 * n * 1
-        mask_continuity = mask[:, 1:].squeeze(-1).expand_as(cos_similarity)  # b * t-1 * n * 1
+        last_intents = F.pad(
+            intents[:, :-1],  # Exclude last timestep
+            (*(0, 0), *(0, 0), *(0, 0), *(1, 0)),
+            mode='constant',
+            value=0
+        )
+
+        cos_similarity = F.cosine_similarity(intents.detach(), last_intents, dim=-1, eps=1e-6)  # b * t-1 * n * 1
+        mask_continuity = mask.squeeze(-1).expand_as(cos_similarity)  # b * t-1 * n * 1
         masked_continuity = cos_similarity * mask_continuity  # b * t-1 * n * 1
         continue_loss =  - masked_continuity.sum() / mask_continuity.sum()  # Mean cosine similarity
 
@@ -268,121 +275,125 @@ class CodeLearner(Learner):
         elif self.args.target_update_interval_or_tau <= 1.0:
             self._update_targets_soft(self.args.target_update_interval_or_tau)
 
-        # Enhanced tensorboard logging
+        # region Enhanced tensorboard logging
         if t_env - self.log_stats_t >= self.args.learner_log_interval:
-            mask_elems = mask.sum().item()
-            
-            # === Core Training Metrics ===
-            self.logger.log_stat("grad_norm", grad_norm.item(), t_env)
-            
-            # === Individual Loss Components ===
-            self.logger.log_stat("loss/total_loss", total_loss.item(), t_env)
-            self.logger.log_stat("loss/td_loss", td_loss.item(), t_env)
-            self.logger.log_stat("loss/action_loss", action_loss.item(), t_env) 
-            self.logger.log_stat("loss/continue_loss", continue_loss.item(), t_env)
-            self.logger.log_stat("loss/aux_loss", aux_loss.item(), t_env)
-            self.logger.log_stat("loss/entropy_loss", intent_alignment_entropy_loss.item(), t_env)
-            
-            # === Q-Value Statistics ===
-            self.logger.log_stat("q_values/td_error_abs", (masked_td_error.abs().sum().item() / mask_elems), t_env)
-            self.logger.log_stat("q_values/q_taken_mean", (choosen_action_values * mask).sum().item() / (mask_elems * self.args.n_agents), t_env)
-            self.logger.log_stat("q_values/target_mean", (td_targets * mask.squeeze(-1).squeeze(-1)).sum().item() / (mask_elems * self.args.n_agents), t_env)
-            
-            # Q-value distribution statistics
-            q_values_flat = q_values.reshape(-1, self.n_actions)
-            self.logger.log_stat("q_values/q_max_mean", q_values_flat.max(dim=-1)[0].mean().item(), t_env)
-            self.logger.log_stat("q_values/q_min_mean", q_values_flat.min(dim=-1)[0].mean().item(), t_env) 
-            self.logger.log_stat("q_values/q_std_mean", q_values_flat.std(dim=-1).mean().item(), t_env)
-            
-            # === Intent Analysis ===
-            # Intent magnitude and diversity
-            intent_norm = torch.norm(intents, dim=-1)  # [B, T, N, 1]
-            masked_intent_norm = intent_norm * mask.squeeze(-1)
-            self.logger.log_stat("intent/norm_mean", masked_intent_norm.sum().item() / (mask_elems * self.args.n_agents), t_env)
-            self.logger.log_stat("intent/norm_std", masked_intent_norm.std().item(), t_env)
-            
-            # Intent diversity across agents (inter-agent variance)
-            intent_var_across_agents = torch.var(intents, dim=2)  # Variance across agents [B, T, 1, I]
-            masked_intent_var = intent_var_across_agents.mean(dim=-1) * mask.squeeze(-1).squeeze(-1)  # [B, T, 1]
-            self.logger.log_stat("intent/diversity_across_agents", masked_intent_var.sum().item() / mask_elems, t_env)
-            
-            # Intent temporal consistency
-            continuity_mean = masked_continuity.sum().item() / mask_continuity.sum().item() if mask_continuity.sum().item() > 0 else 0.0
-            self.logger.log_stat("intent/temporal_consistency", continuity_mean, t_env)
-            
-            # Intent distribution parameters
-            intent_mu_norm = torch.norm(intent_mu, dim=-1)
-            masked_mu_norm = intent_mu_norm * mask.squeeze(-1)
-            self.logger.log_stat("intent/mu_norm_mean", masked_mu_norm.sum().item() / (mask_elems * self.args.n_agents), t_env)
-            
-            intent_std_mean = intent_std.mean(dim=-1)
-            masked_std_mean = intent_std_mean * mask.squeeze(-1)
-            self.logger.log_stat("intent/std_mean", masked_std_mean.sum().item() / (mask_elems * self.args.n_agents), t_env)
-            
-            # === Communication Analysis ===
-            # Attention entropy (communication diversity)
-            attn_entropy_mean = masked_intent_alignment_entropy.sum().item() / (mask_elems * self.args.n_agents)
-            self.logger.log_stat("communication/attention_entropy", attn_entropy_mean, t_env)
-            
-            # Attention concentration (max attention weight)
-            attn_max = attn_weights.max(dim=-1)[0]  # [B, T, N, 1]
-            masked_attn_max = attn_max * mask.squeeze(-1)
-            self.logger.log_stat("communication/attention_max_mean", masked_attn_max.sum().item() / (mask_elems * self.args.n_agents), t_env)
-            
-            # Communication efficiency (how much attention is used)
-            attn_sum = attn_weights.sum(dim=-1)  # [B, T, N, 1]
-            masked_attn_sum = attn_sum * mask.squeeze(-1)
-            self.logger.log_stat("communication/attention_utilization", masked_attn_sum.sum().item() / (mask_elems * self.args.n_agents), t_env)
-            
-            # === Action Prediction Analysis ===
-            # Action prediction accuracy
-            predicted_actions = torch.argmax(intent_actions, dim=-1)  # [B, T, N, K+1]
-            target_actions_idx = torch.argmax(action_targets, dim=-1)  # [B, T, N, K+1]
-            action_accuracy = (predicted_actions == target_actions_idx).float()
-            masked_accuracy = action_accuracy * combined_action_mask.any(dim=-1).float()
-            
-            if combined_action_mask.any(dim=-1).sum().item() > 0:
-                accuracy_mean = masked_accuracy.sum().item() / combined_action_mask.any(dim=-1).sum().item()
-                self.logger.log_stat("action_prediction/accuracy", accuracy_mean, t_env)
+            with torch.no_grad():            
+                mask_elems = mask.sum().item()
+                bool_mask_bt = mask.bool() # Create a boolean mask of shape (B, T)
                 
-                # Per-step accuracy breakdown
-                for k in range(self.predict_k_future_actions + 1):
-                    step_mask = combined_action_mask[:, :, :, k].any(dim=-1).float()
-                    if step_mask.sum().item() > 0:
-                        step_accuracy = (masked_accuracy[:, :, :, k] * step_mask).sum().item() / step_mask.sum().item()
-                        self.logger.log_stat(f"action_prediction/accuracy_step_{k}", step_accuracy, t_env)
-            
-            # Action prediction confidence (entropy of predicted action distributions)
-            action_probs = torch.softmax(intent_actions, dim=-1)
-            action_entropy = -torch.sum(action_probs * torch.log(action_probs + 1e-8), dim=-1)
-            masked_action_entropy = action_entropy * combined_action_mask.any(dim=-1).float()
-            if combined_action_mask.any(dim=-1).sum().item() > 0:
-                entropy_mean = masked_action_entropy.sum().item() / combined_action_mask.any(dim=-1).sum().item()
-                self.logger.log_stat("action_prediction/confidence_entropy", entropy_mean, t_env)
-            
-            # === Training Dynamics ===
-            # Learning rate (if using scheduler)
-            current_lr = self.optimizer.param_groups[0]['lr']
-            self.logger.log_stat("training/learning_rate", current_lr, t_env)
-            
-            # Target network update frequency
-            self.logger.log_stat("training/target_update_step", self.last_target_update_step, t_env)
-            
-            # Memory usage
-            if hasattr(torch.cuda, 'memory_allocated'):
-                memory_allocated = torch.cuda.memory_allocated() / 1024**3  # GB
-                memory_reserved = torch.cuda.memory_reserved() / 1024**3    # GB
-                self.logger.log_stat("system/gpu_memory_allocated_gb", memory_allocated, t_env)
-                self.logger.log_stat("system/gpu_memory_reserved_gb", memory_reserved, t_env)
-            
-            # === Loss Component Weights (for hyperparameter tracking) ===
-            self.logger.log_stat("weights/td_loss_weight", self.td_loss_weight, t_env)
-            self.logger.log_stat("weights/action_loss_weight", self.action_loss_weight, t_env)
-            self.logger.log_stat("weights/continue_loss_weight", self.continue_loss_weight, t_env)
-            self.logger.log_stat("weights/aux_loss_weight", self.aux_loss_weight, t_env)
-            self.logger.log_stat("weights/entropy_loss_weight", self.entropy_loss_weight, t_env)
-            
-            self.log_stats_t = t_env
+                # === Core Training Metrics ===
+                self.logger.log_stat("running/grad_norm", grad_norm.item(), t_env)
+                
+                # === Individual Loss Components ===
+                self.logger.log_stat("loss/total_loss", total_loss.item(), t_env)
+                self.logger.log_stat("loss/td_loss", td_loss.item(), t_env)
+                self.logger.log_stat("loss/action_loss", action_loss.item(), t_env) 
+                self.logger.log_stat("loss/continue_loss", continue_loss.item(), t_env)
+                self.logger.log_stat("loss/aux_loss", aux_loss.item(), t_env)
+                self.logger.log_stat("loss/entropy_loss", intent_alignment_entropy_loss.item(), t_env)
+                
+                # === Q-Value Statistics ===
+                self.logger.log_stat("q_values/td_error_abs", (masked_td_error.abs().sum().item() / mask_elems), t_env)
+                self.logger.log_stat("q_values/q_taken_mean", (choosen_action_values * mask).sum().item() / (mask_elems * self.args.n_agents), t_env)
+                self.logger.log_stat("q_values/target_mean", (td_targets * mask).sum().item() / mask_elems, t_env)
+                
+                # Q-value distribution statistics
+                self.logger.log_stat("q_values/q_max_mean", q_values.max(dim=-1)[0].mean().item(), t_env)
+                self.logger.log_stat("q_values/q_min_mean", q_values.min(dim=-1)[0].mean().item(), t_env) 
+                self.logger.log_stat("q_values/q_std_mean", q_values.std(dim=-1).mean().item(), t_env)
+                
+                # === Intent Analysis ===
+                # Intent magnitude and diversity
+                masked_intents = intents * mask
+                self.logger.log_stat("intent/intent_mean", masked_intents.sum().item() / (mask_elems * self.args.n_agents * self.args.intent_dim), t_env)
+                valid_intents = intents[bool_mask_bt.expand_as(intents)] # Select only valid timesteps
+                self.logger.log_stat("intent/intent_std", valid_intents.std().item(), t_env)
+
+                # Intent diversity across agents (inter-agent variance)
+                intent_var_across_agents = torch.var(intents, dim=2, correction=0)  # Variance across agents [B, T, 1, 1, I]
+                masked_intent_var = (intent_var_across_agents.mean(dim=-1) * mask.squeeze(dim=-1).squeeze(dim=-1)).sum() / mask_elems
+                self.logger.log_stat("intent/diversity_across_agents", masked_intent_var.item(), t_env)
+                
+                # Intent temporal consistency
+                continuity_mean = masked_continuity.sum().item() / mask_continuity.sum().item()
+                self.logger.log_stat("intent/temporal_consistency", continuity_mean, t_env)
+                
+                # Intent distribution parameters
+                masked_mu = intent_mu * mask
+                self.logger.log_stat("intent/mu_mean", masked_mu.sum().item() / mask_elems, t_env)
+                valid_mu = intent_mu[bool_mask_bt.expand_as(intents)]
+                self.logger.log_stat("intent/mu_std", valid_mu.std().item(), t_env)
+
+                masked_std = intent_std * mask
+                self.logger.log_stat("intent/std_mean", masked_std.sum().item() / mask_elems, t_env)
+                valid_std = intent_std[bool_mask_bt.expand_as(intents)]
+                self.logger.log_stat("intent/std_std", valid_std.std().item(), t_env)
+                
+                # === Communication Analysis ===
+                # Attention entropy (communication diversity)
+                attn_entropy_mean = masked_intent_alignment_entropy.sum().item() / (mask_elems * self.args.n_agents)
+                self.logger.log_stat("communication/attention_entropy", attn_entropy_mean, t_env)
+                
+                # Attention concentration (max attention weight)
+                attn_max = attn_weights.max(dim=-1)[0]  # [B, T, N, 1]
+                masked_attn_max = attn_max * mask.squeeze(-1)
+                self.logger.log_stat("communication/attention_max_mean", masked_attn_max.sum().item() / (mask_elems * self.args.n_agents), t_env)
+                
+                # Communication efficiency (how much attention is used)
+                attn_top_k = torch.topk(attn_weights, k=2, dim=-1)[0]  # [B, T, N, K]
+                masked_attn_top_k_sum = attn_top_k.sum(dim=-1) * mask.squeeze(-1)
+                self.logger.log_stat("communication/attention_utilization", masked_attn_top_k_sum.sum().item() / (mask_elems * self.args.n_agents), t_env)
+                
+                # === Action Prediction Analysis ===
+                # Action prediction accuracy
+                decoded_ations = torch.argmax(intent_actions, dim=-1)  # [B, T, N, K+1]
+                target_actions_idx = torch.argmax(action_targets, dim=-1)  # [B, T, N, K+1]
+                action_accuracy = (decoded_ations == target_actions_idx).float()
+                masked_accuracy = action_accuracy * combined_action_mask.any(dim=-1).float()
+                
+                if combined_action_mask.any(dim=-1).sum().item() > 0:
+                    accuracy_mean = masked_accuracy.sum().item() / combined_action_mask.any(dim=-1).sum().item()
+                    self.logger.log_stat("action_prediction/accuracy", accuracy_mean, t_env)
+                    
+                    # Per-step accuracy breakdown
+                    for k in range(self.predict_k_future_actions + 1):
+                        step_mask = combined_action_mask[:, :, :, k].any(dim=-1).float()
+                        if step_mask.sum().item() > 0:
+                            step_accuracy = (masked_accuracy[:, :, :, k] * step_mask).sum().item() / step_mask.sum().item()
+                            self.logger.log_stat(f"action_prediction/accuracy_step_{k}", step_accuracy, t_env)
+                
+                # Action prediction confidence (entropy of predicted action distributions)
+                action_probs = torch.softmax(intent_actions, dim=-1)
+                action_entropy = -torch.sum(action_probs * torch.log(action_probs + 1e-8), dim=-1)
+                masked_action_entropy = action_entropy * combined_action_mask.any(dim=-1).float()
+                if combined_action_mask.any(dim=-1).sum().item() > 0:
+                    entropy_mean = masked_action_entropy.sum().item() / combined_action_mask.any(dim=-1).sum().item()
+                    self.logger.log_stat("action_prediction/confidence_entropy", entropy_mean, t_env)
+                
+                # === Training Dynamics ===
+                # Learning rate (if using scheduler)
+                current_lr = self.optimizer.param_groups[0]['lr']
+                self.logger.log_stat("running/learning_rate", current_lr, t_env)
+                
+                # Target network update frequency
+                self.logger.log_stat("running/target_update_step", self.last_target_update_step, t_env)
+                
+                # Memory usage
+                if hasattr(torch.cuda, 'memory_allocated'):
+                    memory_allocated = torch.cuda.memory_allocated() / 1024**3  # GB
+                    memory_reserved = torch.cuda.memory_reserved() / 1024**3    # GB
+                    self.logger.log_stat("system/gpu_memory_allocated_gb", memory_allocated, t_env)
+                    self.logger.log_stat("system/gpu_memory_reserved_gb", memory_reserved, t_env)
+                
+                # === Loss Component Weights (for hyperparameter tracking) ===
+                self.logger.log_stat("weights/td_loss_weight", self.td_loss_weight, t_env)
+                self.logger.log_stat("weights/action_loss_weight", self.action_loss_weight, t_env)
+                self.logger.log_stat("weights/continue_loss_weight", self.continue_loss_weight, t_env)
+                self.logger.log_stat("weights/aux_loss_weight", self.aux_loss_weight, t_env)
+                self.logger.log_stat("weights/entropy_loss_weight", self.entropy_loss_weight, t_env)
+                
+                self.log_stats_t = t_env
+        # endregion
 
     def _update_targets_hard(self):
         self.target_mac.load_state(self.mac)

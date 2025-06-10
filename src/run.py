@@ -190,7 +190,7 @@ def run_sequential(args, logger):
         if args.evaluate or args.save_replay:
             runner.log_train_stats_t = runner.t_env
             evaluate_sequential(args, runner)
-            logger.log_stat("episode", runner.t_env, runner.t_env)
+            logger.log_stat("running/episode", runner.t_env, runner.t_env)
             logger.print_recent_stats()
             logger.console_logger.info("Finished Evaluation")
             return
@@ -251,7 +251,7 @@ def run_sequential(args, logger):
             for _ in range(n_test_runs):
                 runner.run(test_mode=True)
 
-        new_winrate = logger.stats["test_battle_won_mean"][-1][1]
+        new_winrate = logger.stats["running/test_battle_won_mean"][-1][1]
         best_model = (new_winrate > max_winrate) or (episode == 0)
         
         if best_model is True:
@@ -327,7 +327,7 @@ def run_sequential(args, logger):
                 last_improvement_step = runner.t_env
 
         if (runner.t_env - last_log_t) >= args.log_interval:
-            logger.log_stat("episode", episode, runner.t_env)
+            logger.log_stat("running/episode", episode, runner.t_env)
             progress_bar.clear()
             logger.print_recent_stats()
             last_log_t = runner.t_env
@@ -414,30 +414,6 @@ def args_sanity_check(config, logger):
 
     return config
 
-# TODO: Refactor preprocess_init.
-#       Currently, preprocess is implemented in MAC.
-# def preprocess_init(args: SN) -> dict[str: tuple[str, list[Transform]]]:
-#     """Handle preprocess before storing in replay buffer."""
-#     #TODO: Simple implementation, need to refactor.
-#
-#     preprocess = {
-#         # "actions": ("actions_onehot", [OneHot(out_dim=args.n_actions)])
-#     }
-#
-#     if getattr(args, "entity_scheme", False):
-#         args.entity_shape = args.env_info["n_agents"] + args.env_info["n_enemies"]
-#
-#         preprocess.update(
-#             {
-#                 # "state": ("entity_state", [EntityState(**args.env_info)]),
-#                 "obs": (
-#                     ("obs_move", "obs_enemy", "obs_ally", "obs_own"),
-#                     [EntityObs(args.env_info["obs_components"])]
-#                 ),
-#             }
-#         )
-#
-#     return preprocess
 
 def parse_buffer_scheme(env_info: dict, common_reward: bool = True):
     """Parse buffer scheme from env_info."""

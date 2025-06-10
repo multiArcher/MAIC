@@ -253,7 +253,7 @@ class ParallelRunner(Runner):
             self._log(cur_returns, cur_stats, log_prefix)
             if hasattr(self.mac.action_selector, "epsilon"):
                 self.logger.log_stat(
-                    "epsilon", self.mac.action_selector.epsilon, self.t_env
+                    "running/epsilon", self.mac.action_selector.epsilon, self.t_env
                 )
             self.log_train_stats_t = self.t_env
 
@@ -261,33 +261,33 @@ class ParallelRunner(Runner):
 
     def _log(self, returns, stats, prefix):
         if self.args.common_reward:
-            self.logger.log_stat(prefix + "return_mean", np.mean(returns), self.t_env)
-            self.logger.log_stat(prefix + "return_std", np.std(returns), self.t_env)
+            self.logger.log_stat("running/" + prefix + "return_mean", np.mean(returns), self.t_env)
+            self.logger.log_stat("running/" + prefix + "return_std", np.std(returns), self.t_env)
         else:
             for i in range(self.args.n_agents):
                 self.logger.log_stat(
-                    prefix + f"agent_{i}_return_mean",
+                    "running/" + prefix + f"agent_{i}_return_mean",
                     np.array(returns)[:, i].mean(),
                     self.t_env,
                 )
                 self.logger.log_stat(
-                    prefix + f"agent_{i}_return_std",
+                    "running/" + prefix + f"agent_{i}_return_std",
                     np.array(returns)[:, i].std(),
                     self.t_env,
                 )
             total_returns = np.array(returns).sum(axis=-1)
             self.logger.log_stat(
-                prefix + "total_return_mean", total_returns.mean(), self.t_env
+                "running/" + prefix + "total_return_mean", total_returns.mean(), self.t_env
             )
             self.logger.log_stat(
-                prefix + "total_return_std", total_returns.std(), self.t_env
+                "running/" + prefix + "total_return_std", total_returns.std(), self.t_env
             )
         returns.clear()
 
         for k, v in stats.items():
             if k != "n_episodes":
                 self.logger.log_stat(
-                    prefix + k + "_mean", v / stats["n_episodes"], self.t_env
+                    "running/" + prefix + k + "_mean", v / stats["n_episodes"], self.t_env
                 )
         stats.clear()
 
