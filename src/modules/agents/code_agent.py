@@ -136,7 +136,7 @@ class CodeAgent(Agent):
         # 3. Message Packaging for Communication
         messages = CoDeBatchedMessageData(agent_id_tensor, intent, x, current_time_step_tensor)
 
-        return x, intent, messages, mu, std
+        return x, hidden_state, intent, messages, mu, std
 
     def forward(
             self, 

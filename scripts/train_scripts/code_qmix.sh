@@ -4,11 +4,23 @@
 # ! Should check every time before running.
 # ! ============================================================================
 # Experiment parameters
-EXPERIMENT_NAME=code_test_run  # Experiment name for logging.
+EXPERIMENT_NAME=code_8m_m0d0_weithted  # Experiment name for logging.
 CONFIG=code_qmix  # Algorithm config name in src/config/alg
-ENV_CONFIG=sc2v2  # Environment config in src/config/envs
-MAP_NAME=protoss_5_vs_5  # Map name, e.g., 3m in StarCraftII.
-REPEAT_TIMES=3  # Times to run the experiment.
+ENV_CONFIG=sc2  # Environment config in src/config/envs
+MAP_NAME=8m  # Map name, e.g., 3m in StarCraftII.
+REPEAT_TIMES=1  # Times to run the experiment.
+
+COMM_GAUSSIAN_DELAY_MEAN=0  # delay mean of communication.
+COMM_GAUSSIAN_DELAY_STD=0   # delay std of communication.
+
+TD_LOSS_WEIGHT=1.0        # Weight for TD loss
+ACTION_LOSS_WEIGHT=0    # Weight for inference loss (future action prediction)
+CONTINUE_LOSS_WEIGHT=0    # Weight for continuity loss (intent stability)
+AUX_LOSS_WEIGHT=0     # Weight for KL divergence loss (intent regularization)
+ENTROPY_LOSS_WEIGHT=0  # Weight for attention entropy regularization
+
+PREDICT_K_FUTURE_ACTIONS=5   # K for future action prediction (L_inf)
+TEMPORAL_DISCOUNT_GAMMA_T=0.9  # Used by agent for timeliness alignment
 
 # arguments in different runs.
 function update_hyperparams() {
@@ -21,6 +33,16 @@ function update_hyperparams() {
 
     # arguments after "with"
     arg_dict["name"]="name=${EXPERIMENT_NAME}_run$((iter))"  # name in tensorboard, sacred, and wandb
+    arg_dict["comm_gaussian_delay_mean"]="comm_gaussian_delay_mean=$COMM_GAUSSIAN_DELAY_MEAN"
+    arg_dict["comm_gaussian_delay_std"]="comm_gaussian_delay_std=$COMM_GAUSSIAN_DELAY_STD"
+
+    arg_dict["td_loss_weight"]="td_loss_weight=$TD_LOSS_WEIGHT"
+    arg_dict["action_loss_weight"]="action_loss_weight=$ACTION_LOSS_WEIGHT"
+    arg_dict["continue_loss_weight"]="continue_loss_weight=$CONTINUE_LOSS_WEIGHT"
+    arg_dict["aux_loss_weight"]="aux_loss_weight=$AUX_LOSS_WEIGHT"
+    arg_dict["entropy_loss_weight"]="entropy_loss_weight=$ENTROPY_LOSS_WEIGHT"
+    arg_dict["predict_k_future_actions"]="predict_k_future_actions=$PREDICT_K_FUTURE_ACTIONS"
+    arg_dict["temporal_discount_gamma_t"]="temporal_discount_gamma_T=$TEMPORAL_DISCOUNT_GAMMA_T"
 
     arg_dict["map_name"]="env_args.map_name=$MAP_NAME"
     }
@@ -79,7 +101,7 @@ else
     PYTHON_SCRIPT_PATH="$WORK_DIR/$PYTHON_SCRIPT" # Path to train script.
 fi
 
-if ! [[ -e $SCRIPT_PATH ]]; then
+if ! [[ -e $PYTHON_SCRIPT_PATH ]]; then
     echo "$(timestamp) | FATAL    | bash         | Run Failed, $PYTHON_SCRIPT_PATH not found." | tee -a "$LOGFILE"
 fi
 

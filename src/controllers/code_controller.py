@@ -134,7 +134,7 @@ class CodeMAC(MAC):
 
         # 2. Intent Extraction Phase
         # Each agent extracts its intent from observations and previous actions
-        encoded_trajectory, intents, sent_messages, intents_mu, intents_std = self.agent.extract_intent(
+        encoded_trajectory, self.hidden_states, intents, sent_messages, intents_mu, intents_std = self.agent.extract_intent(
             obs,                    # Current observations
             self.hidden_states,     # Previous hidden states
             last_actions,           # Previous actions (one-hot)
