@@ -251,7 +251,7 @@ def run_sequential(args, logger):
             for _ in range(n_test_runs):
                 runner.run(test_mode=True)
 
-        new_winrate = logger.stats["running/test_battle_won_mean"][-1][1]
+        new_winrate = logger.stats["matrix/test_battle_won_mean"][-1][1]
         best_model = (new_winrate > max_winrate) or (episode == 0)
         
         if best_model is True:
