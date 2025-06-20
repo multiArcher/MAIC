@@ -7,7 +7,7 @@ import numpy
 def optimize_tensor_display(
         torch_module: ModuleType,
         custom_repr: bool = True,
-        add_display_array: bool = True,
+        add_display_array: bool = False,
         show_device: bool = False,
         show_dtype: bool = False
     ) -> None:
