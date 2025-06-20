@@ -1,7 +1,7 @@
 import copy
 import torch
 import torch.nn.functional as F
-from torch.optim import Adam, AdamW, RMSprop, SGD # type: ignore
+from torch.optim import Adam, AdamW, RMSprop, SGD  # type: ignore
 
 from utils.maker import MixerMaker
 from learners.learner import Learner
@@ -96,7 +96,7 @@ class CodeLearner(Learner):
         terminated = batch["terminated"][:, :-1].float()  # type: ignore
         mask = batch["filled"][:, :-1].float()  # type: ignore
         mask[:, 1:] = mask[:, 1:] * (1 - terminated[:, :-1])  # Mask the final step.
-        avail_actions: torch.Tensor = batch["avail_actions"][:, :-1]  # type: ignore
+        avail_actions: torch.Tensor = batch["avail_actions"]  # type: ignore
         observations = batch["obs"][:, :-1]  # type: ignore
 
         if self.args.standardise_rewards:
@@ -111,7 +111,7 @@ class CodeLearner(Learner):
         #- 2. Online MAC forward.
         self.mac.agent.train()
         self.mac.init_hidden(batch.batch_size)
-        t = slice(0, batch.max_seq_length-1)  # Exclude last timestep
+        t = slice(0, batch.max_seq_length)  # Exclude last timestep
         encoded_trajectory, intents, q_values, intent_mu, intent_std, attn_weights = self.mac.forward(batch, t)
 
         # Pick the Q values for the actions taken by each agent.
@@ -124,8 +124,8 @@ class CodeLearner(Learner):
         intent_actions = self.intent_decoder(
             observations=observations.unsqueeze(-2),    # type: ignore
             actions=actions_onehot,  # type: ignore
-            encoded_trajectory=encoded_trajectory,
-            intents=intents
+            encoded_trajectory=encoded_trajectory[:, :-1],  # Exclude last timestep
+            intents=intents[:, :-1]
             )   # b * t * n * k+1 * n_actions
 
         #- 3. Target MAC forward.
@@ -138,7 +138,7 @@ class CodeLearner(Learner):
             _, _, target_q_values, _, _, _ = self.target_mac.forward(batch, t_target)
 
             # Mask out unavailable actions
-            target_q_values = torch.masked_fill(target_q_values, batch["avail_actions"].unsqueeze(-2)==0, -1e7)  # type: ignore
+            target_q_values = torch.masked_fill(target_q_values, avail_actions.unsqueeze(-2)==0, -1e7)  # type: ignore
 
             # Max over target Q-Values
             if self.args.double_q is True:
@@ -150,7 +150,7 @@ class CodeLearner(Learner):
             else:
                 target_q_values, _ = target_q_values[:, 1:].max(dim=-1, keepdim=True)
             
-            target_joint_action_value = self.target_mixer(target_q_values, batch["state"][:, 1:, None, None])
+            target_joint_action_value = self.target_mixer(target_q_values[:, 1:], batch["state"][:, 1:, None, None])
             
             if self.args.standardise_returns is True:
                 target_joint_action_value = (
@@ -180,7 +180,7 @@ class CodeLearner(Learner):
             
         mask = mask[..., None, None]  # Mask for terminated steps.
 
-        td_error = joint_action_value - td_targets
+        td_error = joint_action_value - td_targets.reshape_as(joint_action_value)  # b * t * 1 * 1 * 1
         masked_td_error = td_error * mask
         td_loss = (masked_td_error**2).sum() / mask.sum()
 
@@ -233,21 +233,21 @@ class CodeLearner(Learner):
             value=0
         )
 
-        cos_similarity = F.cosine_similarity(intents.detach(), last_intents, dim=-1, eps=1e-6)  # b * t-1 * n * 1
-        mask_continuity = mask.squeeze(-1).expand_as(cos_similarity)  # b * t-1 * n * 1
-        masked_continuity = cos_similarity * mask_continuity  # b * t-1 * n * 1
-        continue_loss =  - masked_continuity.sum() / mask_continuity.sum()  # Mean cosine similarity
+        cos_similarity = F.cosine_similarity(intents[:, :-1], last_intents[:, :-1].detach(), dim=-1, eps=1e-6)  # b * t-1 * n * 1
+        continuity_mask = mask.squeeze(-1).expand_as(cos_similarity)  # b * t-1 * n * 1
+        masked_continuity = cos_similarity * continuity_mask  # b * t-1 * n * 1
+        continue_loss =  - masked_continuity.sum() / continuity_mask.sum()  # Mean cosine similarity
 
         # Auxiliary loss.
-        aux_error = 0.5 * (intent_mu**2 + intent_std**2 - torch.log(intent_std**2 + 1e-6) - 1).sum(dim=-1)  # b * t * n
-        mask_aux = mask.squeeze(-1).expand_as(aux_error)  # b * t * n
-        masked_aux_error = aux_error * mask_aux  # b * t * n
-        aux_loss = masked_aux_error.sum() / mask_aux.sum()  # Mean auxiliary loss
+        aux_error = 0.5 * (intent_mu**2 + intent_std**2 - torch.log(intent_std**2 + 1e-6) - 1).sum(dim=-1, keepdim=True)  # b * t * n
+        aux_mask = mask.expand_as(aux_error[:, :-1])  # b * t * n
+        masked_aux_error = aux_error[:, :-1] * aux_mask  # b * t * n
+        aux_loss = masked_aux_error.sum() / aux_mask.sum()  # Mean auxiliary loss
 
         # Intent alignment entropy regularization.
         intent_alignment_entropy = -torch.sum(attn_weights * torch.log(attn_weights + 1e-6), dim=-1)  # b * t * n
-        mask_entropy = mask.squeeze(-1).expand_as(intent_alignment_entropy)  # b * t * n
-        masked_intent_alignment_entropy = intent_alignment_entropy * mask_entropy  # b * t * n
+        mask_entropy = mask.squeeze(-1).expand_as(intent_alignment_entropy[:, :-1])  # b * t * n
+        masked_intent_alignment_entropy = intent_alignment_entropy[:, :-1] * mask_entropy  # b * t * n
         intent_alignment_entropy_loss = masked_intent_alignment_entropy.sum() / mask_entropy.sum()  # Mean intent alignment entropy        
 
         # Enhanced loss calculation with weighted components
@@ -278,6 +278,14 @@ class CodeLearner(Learner):
         # region Enhanced tensorboard logging
         if t_env - self.log_stats_t >= self.args.learner_log_interval:
             with torch.no_grad():            
+                encoded_trajectory = encoded_trajectory[:, :-1]  # Exclude last timestep
+                intents = intents[:, :-1]  # Exclude last timestep
+                q_values = q_values[:, :-1]  # Exclude last timestep
+                intent_mu = intent_mu[:, :-1]  # Exclude last timestep
+                intent_std = intent_std[:, :-1]  # Exclude last timestep
+                attn_weights = attn_weights[:, :-1]  # Exclude last timestep
+
+
                 mask_elems = mask.sum().item()
                 bool_mask_bt = mask.bool() # Create a boolean mask of shape (B, T)
                 
@@ -315,17 +323,17 @@ class CodeLearner(Learner):
                 self.logger.log_stat("intent/diversity_across_agents", masked_intent_var.item(), t_env)
                 
                 # Intent temporal consistency
-                continuity_mean = masked_continuity.sum().item() / mask_continuity.sum().item()
+                continuity_mean = masked_continuity.sum().item() / continuity_mask.sum().item()
                 self.logger.log_stat("intent/temporal_consistency", continuity_mean, t_env)
                 
                 # Intent distribution parameters
                 masked_mu = intent_mu * mask
-                self.logger.log_stat("intent/mu_mean", masked_mu.sum().item() / mask_elems, t_env)
+                self.logger.log_stat("intent/mu_mean", masked_mu.sum().item() / (mask_elems * self.args.n_agents * self.args.intent_dim), t_env)
                 valid_mu = intent_mu[bool_mask_bt.expand_as(intents)]
                 self.logger.log_stat("intent/mu_std", valid_mu.std().item(), t_env)
 
                 masked_std = intent_std * mask
-                self.logger.log_stat("intent/std_mean", masked_std.sum().item() / mask_elems, t_env)
+                self.logger.log_stat("intent/std_mean", masked_std.sum().item() / (mask_elems * self.args.n_agents * self.args.intent_dim), t_env)
                 valid_std = intent_std[bool_mask_bt.expand_as(intents)]
                 self.logger.log_stat("intent/std_std", valid_std.std().item(), t_env)
                 
@@ -340,7 +348,7 @@ class CodeLearner(Learner):
                 self.logger.log_stat("communication/attention_max_mean", masked_attn_max.sum().item() / (mask_elems * self.args.n_agents), t_env)
                 
                 # Communication efficiency (how much attention is used)
-                attn_top_k = torch.topk(attn_weights, k=2, dim=-1)[0]  # [B, T, N, K]
+                attn_top_k = torch.topk(attn_weights, k=int(self.n_agents / 2), dim=-1)[0]  # [B, T, N, K]
                 masked_attn_top_k_sum = attn_top_k.sum(dim=-1) * mask.squeeze(-1)
                 self.logger.log_stat("communication/attention_utilization", masked_attn_top_k_sum.sum().item() / (mask_elems * self.args.n_agents), t_env)
                 

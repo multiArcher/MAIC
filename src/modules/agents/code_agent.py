@@ -123,7 +123,7 @@ class CodeAgent(Agent):
         x = x.reshape(batch_size, n_agents, time_size, 1, -1).transpose(1, 2)
 
         # 2. Intent Generation with Variational Approach
-        intent_encoder_input = torch.cat((x, last_action), dim=-1)
+        intent_encoder_input = torch.cat((x.detach(), last_action), dim=-1)
         intent_params_flat = self.intent_encoder_fc(intent_encoder_input)
         mu, log_var = torch.split(intent_params_flat, self.intent_dim, dim=-1)
 

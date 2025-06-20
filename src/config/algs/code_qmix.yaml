@@ -13,7 +13,7 @@ test_interval: 20000
 log_interval: 20000
 runner_log_interval: 20000
 learner_log_interval: 20000
-t_max: 10050000
+t_max: 10020000
 
 save_model: True # Save the models to disk
 save_model_interval: 1000000 # Save models after this many time steps
@@ -67,11 +67,11 @@ temporal_discount_gamma_T: 0.8  # Used by agent for timeliness alignment
 # ------------------------------------------------------------------------------
 # --- Learner specific parameters ---
 # ------------------------------------------------------------------------------
-target_type: "td"
-# td_lambda: 0.4
+target_type: "td_lambda"
+td_lambda: 0.6
 
 standardise_returns: False
-standardise_rewards: False
+standardise_rewards: True
 
 gamma: 0.99
 
@@ -85,7 +85,7 @@ grad_norm_clip: 10 # Reduce magnitude of gradients above this L2 norm
 batch_size: 64 # Number of episodes to train on
 buffer_size: 5000 # Size of the replay buffer
 
-double_q: False
+double_q: True
 target_update_interval_or_tau: 200  # update the target network every {} episodes
 target_update_interval: 200  # update the target network every {} episodes
 

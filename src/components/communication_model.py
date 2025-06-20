@@ -105,13 +105,17 @@ class CommunicationModel:
         arrival_times_broadcast = self.cache_arrival_times.unsqueeze(1).expand(
             -1, self.max_cache_size, -1, -1, -1, -1
         )
+        sent_times_broadcast = self.cache_sent_times.unsqueeze(1).expand(
+            -1, self.max_cache_size, -1, -1, -1, -1
+        )
 
         # Find the latest arrived message for each agent at each timestep
-        # 2, 3, 1, 4, 5, 2 <= 3 -> T, T, T, F, F, T
-        # T -> arrive time, F -> -1
+        # [2, 3, 3, 4, 5, 6] <= 3 -> [T, T, T, F, F, F]
+        # T -> sent time, F -> -1 : [0, 1, 2, -1, -1, -1]
+        # Find max -> 2
         has_arrived_indices = torch.where(
             arrival_times_broadcast <= self.query_times, 
-            arrival_times_broadcast, 
+            sent_times_broadcast, 
             torch.tensor(-1, device=self.device)
             )
         received_message_sent_time, _ = torch.max(has_arrived_indices, dim=2)
@@ -168,10 +172,10 @@ class CommunicationModel:
             return m
         
         return CoDeBatchedMessageData(
-            sender_id=broadcast_func(messages.sender_id),
-            intents=broadcast_func(messages.intents),
-            hiddens=broadcast_func(messages.hiddens),
-            sent_times=broadcast_func(messages.sent_times)
+            sender_id=broadcast_func(messages.sender_id).detach(),
+            intents=broadcast_func(messages.intents).detach(),
+            hiddens=broadcast_func(messages.hiddens).detach(),
+            sent_times=broadcast_func(messages.sent_times).detach()
         )
 
     def _no_communication(self, messages: CoDeBatchedMessageData) -> CoDeBatchedMessageData:
