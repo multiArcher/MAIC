@@ -176,27 +176,27 @@ class EpisodeRunner(Runner):
     def _log(self, returns, stats, prefix):
         if self.args.common_reward:
             # Team reward
-            self.logger.log_stat("matrix/" + prefix + "return_mean", np.mean(returns), self.t_env)
-            self.logger.log_stat("matrix/" + prefix + "return_std", np.std(returns), self.t_env)
+            self.logger.log_stat("metric/" + prefix + "return_mean", np.mean(returns), self.t_env)
+            self.logger.log_stat("metric/" + prefix + "return_std", np.std(returns), self.t_env)
         else:
             # Agent reward
             for i in range(self.args.n_agents):
                 self.logger.log_stat(
-                    "matrix/" + prefix + f"agent_{i}_return_mean",
+                    "metric/" + prefix + f"agent_{i}_return_mean",
                     np.array(returns)[:, i].mean(),
                     self.t_env,
                 )
                 self.logger.log_stat(
-                    "matrix/" + prefix + f"agent_{i}_return_std",
+                    "metric/" + prefix + f"agent_{i}_return_std",
                     np.array(returns)[:, i].std(),
                     self.t_env,
                 )
             total_returns = np.array(returns).sum(axis=-1)
             self.logger.log_stat(
-                "matrix/" + prefix + "total_return_mean", total_returns.mean(), self.t_env
+                "metric/" + prefix + "total_return_mean", total_returns.mean(), self.t_env
             )
             self.logger.log_stat(
-                "matrix/" + prefix + "total_return_std", total_returns.std(), self.t_env
+                "metric/" + prefix + "total_return_std", total_returns.std(), self.t_env
             )
         returns.clear()
 

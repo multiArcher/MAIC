@@ -328,12 +328,12 @@ class CodeLearner(Learner):
                 
                 # Intent distribution parameters
                 masked_mu = intent_mu * mask
-                self.logger.log_stat("intent/mu_mean", masked_mu.sum().item() / mask_elems, t_env)
+                self.logger.log_stat("intent/mu_mean", masked_mu.sum().item() / (mask_elems * self.args.n_agents * self.args.intent_dim), t_env)
                 valid_mu = intent_mu[bool_mask_bt.expand_as(intents)]
                 self.logger.log_stat("intent/mu_std", valid_mu.std().item(), t_env)
 
                 masked_std = intent_std * mask
-                self.logger.log_stat("intent/std_mean", masked_std.sum().item() / mask_elems, t_env)
+                self.logger.log_stat("intent/std_mean", masked_std.sum().item() / (mask_elems * self.args.n_agents * self.args.intent_dim), t_env)
                 valid_std = intent_std[bool_mask_bt.expand_as(intents)]
                 self.logger.log_stat("intent/std_std", valid_std.std().item(), t_env)
                 
