@@ -236,7 +236,7 @@ class CodeLearner(Learner):
         cos_similarity = F.cosine_similarity(intents[:, :-1], last_intents[:, :-1].detach(), dim=-1, eps=1e-6)  # b * t-1 * n * 1
         continuity_mask = mask.squeeze(-1).expand_as(cos_similarity)  # b * t-1 * n * 1
         masked_continuity = cos_similarity * continuity_mask  # b * t-1 * n * 1
-        continue_loss =  - masked_continuity.sum() / continuity_mask.sum()  # Mean cosine similarity
+        continue_loss =  - masked_continuity.sum() / continuity_mask.sum() + 1  # Mean cosine similarity
 
         # Auxiliary loss.
         aux_error = 0.5 * (intent_mu**2 + intent_std**2 - torch.log(intent_std**2 + 1e-6) - 1).sum(dim=-1, keepdim=True)  # b * t * n
