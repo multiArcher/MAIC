@@ -59,6 +59,12 @@ class BasicMAC:
     def cuda(self):
         self.agent.cuda()
 
+    def train(self):
+        self.agent.train()
+        
+    def eval(self):
+        self.agent.eval()
+
     def save_models(self, path):
         th.save(self.agent.state_dict(), "{}/agent.th".format(path))
 
