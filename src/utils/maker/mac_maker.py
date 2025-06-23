@@ -69,3 +69,9 @@ class MACMaker(Maker):
         from controllers.code_controller import CodeMAC
         return CodeMAC(*args, **kwargs)
     
+    @staticmethod
+    def make_code_kernel_mac(*args, **kwargs) -> MAC:
+        """Code Kernel MAC"""
+        from controllers.code_kernel_controller import CodeKernelMAC
+        return CodeKernelMAC(*args, **kwargs)
+    

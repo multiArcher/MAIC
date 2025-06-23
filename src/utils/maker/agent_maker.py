@@ -104,3 +104,9 @@ class AgentMaker(Maker):
         from modules.agents.code_agent import CodeAgent
         return CodeAgent(*args, **kwargs)
     
+    @staticmethod
+    def make_code_kernel_agent(*args, **kwargs) -> Agent:
+        """Code Kernel agent using attention to merge obs."""
+        from modules.agents.code_kernel_agent import CodeKernelAgent
+        return CodeKernelAgent(*args, **kwargs)
+    

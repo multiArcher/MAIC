@@ -80,3 +80,8 @@ class LearnerMaker(Maker):
         from learners.code_learner import CodeLearner
         return CodeLearner(*args, **kwargs)
     
+    @staticmethod
+    def make_code_kernel_learner(*args, **kwargs) -> 'Learner':
+        """Kernel (QMIX-like) learner."""
+        from learners.code_kernel_learner import CodeKernelLearner
+        return CodeKernelLearner(*args, **kwargs)
