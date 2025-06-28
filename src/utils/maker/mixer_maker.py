@@ -54,8 +54,8 @@ class MixerMaker(Maker):
         return ICMQMixer(*args, **kwargs)
     
     @staticmethod
-    def make_new_mixer(*args, **kwargs) -> Module:
+    def make_new_qmix_mixer(*args, **kwargs) -> Module:
         """QMIX implementation in PyMARL2."""
-        from modules.mixers.new_mixer import NewMixer
-        return NewMixer(*args, **kwargs)
+        from modules.mixers.new_qmix_mixer import NewQMIXMixer
+        return NewQMIXMixer(*args, **kwargs)
     

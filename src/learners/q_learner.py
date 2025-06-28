@@ -153,20 +153,20 @@ class QLearner(Learner):
             self._update_targets_soft(self.args.target_update_interval_or_tau)
 
         if t_env - self.log_stats_t >= self.args.learner_log_interval:
-            self.logger.log_stat("loss", loss.item(), t_env)
-            self.logger.log_stat("grad_norm", grad_norm.item(), t_env)
+            self.logger.log_stat("loss/td_loss", loss.item(), t_env)
+            self.logger.log_stat("running/grad_norm", grad_norm.item(), t_env)
             mask_elems = mask.sum().item()
             self.logger.log_stat(
-                "td_error_abs", (masked_td_error.abs().sum().item() / mask_elems), t_env
+                "q_values/td_error_abs", (masked_td_error.abs().sum().item() / mask_elems), t_env
             )
             self.logger.log_stat(
-                "q_taken_mean",
+                "q_values/q_taken_mean",
                 (chosen_action_qvals * mask).sum().item()
                 / (mask_elems * self.args.n_agents),
                 t_env,
             )
             self.logger.log_stat(
-                "target_mean",
+                "q_values/target_mean",
                 (targets * mask).sum().item() / (mask_elems * self.args.n_agents),
                 t_env,
             )
