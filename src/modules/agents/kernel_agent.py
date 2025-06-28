@@ -6,17 +6,11 @@ from utils.th_utils import get_parameters_num
 from utils.custom_logging import PyMARLLogger
 
 
-class CodeKernelAgent(Agent):
-    """
-    Kernel Agent, representing the backbone of CoDe (an optimized QMIX-style agent).
-    
-    Core components:
-    1. GRU-based history encoding for trajectory representation.
-    2. Q-value estimation from the encoded history.
-    """
+class KernelAgent(Agent):
+    """Kernel Agent with QMIX for Multi-Agent Reinforcement Learning."""
     
     def __init__(self, input_shape, args):
-        super(CodeKernelAgent, self).__init__()
+        super(KernelAgent, self).__init__()
         self.args = args
         self.device = args.device
         
@@ -26,12 +20,12 @@ class CodeKernelAgent(Agent):
         self.n_actions = args.n_actions
 
         # --- Core Agent Architecture ---
-        self.activation = nn.LeakyReLU()
+        self.activation = nn.LeakyReLU
         
         # 1. RNN for history encoding h_i^t
         self.rnn_projection = nn.Sequential(
             nn.Linear(input_shape, self.agent_hidden_dim),
-            self.activation,
+            self.activation()
         )
         self.rnn = nn.GRU(
             self.agent_hidden_dim, 
@@ -41,11 +35,7 @@ class CodeKernelAgent(Agent):
         )
 
         # 2. Q-value Network
-        self.q_net = nn.Sequential(
-            nn.Linear(self.agent_hidden_dim, self.agent_hidden_dim),
-            self.activation,
-            nn.Linear(self.agent_hidden_dim, self.n_actions)
-        )
+        self.q_net = nn.Linear(self.agent_hidden_dim, self.n_actions)
 
         PyMARLLogger.fast_logger().info(f"Kernel Agent Size: {get_parameters_num(self.parameters())}")
 
