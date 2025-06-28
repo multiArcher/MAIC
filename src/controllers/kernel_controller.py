@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import torch
 from torch.nn.functional import one_hot
@@ -62,7 +62,7 @@ class KernelMAC(MAC):
             t = slice(t, t + 1)
         
         obs, _, _, _ = self._build_inputs(ep_batch, t)
-        avail_actions: torch.Tensor = ep_batch["avail_actions"][:, t].unsqueeze(-2)
+        avail_actions = cast(torch.Tensor, ep_batch["avail_actions"][:, t]).unsqueeze(-2)
 
         action_values, self.hidden_states = self.agent(obs, self.hidden_states)
         

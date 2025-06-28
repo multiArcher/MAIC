@@ -1,4 +1,7 @@
 import copy
+from typing import cast
+import importlib
+
 import torch
 from torch.optim import Adam, AdamW, RMSprop, SGD
 
@@ -56,10 +59,10 @@ class KernelQLearner(Learner):
                 self.optimizer = RMSprop(params=self.params, lr=args.lr, alpha=args.optim_alpha, eps=args.optim_eps)
             case "rad":
                 try:
-                    from rad.optim import RAD
-                    self.optimizer = RAD(params=self.params, lr=args.lr, max_iter=30000)
+                    rad_optim = importlib.import_module("rad.optim")
+                    self.optimizer = rad_optim.RAD(params=self.params, lr=args.lr, max_iter=30000)
                 except ImportError:
-                    self.logger.error("RAD optimizer is not installed. Please install refering to https://github.com/TobiasLv/RAD. Falling back to Adam.")
+                    self.logger.error("RAD optimizer is not installed. Please install referring to https://github.com/TobiasLv/RAD.")
                     self.optimizer = Adam(params=self.params, lr=args.lr)
             case _:
                 raise ValueError(f"Optimizer {args.optimizer} not recognized.")
@@ -73,12 +76,12 @@ class KernelQLearner(Learner):
             self.rew_ms = RunningMeanStd(shape=rew_shape, device=self.device)
 
     def train(self, batch: EpisodeBatch, t_env: int, episode_num: int):
-        rewards = batch["reward"][:, :-1]
-        actions = batch["actions"][:, :-1]
-        terminated = batch["terminated"][:, :-1].float()
-        mask = batch["filled"][:, :-1].float()
+        rewards = cast(torch.Tensor, batch["reward"][:, :-1])
+        actions = cast(torch.Tensor, batch["actions"][:, :-1])
+        terminated = cast(torch.Tensor, batch["terminated"][:, :-1]).float()
+        mask = cast(torch.Tensor, batch["filled"][:, :-1]).float()
         mask[:, 1:] = mask[:, 1:] * (1 - terminated[:, :-1])
-        avail_actions = batch["avail_actions"]
+        avail_actions = cast(torch.Tensor, batch["avail_actions"])
 
         if self.args.standardise_rewards:
             self.rew_ms.update(rewards)
