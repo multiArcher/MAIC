@@ -7,21 +7,15 @@ from torch.nn.functional import one_hot
 from .mac import MAC
 from utils.maker import AgentMaker, ActionSelectorMaker
 from components.action_selectors.action_selector import ActionSelector
-from modules.agents.code_kernel_agent import CodeKernelAgent
+from modules.agents.kernel_agent import KernelAgent
 from components.episode_buffer import EpisodeBatch
 
 
-class CodeKernelMAC(MAC):
-    """
-    Multi-Agent Controller for the Kernel (QMIX-like) Algorithm.
-    
-    This controller orchestrates a basic multi-agent system:
-    1. Manages agent action selection.
-    2. Processes observations and builds agent inputs.
-    """
+class KernelMAC(MAC):
+    """Kernel MAC (Multi-Agent Controller) for managing agents in a multi-agent reinforcement learning environment."""
     
     def __init__(self, scheme: dict, groups: dict, args: SimpleNamespace):
-        super(CodeKernelMAC, self).__init__(scheme, groups, args)
+        super(KernelMAC, self).__init__(scheme, groups, args)
         self.args: SimpleNamespace = args
         self.device: torch.device = args.device
         self.n_agents: int = args.n_agents
@@ -71,18 +65,6 @@ class CodeKernelMAC(MAC):
         avail_actions: torch.Tensor = ep_batch["avail_actions"][:, t].unsqueeze(-2)
 
         action_values, self.hidden_states = self.agent(obs, self.hidden_states)
-
-        if self.agent_output_type == "pi_logits":
-            if getattr(self.args, "mask_before_softmax", True):
-                action_values[avail_actions == 0] = -1e10
-            action_values = torch.nn.functional.softmax(action_values, dim=-1)
-            if not test_mode:
-                epsilon_action_num = avail_actions.sum(dim=-1, keepdim=True).float()
-                action_values = (
-                    (1 - self.action_selector.epsilon) * action_values +
-                    torch.ones_like(action_values) * self.action_selector.epsilon / epsilon_action_num
-                )
-                action_values[avail_actions == 0] = 0.0
         
         return action_values
 
@@ -121,7 +103,7 @@ class CodeKernelMAC(MAC):
         return input_shape
 
     def _build_agents(self, input_shape):
-        self.agent: CodeKernelAgent = AgentMaker.make(self.args.agent, input_shape, self.args)
+        self.agent: KernelAgent = AgentMaker.make(self.args.agent, input_shape, self.args)
         
     def _build_inputs(self, batch, t):
         batch_size, _, n_agents, _ = batch["obs"].shape

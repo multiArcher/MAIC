@@ -1,31 +1,33 @@
 # ------------------------------------------------------------------------------
 # ---Environment specific parameters---
 # ------------------------------------------------------------------------------
-name: "CoDe_qmix"
+name: "kernel_qmix"
 
 runner: "parallel"
-batch_size_run: 8
+batch_size_run: 16
 
-test_nepisode: 64
-test_interval: 20000
-log_interval: 20000
-runner_log_interval: 20000
-learner_log_interval: 20000
-t_max: 10020000
+entity_scheme: False
+
+test_nepisode: 128
+test_interval: 50000
+log_interval: 50000
+runner_log_interval: 50000
+learner_log_interval: 50000
+t_max: 10050000
 
 save_model: True # Save the models to disk
 save_model_interval: 1000000 # Save models after this many time steps
 
 use_tensorboard: True # Log results to tensorboard
-buffer_cpu_only: True # If true we won't keep all the replay buffer in vram
+buffer_cpu_only: False # If true we won't keep all the replay buffer in vram
 
 # ------------------------------------------------------------------------------
 # --- Algorithm specific parameters ---
 # ------------------------------------------------------------------------------
-mac: "code_kernel_mac" # Basic controller
-agent: "code_kernel_agent" # Default rnn agent
-learner: "code_kernel_learner"  # use the Q_Learner to train
-mixer: "new_mixer"  # Mixing network.
+mac: "kernel_mac" # Basic controller
+agent: "kernel_agent" # Default rnn agent
+learner: "kernel_q_learner"  # use the Q_Learner to train
+mixer: "new_qmix_mixer"  # Mixing network.
 
 # ------------------------------------------------------------------------------
 # --- Controller specific parameters ---
@@ -35,12 +37,8 @@ agent_output_type: "q"
 action_selector: "epsilon_greedy" # use epsilon greedy action selector
 epsilon_start: 1.0
 epsilon_finish: 0.05
-epsilon_anneal_time: 100000
+epsilon_anneal_time: 500000
 evaluation_epsilon: 0.0
-
-comm_type: "broadcast"  # Communication type: "broadcast", "no_comm"
-comm_gaussian_delay_mean: 3.0 # Mean of the Gaussian delay for communication
-comm_gaussian_delay_std: 1.0  # Standard deviation of the Gaussian delay for communication
 
 # ------------------------------------------------------------------------------
 # --- Agent specific parameters ---
@@ -51,32 +49,22 @@ agent_hidden_dim: 64 # Size of hidden state for default rnn agent
 obs_agent_id: True # Include the agent's one_hot id in the observation
 obs_last_action: True # Include the agent's last action (one_hot) in the observation
 
-intent_dim: 32  # Dimension of the intent vector e_i^t
-intent_encoder_hidden_dim: 64 # List of hidden layer sizes for intent encoder MLP
-intent_decoder_gru_hidden_dim: 64 # Hidden dim for intent decoder GRU
-dual_alignment_attn_dim: 64 # Size of the attention embedding for intent decoder
-
-predict_k_future_actions: 5   # K for future action prediction (L_inf)
-intent_action_predictor_hidden_sizes: 64 # Hidden layer sizes for action predictor MLP
-
-temporal_discount_gamma_T: 0.8  # Used by agent for timeliness alignment
-
-
 # ------------------------------------------------------------------------------
 # --- Learner specific parameters ---
 # ------------------------------------------------------------------------------
-target_type: "td_lambda"
-td_lambda: 0.6
+target_type: "td"
+# target_type: "td_lambda"
+# td_lambda: 0.4
 
 standardise_returns: False
 standardise_rewards: True
 
 gamma: 0.99
 
-optimizer: AdamW  # Not effective in some epymarl learner. They are fixed.
-lr: 0.0005 # Learning rate for agents
-optim_alpha: 0.99 # RMSProp alpha
-optim_eps: 0.00001 # RMSProp epsilon
+optimizer: adamW  # Not effective in some epymarl learner. They are fixed.
+lr: 0.0004 # Learning rate for agents
+# optim_alpha: 0.99 # RMSProp alpha
+# optim_eps: 0.00001 # RMSProp epsilon
 
 grad_norm_clip: 10 # Reduce magnitude of gradients above this L2 norm
 
@@ -86,13 +74,6 @@ buffer_size: 5000 # Size of the replay buffer
 double_q: True
 target_update_interval_or_tau: 200  # update the target network every {} episodes
 target_update_interval: 200  # update the target network every {} episodes
-
-# Loss component weights
-td_loss_weight: 1.0             # Weight for TD loss
-action_loss_weight: 0.0001         # Weight for inference loss (future action prediction)
-continue_loss_weight: 0.0001       # Weight for continuity loss (intent stability)
-aux_loss_weight: 0.0005           # Weight for KL divergence loss (intent regularization)
-entropy_loss_weight: 0.0001       # Weight for attention entropy regularization
 
 # ------------------------------------------------------------------------------
 # --- Mixer specific parameters ---

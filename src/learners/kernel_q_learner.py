@@ -5,23 +5,23 @@ from torch.optim import Adam, AdamW, RMSprop, SGD
 from utils.maker import MixerMaker
 from learners.learner import Learner
 from components.episode_buffer import EpisodeBatch
-from controllers.code_kernel_controller import CodeKernelMAC
+from controllers.kernel_controller import KernelMAC
 from utils.custom_logging import PyMARLLogger
 from utils.th_utils import get_parameters_num
 from components.standarize_stream import RunningMeanStd
 from utils.rl_utils import build_q_lambda_targets, new_build_td_lambda_targets
 
 
-class CodeKernelLearner(Learner):
+class KernelQLearner(Learner):
     """
     Learner for the Kernel (QMIX-like) algorithm.
     
     This learner computes the standard TD-loss for value-based MARL.
     """
     
-    def __init__(self, mac: CodeKernelMAC, scheme, logger, args):
+    def __init__(self, mac: KernelMAC, scheme, logger, args):
         self.logger = PyMARLLogger("run")
-        super(CodeKernelLearner, self).__init__()
+        super(KernelQLearner, self).__init__()
         
         self.args = args
         self.device = args.device
@@ -54,6 +54,13 @@ class CodeKernelLearner(Learner):
                 self.optimizer = SGD(params=self.params, lr=args.lr)
             case "rmsprop":
                 self.optimizer = RMSprop(params=self.params, lr=args.lr, alpha=args.optim_alpha, eps=args.optim_eps)
+            case "rad":
+                try:
+                    from rad.optim import RAD
+                    self.optimizer = RAD(params=self.params, lr=args.lr, max_iter=30000)
+                except ImportError:
+                    self.logger.error("RAD optimizer is not installed. Please install refering to https://github.com/TobiasLv/RAD. Falling back to Adam.")
+                    self.optimizer = Adam(params=self.params, lr=args.lr)
             case _:
                 raise ValueError(f"Optimizer {args.optimizer} not recognized.")
 
@@ -79,28 +86,33 @@ class CodeKernelLearner(Learner):
 
         self.mac.agent.train()
         self.mac.init_hidden(batch.batch_size)
-        t = slice(0, batch.max_seq_length)
-        q_values = self.mac.forward(batch, t)
 
-        choosen_action_values = torch.gather(q_values, dim=-1, index=actions.unsqueeze(-1))
-        joint_action_value = self.mixer(choosen_action_values, batch["state"][:, :-1, None, None])
+        t_slice = slice(0, batch.max_seq_length)
+        q_values = self.mac.forward(batch, t_slice)  # 0 ~ T
+
+        choosen_action_values = torch.gather(q_values, dim=-1, index=actions.unsqueeze(-1))  # 0 ~ T-1
+        joint_action_value = self.mixer(
+            choosen_action_values, batch["state"][:, :-1, None, None]
+            )  # 0 ~ T-1
 
         with torch.no_grad():
             self.target_mac.train()
             self.target_mac.init_hidden(batch.batch_size)
-            t_target = slice(0, batch.max_seq_length)
-            target_q_values = self.target_mac.forward(batch, t_target)
+
+            target_q_values = self.target_mac.forward(batch, t_slice)  # 0 ~ T            
             target_q_values = torch.masked_fill(target_q_values, avail_actions.unsqueeze(-2)==0, -1e7)
 
             if self.args.double_q:
-                mac_out_detach = q_values.detach().clone()
+                mac_out_detach = q_values.detach().clone()  # 0 ~ T
                 mac_out_detach = torch.masked_fill(mac_out_detach, avail_actions.unsqueeze(-2)==0, -1e7)
-                cur_max_actions = mac_out_detach.max(dim=-1, keepdim=True)[1]
-                target_q_values = torch.gather(target_q_values, dim=-1, index=cur_max_actions)
+                cur_max_actions = mac_out_detach.max(dim=-1, keepdim=True)[1]  # 0 ~ T
+                target_q_values = torch.gather(target_q_values, dim=-1, index=cur_max_actions)  # 0 ~ T
             else:
-                target_q_values, _ = target_q_values[:, 1:].max(dim=-1, keepdim=True)
+                target_q_values, _ = target_q_values.max(dim=-1, keepdim=True)  # 0 ~ T
             
-            target_joint_action_value = self.target_mixer(target_q_values[:, 1:], batch["state"][:, 1:, None, None])
+            target_joint_action_value = self.target_mixer(
+                target_q_values, batch["state"][:, :, None, None]
+                )  # 0 ~ T
             
             if self.args.standardise_returns:
                 target_joint_action_value = (
@@ -109,16 +121,19 @@ class CodeKernelLearner(Learner):
 
         with torch.no_grad():
             match target_type := getattr(self.args, "target_type", "td"):
+                # 0 ~ T-1
                 case "td":
-                    td_targets = rewards[..., None, None] + self.args.gamma * target_joint_action_value * (1 - terminated[..., None, None])
+                    td_targets = rewards[..., None, None] + self.args.gamma * target_joint_action_value[:, 1:] * (1 - terminated[..., None, None])
                 case "td_lambda":
+                    # Note rewards, terminated, mask is 0 ~ T-1, target_joint_action_value is 0 ~ T.
                     td_targets = new_build_td_lambda_targets(rewards, terminated, mask, target_joint_action_value,
                                                       self.args.gamma, self.args.td_lambda)
                 case "q_lambda":
-                    qvals = torch.gather(target_q_values[:, 1:], -1, actions.unsqueeze(-1)).squeeze(-1)
-                    qvals = self.target_mixer(qvals, batch["state"][:, 1:, None, None])
-                    td_targets = build_q_lambda_targets(rewards, terminated, mask, target_joint_action_value, qvals,
-                                                     self.args.gamma, self.args.td_lambda)
+                    raise NotImplementedError("Q-Lambda targets are not implemented in KernelQLearner.")
+                    # qvals = torch.gather(target_q_values[:, 1:], -1, actions.unsqueeze(-1)).squeeze(-1)
+                    # qvals = self.target_mixer(qvals, batch["state"][:, 1:, None, None])
+                    # td_targets = build_q_lambda_targets(rewards, terminated, mask, target_joint_action_value, qvals,
+                    #                                  self.args.gamma, self.args.td_lambda)
                 case _:
                     raise ValueError(f"Invalid target type {target_type}")
             

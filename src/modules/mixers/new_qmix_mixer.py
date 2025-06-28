@@ -3,12 +3,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from utils.th_utils import orthogonal_init_
-from torch.nn import LayerNorm
 
 
-class NewMixer(nn.Module):
+class NewQMIXMixer(nn.Module):
     def __init__(self, args, abs=True):
-        super(NewMixer, self).__init__()
+        super(NewQMIXMixer, self).__init__()
 
         self.args = args
         self.n_agents = args.n_agents
@@ -17,11 +16,12 @@ class NewMixer(nn.Module):
 
         self.abs = abs  # monotonicity constraint
         self.qmix_pos_func = getattr(self.args, "qmix_pos_func", "abs")
+        self.activation_func = torch.nn.LeakyReLU
 
         # hyper w1 b1
         self.hyper_w1 = nn.Sequential(
                             nn.Linear(self.input_dim, args.hypernet_embed),
-                            nn.ReLU(inplace=True),
+                            self.activation_func(inplace=True),
                             nn.Linear(args.hypernet_embed, self.n_agents * self.embed_dim)
                         )
         self.hyper_b1 = nn.Linear(self.input_dim, self.embed_dim)
@@ -29,12 +29,12 @@ class NewMixer(nn.Module):
         # hyper w2 b2
         self.hyper_w2 = nn.Sequential(
                             nn.Linear(self.input_dim, args.hypernet_embed),
-                            nn.ReLU(inplace=True),
+                            self.activation_func(inplace=True),
                             nn.Linear(args.hypernet_embed, self.embed_dim)
                         )
         self.hyper_b2 = nn.Sequential(
                             nn.Linear(self.input_dim, self.embed_dim),
-                            nn.ReLU(inplace=True),
+                            self.activation_func(inplace=True),
                             nn.Linear(self.embed_dim, 1)
                         )
 
@@ -56,10 +56,12 @@ class NewMixer(nn.Module):
             w2 = self.pos_func(w2)
 
         # Forward
-        # hidden = F.elu(qvals.transpose(-3, -1) @ w1.transpose(-3, -2) + b1)  # b * t * 1 * 1 * d
-        hidden = F.elu(torch.einsum("btnaq,btnaw->btaqw", qvals, w2) + b1)  # b * t * 1 * 1 * d
+        hidden = F.elu(qvals.transpose(-3, -1) @ w1.transpose(-3, -2) + b1)  # b * t * 1 * 1 * d
+        # hidden = F.elu(torch.einsum("btnaq,btnaw->btaqw", qvals, w1) + b1)  # b * t * 1 * 1 * d
         y = hidden @ w2.transpose(-1, -2) + b2  # b * t * 1 * 1 * 1
-
+        
+        # hidden = torch.einsum("btn,btnd->btd", qvals, w1) + b1  # b * t * 1 * 1 * d
+        # y = torch.einsum("btd,btd->bt", hidden, w2).unsqueeze(-1) + b2
         return y
 
     def pos_func(self, x):

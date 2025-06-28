@@ -4,11 +4,12 @@
 # ! Should check every time before running.
 # ! ============================================================================
 # Experiment parameters
-EXPERIMENT_NAME=_linux_train_template  # Experiment name for logging.
-CONFIG=qmix  # Algorithm config name in src/config/alg
+EXPERIMENT_NAME=kernnel_qmix  # Experiment name for logging.
+CONFIG=kernel_qmix  # Algorithm config name in src/config/alg
 ENV_CONFIG=sc2  # Environment config in src/config/envs
-MAP_NAME=3m  # Map name, e.g., 3m in StarCraftII.
-REPEAT_TIMES=3  # Times to run the experiment.
+MAP_NAME=5m_vs_6m  # Map name, e.g., 3m in StarCraftII.
+REPEAT_TIMES=1  # Times to run the experiment.
+BATCH_SIZE_RUN=16
 
 # arguments in different runs.
 function update_hyperparams() {
@@ -21,6 +22,8 @@ function update_hyperparams() {
 
     # arguments after "with"
     arg_dict["name"]="name=${EXPERIMENT_NAME}_run$((iter))"  # name in tensorboard, sacred, and wandb
+    arg_dict["obs_last_action"]="obs_last_action=$OBS_LAST_ACTION"
+    arg_dict["batch_size_run"]="batch_size_run=$BATCH_SIZE_RUN"
 
     arg_dict["map_name"]="env_args.map_name=$MAP_NAME"
     }
@@ -44,7 +47,7 @@ LOG_DIR="$WORK_DIR/log"     # Log directory for logging terminal outputs.
 PYTHON_SCRIPT="src/main.py"     # Path to python script in work dir. Can be absolute or relative to work dir.
 
 # Environment parameters passed to the Python script.
-BUFFER_CPU_ONLY=True
+BUFFER_CPU_ONLY=False
 DEVICE=cuda
 
 # arguments for different environments.
@@ -58,7 +61,6 @@ function update_env_params() {
 # ? ============================================================================
 
 SEPERATOR="------------------------------------------------------------------------------------------------------------------------"
-
 timestamp() {
     date +"%Y-%m-%d_%H-%M-%S"
 }
@@ -70,7 +72,7 @@ if ! [[ -d $WORK_DIR ]]; then
     echo "Work dir: $WORK_DIR not found. Making directory."
     mkdir -p "$WORK_DIR"
 fi
-cd "$WORK_DIR"
+cd "$WORK_DIR" || exit
 
 # Check if Python script exists
 if [[ $PYTHON_SCRIPT = /* ]]; then
@@ -85,6 +87,7 @@ fi
 
 # Create log directory if it doesn't exist
 mkdir -p "$LOG_DIR"
+
 
 # Python args passed to the Python command
 declare -A args
