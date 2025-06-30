@@ -4,10 +4,10 @@
 # ! Should check every time before running.
 # ! ============================================================================
 # Experiment parameters
-EXPERIMENT_NAME=code_8m_m0d0_weithted  # Experiment name for logging.
+EXPERIMENT_NAME=code_qmix  # Experiment name for logging.
 CONFIG=code_qmix  # Algorithm config name in src/config/alg
 ENV_CONFIG=sc2  # Environment config in src/config/envs
-MAP_NAME=8m  # Map name, e.g., 3m in StarCraftII.
+MAP_NAME=5m_vs_6m  # Map name, e.g., 3m in StarCraftII.
 REPEAT_TIMES=1  # Times to run the experiment.
 
 COMM_GAUSSIAN_DELAY_MEAN=0  # delay mean of communication.
@@ -35,6 +35,7 @@ function update_hyperparams() {
     arg_dict["name"]="name=${EXPERIMENT_NAME}_run$((iter))"  # name in tensorboard, sacred, and wandb
     arg_dict["comm_gaussian_delay_mean"]="comm_gaussian_delay_mean=$COMM_GAUSSIAN_DELAY_MEAN"
     arg_dict["comm_gaussian_delay_std"]="comm_gaussian_delay_std=$COMM_GAUSSIAN_DELAY_STD"
+    arg_dict["batch_size_run"]="batch_size_run=$BATCH_SIZE_RUN"
 
     arg_dict["td_loss_weight"]="td_loss_weight=$TD_LOSS_WEIGHT"
     arg_dict["action_loss_weight"]="action_loss_weight=$ACTION_LOSS_WEIGHT"
@@ -66,7 +67,7 @@ LOG_DIR="$WORK_DIR/log"     # Log directory for logging terminal outputs.
 PYTHON_SCRIPT="src/main.py"     # Path to python script in work dir. Can be absolute or relative to work dir.
 
 # Environment parameters passed to the Python script.
-BUFFER_CPU_ONLY=True
+BUFFER_CPU_ONLY=False
 DEVICE=cuda
 
 # arguments for different environments.

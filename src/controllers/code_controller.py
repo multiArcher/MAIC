@@ -8,7 +8,7 @@
 """
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import torch
 from torch.nn.functional import one_hot
@@ -18,7 +18,6 @@ from utils.maker import AgentMaker, ActionSelectorMaker
 from components.action_selectors.action_selector import ActionSelector
 from modules.agents.code_agent import CodeAgent
 from components.communication_model import CommunicationModel
-from utils.custom_logging import PyMARLLogger
 from components.episode_buffer import EpisodeBatch
 
 
@@ -55,7 +54,6 @@ class CodeMAC(MAC):
             delay_mean=args.comm_gaussian_delay_mean, 
             delay_std=args.comm_gaussian_delay_std
             )
-
 
         # Storage for agent hidden states across timesteps
         self.hidden_states: torch.Tensor
@@ -130,7 +128,7 @@ class CodeMAC(MAC):
         
         # Build structured inputs: observations, actions, timestamps, agent IDs
         obs, last_actions, time_step_tensor, agent_id_tensor = self._build_inputs(ep_batch, t)
-        avail_actions: torch.Tensor = ep_batch["avail_actions"][:, t].unsqueeze(-2)  # [B, T, N, 1, A]
+        avail_actions: torch.Tensor = cast(torch.Tensor, ep_batch["avail_actions"][:, t]).unsqueeze(-2)  # [B, T, N, 1, A]
 
         # 2. Intent Extraction Phase
         # Each agent extracts its intent from observations and previous actions

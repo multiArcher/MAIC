@@ -27,7 +27,7 @@ buffer_cpu_only: True # If true we won't keep all the replay buffer in vram
 mac: "code_mac" # Basic controller
 agent: "code_agent" # Default rnn agent
 learner: "code_learner"  # use the Q_Learner to train
-mixer: "new_mixer"  # Mixing network.
+mixer: "new_qmix_mixer"  # Mixing network.
 
 # ------------------------------------------------------------------------------
 # --- Controller specific parameters ---
@@ -67,8 +67,9 @@ temporal_discount_gamma_T: 0.8  # Used by agent for timeliness alignment
 # ------------------------------------------------------------------------------
 # --- Learner specific parameters ---
 # ------------------------------------------------------------------------------
-target_type: "td_lambda"
-td_lambda: 0.6
+target_type: "td"
+# target_type: "td_lambda"
+# td_lambda: 0.6
 
 standardise_returns: False
 standardise_rewards: True
@@ -91,10 +92,10 @@ target_update_interval: 200  # update the target network every {} episodes
 
 # Loss component weights
 td_loss_weight: 1.0             # Weight for TD loss
-action_loss_weight: 0.1         # Weight for inference loss (future action prediction)
-continue_loss_weight: 0.1       # Weight for continuity loss (intent stability)
-aux_loss_weight: 0.1           # Weight for KL divergence loss (intent regularization)
-entropy_loss_weight: 0.1       # Weight for attention entropy regularization
+action_loss_weight: 0.01         # Weight for inference loss (future action prediction)
+continue_loss_weight: 0.01       # Weight for continuity loss (intent stability)
+aux_loss_weight: 0.01           # Weight for KL divergence loss (intent regularization)
+entropy_loss_weight: 0.01       # Weight for attention entropy regularization
 
 # ------------------------------------------------------------------------------
 # --- Mixer specific parameters ---
