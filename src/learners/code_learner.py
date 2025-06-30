@@ -1,4 +1,7 @@
 import copy
+from typing import cast
+import importlib
+
 import torch
 import torch.nn.functional as F
 from torch.optim import Adam, AdamW, RMSprop, SGD  # type: ignore
@@ -67,6 +70,13 @@ class CodeLearner(Learner):
                 self.optimizer = SGD(params=self.params, lr=args.lr)
             case "rmsprop":
                 self.optimizer = RMSprop(params=self.params, lr=args.lr, alpha=args.optim_alpha, eps=args.optim_eps)
+            case "rad":
+                try:
+                    rad_optim = importlib.import_module("rad.optim")
+                    self.optimizer = rad_optim.RAD(params=self.params, lr=args.lr, max_iter=30000)
+                except ImportError:
+                    self.logger.error("RAD optimizer is not installed. Please install referring to https://github.com/TobiasLv/RAD.")
+                    self.optimizer = Adam(params=self.params, lr=args.lr)
             case _:
                 raise ValueError(f"Optimizer {args.optimizer} not recognized.")
 
@@ -90,14 +100,14 @@ class CodeLearner(Learner):
         """Enhanced training with comprehensive monitoring"""
         
         #-1. Prepare inputs.
-        rewards = batch["reward"][:, :-1]  # Rewards for all agents
-        actions = batch["actions"][:, :-1]
-        actions_onehot = batch["actions_onehot"][:, :-1]  # type: ignore
-        terminated = batch["terminated"][:, :-1].float()  # type: ignore
-        mask = batch["filled"][:, :-1].float()  # type: ignore
+        rewards = cast(torch.Tensor, batch["reward"][:, :-1])
+        actions = cast(torch.Tensor, batch["actions"][:, :-1])
+        actions_onehot = cast(torch.Tensor, batch["actions_onehot"][:, :-1])
+        terminated = cast(torch.Tensor, batch["terminated"][:, :-1]).float()
+        mask = cast(torch.Tensor, batch["filled"][:, :-1]).float()
         mask[:, 1:] = mask[:, 1:] * (1 - terminated[:, :-1])  # Mask the final step.
-        avail_actions: torch.Tensor = batch["avail_actions"]  # type: ignore
-        observations = batch["obs"][:, :-1]  # type: ignore
+        avail_actions = cast(torch.Tensor, batch["avail_actions"])
+        observations = batch["obs"][:, :-1]
 
         if self.args.standardise_rewards:
             self.rew_ms.update(rewards)
@@ -111,14 +121,18 @@ class CodeLearner(Learner):
         #- 2. Online MAC forward.
         self.mac.agent.train()
         self.mac.init_hidden(batch.batch_size)
-        t = slice(0, batch.max_seq_length)  # Exclude last timestep
-        encoded_trajectory, intents, q_values, intent_mu, intent_std, attn_weights = self.mac.forward(batch, t)
+
+        t_slice = slice(0, batch.max_seq_length)  # Exclude last timestep
+        mac_out = self.mac.forward(batch, t_slice)
+        encoded_trajectory, intents, q_values, intent_mu, intent_std, attn_weights = mac_out
 
         # Pick the Q values for the actions taken by each agent.
         choosen_action_values = torch.gather(q_values, dim=-1, index=actions.unsqueeze(-1))  # type: ignore b * t * n * 1 * 1
         
         # Mix
-        joint_action_value = self.mixer(choosen_action_values, batch["state"][:, :-1, None, None])   # b * t * 1 * 1 * 1
+        joint_action_value = self.mixer(
+            choosen_action_values, batch["state"][:, :-1, None, None]
+            )   # b * t * 1 * 1 * 1
 
         # Decode intents into actions.
         intent_actions = self.intent_decoder(
@@ -134,8 +148,7 @@ class CodeLearner(Learner):
 
             # MAC forward.
             self.target_mac.init_hidden(batch.batch_size)
-            t_target = slice(0, batch.max_seq_length)  # Include last timestep for target calculation
-            _, _, target_q_values, _, _, _ = self.target_mac.forward(batch, t_target)
+            _, _, target_q_values, _, _, _ = self.target_mac.forward(batch, t_slice)
 
             # Mask out unavailable actions
             target_q_values = torch.masked_fill(target_q_values, avail_actions.unsqueeze(-2)==0, -1e7)  # type: ignore
@@ -148,9 +161,11 @@ class CodeLearner(Learner):
                 cur_max_actions = mac_out_detach.max(dim=-1, keepdim=True)[1]
                 target_q_values = torch.gather(target_q_values, dim=-1, index=cur_max_actions)
             else:
-                target_q_values, _ = target_q_values[:, 1:].max(dim=-1, keepdim=True)
+                target_q_values, _ = target_q_values.max(dim=-1, keepdim=True)
             
-            target_joint_action_value = self.target_mixer(target_q_values[:, 1:], batch["state"][:, 1:, None, None])
+            target_joint_action_value = self.target_mixer(
+                target_q_values, batch["state"][:, :, None, None]
+                )
             
             if self.args.standardise_returns is True:
                 target_joint_action_value = (
@@ -162,15 +177,17 @@ class CodeLearner(Learner):
         with torch.no_grad():
             match target_type := getattr(self.args, "target_type", "td"):
                 case "td":
-                    td_targets = rewards[..., None, None] + self.args.gamma * target_joint_action_value * (1 - terminated[..., None, None])
+                    td_targets = rewards[..., None, None] + self.args.gamma * target_joint_action_value[:, 1:] * (1 - terminated[..., None, None])
                 case "td_lambda":
+                    # Note rewards, terminated, mask is 0 ~ T-1, target_joint_action_value is 0 ~ T.
                     td_targets = new_build_td_lambda_targets(rewards, terminated, mask, target_joint_action_value,
                                                       self.args.gamma, self.args.td_lambda)
                 case "q_lambda":
-                    qvals = torch.gather(target_q_values[:, 1:], -1, actions.unsqueeze(-1)).squeeze(-1)  # type: ignore
-                    qvals = self.target_mixer(qvals, batch["state"][:, 1:, None, None])
-                    td_targets = build_q_lambda_targets(rewards, terminated, mask, target_joint_action_value, qvals,
-                                                     self.args.gamma, self.args.td_lambda)
+                    raise NotImplementedError("Q-Lambda targets are not implemented in KernelQLearner.")
+                    # qvals = torch.gather(target_q_values[:, 1:], -1, actions.unsqueeze(-1)).squeeze(-1)
+                    # qvals = self.target_mixer(qvals, batch["state"][:, 1:, None, None])
+                    # td_targets = build_q_lambda_targets(rewards, terminated, mask, target_joint_action_value, qvals,
+                    #                                  self.args.gamma, self.args.td_lambda)
                 case _:
                     raise ValueError(f"Invalid target type {target_type}")
             
