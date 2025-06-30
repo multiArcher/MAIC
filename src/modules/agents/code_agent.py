@@ -44,13 +44,13 @@ class CodeAgent(Agent):
         self.message_dim = self.args.n_agents + self.intent_dim + self.agent_hidden_dim + 1
 
         # --- Core Agent Architecture ---
-        self.activation = nn.LeakyReLU()
+        self.activation = nn.LeakyReLU
         
         # 1. RNN for history encoding h_i^t
         # Projects raw observations to hidden dimension before GRU processing
         self.rnn_projection = nn.Sequential(
             nn.Linear(input_shape, self.agent_hidden_dim),
-            self.activation,
+            self.activation(),
         )
         # Remove duplicate line that was causing issues
         self.rnn = nn.GRU(
@@ -64,7 +64,7 @@ class CodeAgent(Agent):
         self.intent_encoder_fc = nn.Sequential(
             nn.Linear(self.agent_hidden_dim + self.n_actions, self.intent_encoder_hidden_dim),
             RMSNorm(self.intent_encoder_hidden_dim),
-            self.activation,
+            self.activation(),
             nn.Linear(self.intent_encoder_hidden_dim, self.intent_dim * 2) # mu and log_var
         )
 
@@ -83,7 +83,7 @@ class CodeAgent(Agent):
                 self.message_dim + self.dual_alignment_attn_dim, 
                 self.agent_hidden_dim
             ),
-            self.activation,
+            self.activation(),
             nn.Linear(self.agent_hidden_dim, self.n_actions)
         )
 
