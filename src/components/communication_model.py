@@ -53,6 +53,14 @@ class CommunicationModel:
         # Initialize caches
         self.reset(0)
 
+        # 1.Pre-compute communication matrix for broadcast
+        comm_matrix = torch.eye(self.n_agents, device=self.device, dtype=torch.bool).logical_not()  # n * n
+        self.comm_matrix_base = comm_matrix.reshape(1, 1, self.n_agents, self.n_agents)  # 1 * 1 * n * n
+
+        # 2. Pre-compute the base agent indices tensor for gathering
+        agent_indices = torch.arange(self.n_agents, device=self.device)
+        self.agent_indices = agent_indices.reshape(1, 1, 1, self.n_agents).repeat(1, 1, self.n_agents, 1)
+
     def reset(self, batch_size: int):
         """Reset message caches for new training batch"""
         cache_shape = (batch_size, self.max_cache_size, self.n_agents, 1)
@@ -88,48 +96,58 @@ class CommunicationModel:
         2. Retrieve messages that have arrived by current timestep
         3. Apply communication topology (broadcast, etc.)
         """
-        batch_size, max_len, n_agents, _, dim_intent = self.cache_intents.shape
+        # batch_size, max_len, n_agents, _, _ = self.cache_intents.shape
+        time_start, time_stop = t.start, t.stop
+        # time_len = time_stop - time_start
  
         # 1. Store new messages in cache
         self.cache_sent_times[:, t, ...] = broadcasts.sent_times.long()
         self.cache_intents[:, t, ...] = broadcasts.intents.detach()
         self.cache_hidden_states[:, t, ...] = broadcasts.hiddens.detach()
         self.cache_sender_ids[:, t, ...] = broadcasts.sender_id
-
         # Calculate and store arrival times with Gaussian delay
         arrival_times = self._calculate_arrival_times(broadcasts.sent_times, training=training)
         self.cache_arrival_times[:, t, ...] = arrival_times.long()
 
-        # 2. Retrieve messages that have arrived by current timestep
-        # Create mask for messages that have arrived at each query time
-        arrival_times_broadcast = self.cache_arrival_times.unsqueeze(1).expand(
-            -1, self.max_cache_size, -1, -1, -1, -1
-        )
-        sent_times_broadcast = self.cache_sent_times.unsqueeze(1).expand(
-            -1, self.max_cache_size, -1, -1, -1, -1
-        )
+        relevant_history_slice = slice(0, time_stop)
+        sliced_cache_arrival_times = self.cache_arrival_times[:, relevant_history_slice]
+        sliced_cache_sent_times = self.cache_sent_times[:, relevant_history_slice]
+        query_times_slice = self.query_times[:, time_start:time_stop]
 
-        # Find the latest arrived message for each agent at each timestep
-        # [2, 3, 3, 4, 5, 6] <= 3 -> [T, T, T, F, F, F]
-        # T -> sent time, F -> -1 : [0, 1, 2, -1, -1, -1]
-        # Find max -> 2
-        has_arrived_indices = torch.where(
-            arrival_times_broadcast <= self.query_times, 
-            sent_times_broadcast, 
-            torch.tensor(-1, device=self.device)
-            )
-        received_message_sent_time, _ = torch.max(has_arrived_indices, dim=2)
+        has_arrived_mask = sliced_cache_arrival_times.unsqueeze(1) <= query_times_slice
 
-        # Extract the latest received messages
-        batch_idx = torch.arange(batch_size, device=self.device).reshape(batch_size, 1, 1, 1)
-        time_idx = received_message_sent_time[:, t, :, 0]
-        sender_id = torch.arange(n_agents, device=self.device).reshape(1, 1, n_agents, 1)
+        valid_sent_times = torch.where(
+            has_arrived_mask,
+            sliced_cache_sent_times.unsqueeze(1),
+            torch.tensor(-1, device=self.device, dtype=torch.int)
+        )
+        time_idx, _ = valid_sent_times.max(dim=2)
+        no_messages_mask = time_idx < 0  # Mask for no messages have arrived.
+        safe_time_idx = time_idx.masked_fill(no_messages_mask, 0)  # Set 0 for no messages.
+
+        def gather_from_cache(
+                cache_tensor: torch.Tensor, 
+                safe_time_idx:torch.Tensor, 
+                no_messages_mask:torch.Tensor
+                ) -> torch.Tensor:
+            idx_shape = torch.Size([*safe_time_idx.shape[:-1], cache_tensor.shape[-1]])
+
+            # This is to avoid indexing errors when no messages have arrived.
+            # Set -1 to 0 -> Index fake tensor with 0 time data temporarily -> set where -1 to 0.
+            expanded_idx = safe_time_idx.expand(idx_shape)
+            # Gather messages from cache tensor with the safe time index.
+            # cache_tensor (b, t, n, 1, d) -> gather on dim=1
+            fake_data = torch.gather(cache_tensor[:, relevant_history_slice], 1, expanded_idx.long())
+            # If no messages have arrived, set the data to 0.
+            true_data = fake_data.masked_fill(no_messages_mask, 0)
+
+            return true_data
 
         current_messages = CoDeBatchedMessageData(
-            sender_id=self.cache_sender_ids[batch_idx, time_idx, sender_id, 0],
-            intents=self.cache_intents[batch_idx, time_idx, sender_id, 0],
-            hiddens=self.cache_hidden_states[batch_idx, time_idx, sender_id, 0],
-            sent_times=self.cache_sent_times[batch_idx, time_idx, sender_id, 0]
+            sender_id=gather_from_cache(self.cache_sender_ids, safe_time_idx, no_messages_mask),
+            intents=gather_from_cache(self.cache_intents, safe_time_idx, no_messages_mask),
+            hiddens=gather_from_cache(self.cache_hidden_states, safe_time_idx, no_messages_mask),
+            sent_times=gather_from_cache(self.cache_sent_times, safe_time_idx, no_messages_mask)
         )
 
         # 3. Apply communication topology
@@ -156,18 +174,14 @@ class CommunicationModel:
         """
         batch_size, time_len, n_agents, _, _ = messages.intents.shape
 
-        # Update related tensors.
-        comm_matrix = torch.eye(n_agents, device=self.device, dtype=torch.bool).logical_not()  # n * n
-        comm_matrix = comm_matrix.reshape(1, 1, n_agents, n_agents  # 1 * 1 * n * n
-                                ).expand(batch_size, time_len, -1, -1)  # b * t * n * n
-        
+        # Update related tensors.        
+        comm_matrix = self.comm_matrix_base.expand(batch_size, time_len, -1, -1)  # b * t * n * n
         batch_indices = torch.arange(batch_size, device=self.device).reshape(batch_size, 1, 1, 1)        
         time_indices = torch.arange(time_len, device=self.device).reshape(1, time_len, 1, 1)
-        agent_indices = torch.arange(n_agents).reshape(1, 1, 1, n_agents).repeat(1, 1, n_agents, 1)
 
         def broadcast_func(m):
             """Apply broadcasting to message tensor"""
-            m = m[batch_indices, time_indices, agent_indices, 0][comm_matrix]
+            m = m[batch_indices, time_indices, self.agent_indices, 0][comm_matrix]
             m = m.reshape(batch_size, time_len, n_agents, n_agents - 1, -1)
             return m
         
