@@ -281,12 +281,10 @@ class CodeMAC(MAC):
             
         Returns:
             Tuple of (observations, last_actions, time_step_tensor, agent_id_tensor)
-        """
-        batch_size, max_length, n_agents, obs_size = batch["obs"].shape
-        
+        """        
         # Extract observations and add sequence dimension for consistency
-        obs_data = batch["obs"][:, t].unsqueeze(-2)  # [B, T, N, 1, O]
-        time_size = obs_data.shape[1]
+        obs_data = batch["obs"][:, t].unsqueeze(-2)  # [B, T, N, 1, D]
+        batch_size, time_size, n_agents, _, _ = obs_data.shape
 
         # Get last actions with proper padding and one-hot encoding
         last_actions = self._get_last_actions(batch, t, batch_size, n_agents)  # [B, T, N, 1, A]
