@@ -41,7 +41,8 @@ class CodeAgent(Agent):
         self.n_actions = args.n_actions
         
         # Message structure: [agent_id + intent + hidden_state + timestamp]
-        self.message_dim = self.args.n_agents + self.intent_dim + self.agent_hidden_dim + 1
+        self.message_dim = self.agent_hidden_dim
+        # self.message_dim = self.args.n_agents + self.intent_dim + self.agent_hidden_dim + 1
 
         # --- Core Agent Architecture ---
         self.activation = nn.LeakyReLU
@@ -177,10 +178,10 @@ class CodeAgent(Agent):
 
         # 5. Q-value Computation from Fused Context
         state_embedding = torch.cat([
-            sent_messages.sender_id,    # Agent identity
-            sent_messages.intents,      # Own intent
+            # sent_messages.sender_id,    # Agent identity
+            # sent_messages.intents,      # Own intent
             sent_messages.hiddens,      # Own hidden state  
-            sent_messages.sent_times,   # Current timestamp
+            # sent_messages.sent_times,   # Current timestamp
             combined_messages           # Fused received messages
         ], dim=-1)
 
