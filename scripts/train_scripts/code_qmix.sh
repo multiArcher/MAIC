@@ -9,7 +9,7 @@ CONFIG=code_qmix  # Algorithm config name in src/config/alg
 ENV_CONFIG=sc2  # Environment config in src/config/envs
 MAP_NAME=5m_vs_6m  # Map name, e.g., 3m in StarCraftII.
 REPEAT_TIMES=1  # Times to run the experiment.
-
+BATCH_SIZE_RUN=16 # Batch size for each run, which is used to calculate the total batch size as BATCH_SIZE_RUN * REPEAT_TIMES. 
 COMM_GAUSSIAN_DELAY_MEAN=0  # delay mean of communication.
 COMM_GAUSSIAN_DELAY_STD=0   # delay std of communication.
 
@@ -52,11 +52,14 @@ function update_hyperparams() {
 # ? Should check before running experiments in a new environment.
 # ? ============================================================================
 # Set environment variable
-CONDA_ENV_NAME="marl_latest"                        # Conda environment name
+CONDA_ENV_NAME="epymarl"                        # Conda environment name
 
 if [ -z "$SC2PATH" ]; then
     export SC2PATH="$HOME/.local/share/StarCraftII"  # Path to StarCraft II game.
 fi
+
+export NO_PROXY="${NO_PROXY:+$NO_PROXY,}127.0.0.1,localhost"
+export no_proxy="${no_proxy:+$no_proxy,}127.0.0.1,localhost"
 
 # Set CUDA devices
 CUDA_DEVICES=0  # Set visible devices for scripts.
