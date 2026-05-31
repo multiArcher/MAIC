@@ -4,7 +4,7 @@
 # ! Should check every time before running.
 # ! ============================================================================
 # Experiment parameters
-EXPERIMENT_NAME=code_qmix  # Experiment name for logging.
+EXPERIMENT_NAME=code_qmix_aw0p05_seed2024  # Experiment name for logging.
 CONFIG=code_qmix  # Algorithm config name in src/config/alg
 ENV_CONFIG=sc2  # Environment config in src/config/envs
 MAP_NAME=5m_vs_6m  # Map name, e.g., 3m in StarCraftII.
@@ -14,13 +14,14 @@ COMM_GAUSSIAN_DELAY_MEAN=0  # delay mean of communication.
 COMM_GAUSSIAN_DELAY_STD=0   # delay std of communication.
 
 TD_LOSS_WEIGHT=1.0        # Weight for TD loss
-ACTION_LOSS_WEIGHT=0    # Weight for inference loss (future action prediction)
+ACTION_LOSS_WEIGHT=0.05    # Weight for inference loss (future action prediction)
 CONTINUE_LOSS_WEIGHT=0    # Weight for continuity loss (intent stability)
 AUX_LOSS_WEIGHT=0     # Weight for KL divergence loss (intent regularization)
 ENTROPY_LOSS_WEIGHT=0  # Weight for attention entropy regularization
 
 PREDICT_K_FUTURE_ACTIONS=5   # K for future action prediction (L_inf)
 TEMPORAL_DISCOUNT_GAMMA_T=0.9  # Used by agent for timeliness alignment
+SEED=2024  # Fixed seed for comparing this small hyperparameter sweep.
 
 # arguments in different runs.
 function update_hyperparams() {
@@ -33,6 +34,7 @@ function update_hyperparams() {
 
     # arguments after "with"
     arg_dict["name"]="name=${EXPERIMENT_NAME}_run$((iter))"  # name in tensorboard, sacred, and wandb
+    arg_dict["seed"]="seed=$SEED"
     arg_dict["comm_gaussian_delay_mean"]="comm_gaussian_delay_mean=$COMM_GAUSSIAN_DELAY_MEAN"
     arg_dict["comm_gaussian_delay_std"]="comm_gaussian_delay_std=$COMM_GAUSSIAN_DELAY_STD"
     arg_dict["batch_size_run"]="batch_size_run=$BATCH_SIZE_RUN"
