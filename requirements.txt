@@ -27,10 +27,13 @@ six
 sk-video
 snakeviz
 tensorboard-logger
+tensorboard
 torch
 torchvision
 tornado
+tqdm
 urllib3
 websocket-client
 whichcraft
 wrapt
+git+https://github.com/oxwhirl/smac.git

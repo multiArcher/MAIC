@@ -9,7 +9,7 @@ CONFIG=code_qmix  # Algorithm config name in src/config/alg
 ENV_CONFIG=sc2  # Environment config in src/config/envs
 MAP_NAME=5m_vs_6m  # Map name, e.g., 3m in StarCraftII.
 REPEAT_TIMES=1  # Times to run the experiment.
-BATCH_SIZE_RUN=4 # Batch size for each run, which is used to calculate the total batch size as BATCH_SIZE_RUN * REPEAT_TIMES. 
+BATCH_SIZE_RUN=8 # Batch size for each run, which is used to calculate the total batch size as BATCH_SIZE_RUN * REPEAT_TIMES. 
 COMM_GAUSSIAN_DELAY_MEAN=0  # delay mean of communication.
 COMM_GAUSSIAN_DELAY_STD=0   # delay std of communication.
 
