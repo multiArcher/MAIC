@@ -4,19 +4,19 @@
 # ! Should check every time before running.
 # ! ============================================================================
 # Experiment parameters
-EXPERIMENT_NAME=code_qmix_aw0p05_seed2024  # Experiment name for logging.
+EXPERIMENT_NAME=code_qmix_entropy0_seed2024  # Experiment name for logging.
 CONFIG=code_qmix  # Algorithm config name in src/config/alg
 ENV_CONFIG=sc2  # Environment config in src/config/envs
 MAP_NAME=5m_vs_6m  # Map name, e.g., 3m in StarCraftII.
 REPEAT_TIMES=1  # Times to run the experiment.
-BATCH_SIZE_RUN=8 # Batch size for each run, which is used to calculate the total batch size as BATCH_SIZE_RUN * REPEAT_TIMES. 
+BATCH_SIZE_RUN=4 # Batch size for each run, which is used to calculate the total batch size as BATCH_SIZE_RUN * REPEAT_TIMES. 
 COMM_GAUSSIAN_DELAY_MEAN=0  # delay mean of communication.
 COMM_GAUSSIAN_DELAY_STD=0   # delay std of communication.
 
 TD_LOSS_WEIGHT=1.0        # Weight for TD loss
-ACTION_LOSS_WEIGHT=0.05    # Weight for inference loss (future action prediction)
-CONTINUE_LOSS_WEIGHT=0    # Weight for continuity loss (intent stability)
-AUX_LOSS_WEIGHT=0     # Weight for KL divergence loss (intent regularization)
+ACTION_LOSS_WEIGHT=0.01    # Weight for inference loss (future action prediction)
+CONTINUE_LOSS_WEIGHT=0.01    # Weight for continuity loss (intent stability)
+AUX_LOSS_WEIGHT=0.01     # Weight for KL divergence loss (intent regularization)
 ENTROPY_LOSS_WEIGHT=0  # Weight for attention entropy regularization
 
 PREDICT_K_FUTURE_ACTIONS=5   # K for future action prediction (L_inf)
@@ -67,7 +67,7 @@ export no_proxy="${no_proxy:+$no_proxy,}127.0.0.1,localhost"
 CUDA_DEVICES=0  # Set visible devices for scripts.
 
 # Paths
-WORK_DIR="$HOME/workspace/epymarl_based"    # Path to work dir
+WORK_DIR="$HOME/autodl-tmp/epymarl_based"    # Path to work dir
 LOG_DIR="$WORK_DIR/log"     # Log directory for logging terminal outputs.
 PYTHON_SCRIPT="src/main.py"     # Path to python script in work dir. Can be absolute or relative to work dir.
 

@@ -147,8 +147,19 @@ if __name__ == "__main__":
         elif param.startswith("name"):
             experiment_name = param.split("=")[1]
 
+    loss_weight_keys = [
+        "td_loss_weight",
+        "action_loss_weight",
+        "continue_loss_weight",
+        "aux_loss_weight",
+        "entropy_loss_weight",
+    ]
+    loss_weight_suffix = "".join(
+        f"-{key}={config_dict[key]}" for key in loss_weight_keys if key in config_dict
+    )
     unique_token = (
         f"{experiment_name}__{map_name}__{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+        f"{loss_weight_suffix}"
     )
 
     config_dict.update({"unique_token": unique_token})

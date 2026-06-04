@@ -14,10 +14,10 @@ COMM_GAUSSIAN_DELAY_MEAN=0  # delay mean of communication.
 COMM_GAUSSIAN_DELAY_STD=0   # delay std of communication.
 
 TD_LOSS_WEIGHT=1.0        # Weight for TD loss
-ACTION_LOSS_WEIGHT=0    # Weight for inference loss (future action prediction)
-CONTINUE_LOSS_WEIGHT=0    # Weight for continuity loss (intent stability)
-AUX_LOSS_WEIGHT=0     # Weight for KL divergence loss (intent regularization)
-ENTROPY_LOSS_WEIGHT=0  # Weight for attention entropy regularization
+ACTION_LOSS_WEIGHT=0.01    # Weight for inference loss (future action prediction)
+CONTINUE_LOSS_WEIGHT=0.01    # Weight for continuity loss (intent stability)
+AUX_LOSS_WEIGHT=0.01     # Weight for KL divergence loss (intent regularization)
+ENTROPY_LOSS_WEIGHT=0.01  # Weight for attention entropy regularization
 
 PREDICT_K_FUTURE_ACTIONS=5   # K for future action prediction (L_inf)
 TEMPORAL_DISCOUNT_GAMMA_T=0.9  # Used by agent for timeliness alignment
@@ -65,7 +65,7 @@ export no_proxy="${no_proxy:+$no_proxy,}127.0.0.1,localhost"
 CUDA_DEVICES=0  # Set visible devices for scripts.
 
 # Paths
-WORK_DIR="$HOME/workspace/epymarl_based"    # Path to work dir
+WORK_DIR="$HOME/autodl-tmp/epymarl_based"    # Path to work dir
 LOG_DIR="$WORK_DIR/log"     # Log directory for logging terminal outputs.
 PYTHON_SCRIPT="src/main.py"     # Path to python script in work dir. Can be absolute or relative to work dir.
 
