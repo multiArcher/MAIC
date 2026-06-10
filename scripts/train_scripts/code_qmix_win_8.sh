@@ -4,12 +4,12 @@
 # ! Should check every time before running.
 # ! ============================================================================
 # Experiment parameters
-EXPERIMENT_NAME=code_qmix  # Experiment name for logging.
+EXPERIMENT_NAME=code_qmix_mmm2_baseline_seed2024  # Experiment name for logging.
 CONFIG=code_qmix  # Algorithm config name in src/config/alg
 ENV_CONFIG=sc2  # Environment config in src/config/envs
-MAP_NAME=5m_vs_6m  # Map name, e.g., 3m in StarCraftII.
+MAP_NAME=MMM2  # Map name, e.g., 3m in StarCraftII.
 REPEAT_TIMES=1  # Times to run the experiment.
-BATCH_SIZE_RUN=4 # Batch size for each run, which is used to calculate the total batch size as BATCH_SIZE_RUN * REPEAT_TIMES. 
+BATCH_SIZE_RUN=4 # Batch size for each run, which is used to calculate the total batch size as BATCH_SIZE_RUN * REPEAT_TIMES.
 COMM_GAUSSIAN_DELAY_MEAN=0  # delay mean of communication.
 COMM_GAUSSIAN_DELAY_STD=0   # delay std of communication.
 
@@ -21,6 +21,7 @@ ENTROPY_LOSS_WEIGHT=0.01  # Weight for attention entropy regularization
 
 PREDICT_K_FUTURE_ACTIONS=5   # K for future action prediction (L_inf)
 TEMPORAL_DISCOUNT_GAMMA_T=0.9  # Used by agent for timeliness alignment
+SEED=2024  # Fixed seed for comparing this small hyperparameter sweep.
 
 # arguments in different runs.
 function update_hyperparams() {
@@ -33,6 +34,7 @@ function update_hyperparams() {
 
     # arguments after "with"
     arg_dict["name"]="name=${EXPERIMENT_NAME}_run$((iter))"  # name in tensorboard, sacred, and wandb
+    arg_dict["seed"]="seed=$SEED"
     arg_dict["comm_gaussian_delay_mean"]="comm_gaussian_delay_mean=$COMM_GAUSSIAN_DELAY_MEAN"
     arg_dict["comm_gaussian_delay_std"]="comm_gaussian_delay_std=$COMM_GAUSSIAN_DELAY_STD"
     arg_dict["batch_size_run"]="batch_size_run=$BATCH_SIZE_RUN"
@@ -65,7 +67,7 @@ export no_proxy="${no_proxy:+$no_proxy,}127.0.0.1,localhost"
 CUDA_DEVICES=0  # Set visible devices for scripts.
 
 # Paths
-WORK_DIR="$HOME/autodl-tmp/epymarl_based"    # Path to work dir
+WORK_DIR="$HOME/workspace/epymarl_based"    # Path to work dir
 LOG_DIR="$WORK_DIR/log"     # Log directory for logging terminal outputs.
 PYTHON_SCRIPT="src/main.py"     # Path to python script in work dir. Can be absolute or relative to work dir.
 
@@ -138,11 +140,11 @@ run_experiment() {
     # Construct command arguments
     local pre_args=""
     local post_args=""
-    
+
     # Iterate over args to construct the command
     for key in "${!args[@]}"; do
         # Skip 'script_path' key
-        if [ "$key" != "script_path" ]; then    
+        if [ "$key" != "script_path" ]; then
             # Append pre_args or post_args based on key
             if [[ "${args[$key]}" == --* ]]; then
                 pre_args+="${args[$key]} "
@@ -156,7 +158,7 @@ run_experiment() {
     echo "$(timestamp) | INFO     | bash         | Command: $cmd" | tee -a "$std_log_path"
     echo "$(timestamp) | INFO     | bash         | $SEPERATOR" | tee -a "$std_log_path"
     echo "$(timestamp) | INFO     | bash         | Starting train process."
-    
+
     # Run the Python script
     if ! eval "$cmd" 1>> "$std_log_path" 2>> "$err_log_path"; then
         echo "$(timestamp) | FATAL    | bash         | Run Failed, see $err_log_path for more information." | tee -a "$std_log_path" "$err_log_path"
