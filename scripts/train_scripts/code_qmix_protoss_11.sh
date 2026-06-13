@@ -63,6 +63,14 @@ fi
 export NO_PROXY="${NO_PROXY:+$NO_PROXY,}127.0.0.1,localhost"
 export no_proxy="${no_proxy:+$no_proxy,}127.0.0.1,localhost"
 
+SMACV2_MAP_PATH="$SC2PATH/Maps/SMAC_Maps/32x32_flat.SC2Map"
+if [[ ! -f "$SMACV2_MAP_PATH" ]]; then
+    echo "$(date +"%Y-%m-%d_%H-%M-%S") | FATAL    | bash         | SMACv2 map not found: $SMACV2_MAP_PATH" >&2
+    echo "Install SMACv2 maps with:" >&2
+    echo "  SC2PATH=\"$SC2PATH\" bash scripts/other_scripts/install_smacv2_maps.sh" >&2
+    exit 1
+fi
+
 # Set CUDA devices
 CUDA_DEVICES=0  # Set visible devices for scripts.
 
@@ -76,8 +84,24 @@ LOG_DIR="$WORK_DIR/log"     # Log directory for logging terminal outputs.
 PYTHON_SCRIPT="src/main.py"     # Path to python script in work dir. Can be absolute or relative to work dir.
 
 # Environment parameters passed to the Python script.
-BUFFER_CPU_ONLY=False
-DEVICE=cuda
+BUFFER_CPU_ONLY="${BUFFER_CPU_ONLY:-False}"
+REQUESTED_DEVICE="${DEVICE:-cuda}"
+if [[ "$REQUESTED_DEVICE" == "cuda" ]]; then
+    if conda run -n "$CONDA_ENV_NAME" --no-capture-output python - <<'PY' >/dev/null 2>&1
+import sys
+import torch
+sys.exit(0 if torch.cuda.is_available() else 1)
+PY
+    then
+        DEVICE=cuda
+    else
+        echo "$(date +"%Y-%m-%d_%H-%M-%S") | WARNING  | bash         | CUDA requested but unavailable; falling back to CPU."
+        DEVICE=cpu
+        BUFFER_CPU_ONLY=True
+    fi
+else
+    DEVICE="$REQUESTED_DEVICE"
+fi
 
 # arguments for different environments.
 function update_env_params() {

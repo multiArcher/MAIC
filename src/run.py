@@ -205,7 +205,12 @@ def run_sequential(args, logger):
     logger.console_logger.info("-" * 30 + "TRAINING_START" + "-" * 30)
 
     # Delay init tqdm bar
-    tqdm_output = open("/dev/tty", "w") if sys.platform.startswith('linux') else sys.stdout
+    tqdm_output = sys.stdout
+    if sys.platform.startswith("linux"):
+        try:
+            tqdm_output = open("/dev/tty", "w")
+        except OSError:
+            tqdm_output = sys.stdout
     logger.info("Train process started")
     progress_bar = tqdm.tqdm(
         total=(args.t_max),
