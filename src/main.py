@@ -104,6 +104,29 @@ def config_copy(config):
         return deepcopy(config)
 
 
+def _parse_cli_scalar(value):
+    value = value.strip()
+    if value in {"True", "true"}:
+        return True
+    if value in {"False", "false"}:
+        return False
+    try:
+        if any(ch in value for ch in (".", "e", "E")):
+            return float(value)
+        return int(value)
+    except ValueError:
+        return value.strip("\"'")
+
+
+def _apply_flat_cli_overrides(config, params, keys):
+    for param in params:
+        if "=" not in param:
+            continue
+        key, value = param.split("=", 1)
+        if key in keys:
+            config[key] = _parse_cli_scalar(value)
+
+
 if __name__ == "__main__":
     # region read_parameters
     # Params order is command line -> algs -> envs -> defaults
@@ -154,6 +177,7 @@ if __name__ == "__main__":
         "aux_loss_weight",
         "entropy_loss_weight",
     ]
+    _apply_flat_cli_overrides(config_dict, params, loss_weight_keys)
     loss_weight_suffix = "".join(
         f"-{key}={config_dict[key]}" for key in loss_weight_keys if key in config_dict
     )

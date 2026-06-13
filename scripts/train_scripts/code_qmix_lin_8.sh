@@ -67,7 +67,7 @@ export no_proxy="${no_proxy:+$no_proxy,}127.0.0.1,localhost"
 CUDA_DEVICES=0  # Set visible devices for scripts.
 
 # Paths
-WORK_DIR="$HOME/workspace/epymarl_based"    # Path to work dir
+WORK_DIR="$HOME/autodl-tmp/epymarl_based"   # Path to work dir
 LOG_DIR="$WORK_DIR/log"     # Log directory for logging terminal outputs.
 PYTHON_SCRIPT="src/main.py"     # Path to python script in work dir. Can be absolute or relative to work dir.
 

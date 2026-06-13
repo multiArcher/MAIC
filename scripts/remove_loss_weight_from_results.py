@@ -3,6 +3,7 @@
 Remove the substring "loss_weight" from file and directory names under a tree.
 
 By default this is a dry run. Add --apply to actually rename paths.
+python scripts/remove_loss_weight_from_results.py --apply --replace-existing
 """
 
 from __future__ import annotations
@@ -10,11 +11,12 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 
 
-DEFAULT_ROOT = r"D:\Users\Jacob\Downloads\results"
+DEFAULT_ROOT = "./results"
 TOKEN = "loss_weight"
 
 
@@ -62,7 +64,16 @@ def collect_renames(root: Path) -> list[tuple[Path, Path]]:
     return renames
 
 
-def apply_renames(renames: list[tuple[Path, Path]], dry_run: bool) -> int:
+def remove_existing_target(path: Path) -> None:
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def apply_renames(
+    renames: list[tuple[Path, Path]], dry_run: bool, replace_existing: bool
+) -> int:
     failures = 0
 
     for old_path, new_path in renames:
@@ -72,9 +83,12 @@ def apply_renames(renames: list[tuple[Path, Path]], dry_run: bool) -> int:
             continue
 
         if new_path.exists():
-            print(f"ERROR: target already exists, skipped: {new_path}", file=sys.stderr)
-            failures += 1
-            continue
+            if not replace_existing:
+                print(f"ERROR: target already exists, skipped: {new_path}", file=sys.stderr)
+                failures += 1
+                continue
+            print(f"REPLACE: deleting existing target: {new_path}", file=sys.stderr)
+            remove_existing_target(new_path)
 
         try:
             old_path.rename(new_path)
@@ -103,6 +117,14 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Actually rename files and directories.",
     )
+    parser.add_argument(
+        "--replace-existing",
+        action="store_true",
+        help=(
+            "If the target path already exists, delete it before renaming. "
+            "This is destructive for existing result directories."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -130,14 +152,16 @@ def main() -> int:
     mode = "APPLY" if args.apply else "DRY RUN"
     print(f"{mode}: {len(renames)} path(s) will be renamed under {root}.")
 
-    failures = apply_renames(renames, dry_run=not args.apply)
+    failures = apply_renames(
+        renames, dry_run=not args.apply, replace_existing=args.replace_existing
+    )
     if failures:
         print(f"Completed with {failures} failure(s).", file=sys.stderr)
         return 1
 
     if not args.apply:
         print("Dry run only. Re-run with --apply to make these changes.")
-
+        print("Use --apply --replace-existing to overwrite existing targets.")
     return 0
 
 

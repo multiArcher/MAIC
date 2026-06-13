@@ -4,10 +4,10 @@
 # ! Should check every time before running.
 # ! ============================================================================
 # Experiment parameters
-EXPERIMENT_NAME=code_qmix_mmm2_baseline_seed2024  # Experiment name for logging.
+EXPERIMENT_NAME=code_qmix_protoss_5_vs_5_baseline_seed2024  # Experiment name for logging.
 CONFIG=code_qmix  # Algorithm config name in src/config/alg
-ENV_CONFIG=sc2  # Environment config in src/config/envs
-MAP_NAME=MMM2  # Map name, e.g., 3m in StarCraftII.
+ENV_CONFIG=sc2v2  # Environment config in src/config/envs
+MAP_NAME=protoss_5_vs_5  # Map name, e.g., 3m in StarCraftII.
 REPEAT_TIMES=1  # Times to run the experiment.
 BATCH_SIZE_RUN=4 # Batch size for each run, which is used to calculate the total batch size as BATCH_SIZE_RUN * REPEAT_TIMES.
 COMM_GAUSSIAN_DELAY_MEAN=0  # delay mean of communication.
@@ -67,7 +67,11 @@ export no_proxy="${no_proxy:+$no_proxy,}127.0.0.1,localhost"
 CUDA_DEVICES=0  # Set visible devices for scripts.
 
 # Paths
-WORK_DIR="$HOME/workspace/epymarl_based"    # Path to work dir
+if [[ -d "$HOME/autodl-tmp/epymarl_based" ]]; then
+    WORK_DIR="$HOME/autodl-tmp/epymarl_based"
+else
+    WORK_DIR="$HOME/workspace/epymarl_based"
+fi
 LOG_DIR="$WORK_DIR/log"     # Log directory for logging terminal outputs.
 PYTHON_SCRIPT="src/main.py"     # Path to python script in work dir. Can be absolute or relative to work dir.
 
