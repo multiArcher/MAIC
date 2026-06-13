@@ -4,10 +4,10 @@
 # ! Should check every time before running.
 # ! ============================================================================
 # Experiment parameters
-EXPERIMENT_NAME=code_qmix_zerg_5_vs_5_baseline_seed2024  # Experiment name for logging.
+EXPERIMENT_NAME=code_qmix_protoss_5_vs_5_baseline_seed2024  # Experiment name for logging.
 CONFIG=code_qmix  # Algorithm config name in src/config/alg
 ENV_CONFIG=sc2v2  # Environment config in src/config/envs
-MAP_NAME=zerg_5_vs_5  # Map name, e.g., 3m in StarCraftII.
+MAP_NAME=protoss_5_vs_5  # Map name, e.g., 3m in StarCraftII.
 REPEAT_TIMES=1  # Times to run the experiment.
 BATCH_SIZE_RUN=4 # Batch size for each run, which is used to calculate the total batch size as BATCH_SIZE_RUN * REPEAT_TIMES.
 COMM_GAUSSIAN_DELAY_MEAN=0  # delay mean of communication.
@@ -16,7 +16,7 @@ COMM_GAUSSIAN_DELAY_STD=0   # delay std of communication.
 TD_LOSS_WEIGHT=1.0        # Weight for TD loss
 ACTION_LOSS_WEIGHT=0.01    # Weight for inference loss (future action prediction)
 CONTINUE_LOSS_WEIGHT=0.01    # Weight for continuity loss (intent stability)
-AUX_LOSS_WEIGHT=0.01     # Weight for KL divergence loss (intent regularization)
+AUX_LOSS_WEIGHT=0.1     # Weight for KL divergence loss (intent regularization)
 ENTROPY_LOSS_WEIGHT=0.01  # Weight for attention entropy regularization
 
 PREDICT_K_FUTURE_ACTIONS=5   # K for future action prediction (L_inf)
