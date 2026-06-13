@@ -8,3 +8,5 @@ __pycache__
 .ipynb_checkpoints
 *nohup.out
 /history_data
+/context
+/previous_works
