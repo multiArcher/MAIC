@@ -4,6 +4,10 @@ set -euo pipefail
 # Compare one or more checkpoints with and without observation delay.
 #
 # Usage:
+#   bash scripts/eval_scripts/compare_obs_delay.sh
+#
+# Edit MODEL_DIR_DEFAULT below, then run the script directly. Optional command-line
+# arguments still override the default:
 #   bash scripts/eval_scripts/compare_obs_delay.sh <MODEL_DIR> [LOAD_STEP ...]
 #
 # Example:
@@ -18,15 +22,23 @@ set -euo pipefail
 
 # -------- Main experiment controls --------
 
+# Default model directory. Change this one line when evaluating a different run.
+MODEL_DIR_DEFAULT="${MODEL_DIR_DEFAULT:-results/models/code_qmix_win_6_run1__5m_vs_6m__2026-06-08_23-46-53-td_=1.0-action_=0.01-continue_=0.1-aux_=0.01-entropy_=0.01}"
+
+# Leave empty to evaluate the latest numeric checkpoint under MODEL_DIR_DEFAULT.
+# Example:
+#   LOAD_STEPS_DEFAULT=(114 1000115 2000157 3000232)
+LOAD_STEPS_DEFAULT=()
+
 # StarCraft map/environment. Must match the model's trained map for a clean comparison.
 MAP_NAME="${MAP_NAME:-5m_vs_6m}"
 
 # Number of evaluation episodes per run. Larger values reduce variance but take longer.
-TEST_NEPISODE="${TEST_NEPISODE:-10}"
+TEST_NEPISODE="${TEST_NEPISODE:-64}"
 
 # Number of SC2 environments launched in parallel. Keep this small on local WSL.
 # code_qmix.yaml defaults to 16, which often causes PySC2 connection failures locally.
-BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-1}"
+BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-4}"
 
 # Evaluation seeds. Multiple seeds are recommended because SC2 and delay sampling are stochastic.
 SEEDS="${SEEDS:-2024}"
@@ -43,6 +55,11 @@ SC2PATH="${SC2PATH:-$HOME/.local/share/StarCraftII}"
 # Algorithm/environment configs used by the saved code_qmix checkpoint.
 CONFIG="${CONFIG:-code_qmix}"
 ENV_CONFIG="${ENV_CONFIG:-sc2}"
+
+# Forward/training config values used by the checkpoint. Keep these aligned with
+# the training script that produced MODEL_DIR_DEFAULT.
+TEMPORAL_DISCOUNT_GAMMA_T="${TEMPORAL_DISCOUNT_GAMMA_T:-0.9}"
+CONTINUE_LOSS_WEIGHT="${CONTINUE_LOSS_WEIGHT:-0.1}"
 
 # -------- Delay controls --------
 
@@ -68,14 +85,12 @@ SUMMARY_PATH="${SUMMARY_PATH:-$SUMMARY_DIR/${NAME_PREFIX}_$(date +%Y-%m-%d_%H-%M
 
 # -------- Arguments --------
 
-if [[ $# -lt 1 ]]; then
-  echo "ERROR: missing MODEL_DIR."
-  echo "Usage: bash scripts/eval_scripts/compare_obs_delay.sh <MODEL_DIR> [LOAD_STEP ...]" >&2
-  exit 1
+if [[ $# -gt 0 ]]; then
+  MODEL_DIR="$1"
+  shift
+else
+  MODEL_DIR="$MODEL_DIR_DEFAULT"
 fi
-
-MODEL_DIR="$1"
-shift
 
 if [[ ! -d "$MODEL_DIR" ]]; then
   echo "ERROR: model directory does not exist: $MODEL_DIR" >&2
@@ -85,6 +100,8 @@ fi
 # Numeric checkpoint directories are required by src/run.py. best_model is not loaded directly.
 if [[ $# -gt 0 ]]; then
   LOAD_STEPS=("$@")
+elif [[ ${#LOAD_STEPS_DEFAULT[@]} -gt 0 ]]; then
+  LOAD_STEPS=("${LOAD_STEPS_DEFAULT[@]}")
 else
   mapfile -t LOAD_STEPS < <(
     find "$MODEL_DIR" -maxdepth 1 -mindepth 1 -type d -printf "%f\n" \
@@ -175,6 +192,8 @@ run_eval() {
     obs_gaussian_delay_mean="$OBS_DELAY_MEAN" \
     obs_gaussian_delay_std="$OBS_DELAY_STD" \
     obs_delay_discretization="$OBS_DELAY_DISCRETIZATION" \
+    temporal_discount_gamma_T="$TEMPORAL_DISCOUNT_GAMMA_T" \
+    continue_loss_weight="$CONTINUE_LOSS_WEIGHT" \
     name="$run_name"
 
   local extracted

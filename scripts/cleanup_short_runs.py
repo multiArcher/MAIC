@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+"exec" "python3" "$0" "$@"
 # 默认执行python scripts/cleanup_short_runs.py --threshold 500000 --delete
 import argparse
+import json
 import re
 import shutil
 from dataclasses import dataclass, field
@@ -9,6 +11,16 @@ from pathlib import Path
 
 STEP_RE = re.compile(r"\bt_env:\s*([0-9][0-9_]*)")
 MODEL_SAVE_RE = re.compile(r"Saving models to\s+(.+?/results/models/|results/models/)(.+?)/([0-9][0-9_]*)\b")
+FAIL_RE = re.compile(r"\b(Failed after|Run Failed|Traceback|FATAL|ERROR)\b")
+
+LOSS_TOKEN_REPLACEMENTS = (
+    ("td_loss_weight=", "td_="),
+    ("action_loss_weight=", "action_="),
+    ("continue_loss_weight=", "continue_="),
+    ("aux_loss_weight=", "aux_="),
+    ("entropy_loss_weight=", "entropy_="),
+)
+ABNORMAL_SACRED_STATUSES = {"FAILED", "INTERRUPTED", "TIMEOUT"}
 
 
 @dataclass
@@ -16,6 +28,7 @@ class RunArtifacts:
     token: str
     paths: set[Path] = field(default_factory=set)
     step_candidates: list[int] = field(default_factory=list)
+    failed: bool = False
 
     @property
     def max_steps(self) -> int | None:
@@ -52,7 +65,14 @@ def normalise_step(raw: str) -> int:
     return int(raw.replace("_", ""))
 
 
+def normalise_token(token: str) -> str:
+    for old, new in LOSS_TOKEN_REPLACEMENTS:
+        token = token.replace(old, new)
+    return token
+
+
 def add_run(runs: dict[str, RunArtifacts], token: str) -> RunArtifacts:
+    token = normalise_token(token)
     if token not in runs:
         runs[token] = RunArtifacts(token=token)
     return runs[token]
@@ -70,6 +90,8 @@ def collect_result_artifacts(results_dir: Path) -> dict[str, RunArtifacts]:
                 continue
             run = add_run(runs, path.name)
             run.paths.add(path)
+            if subdir == "sacred" and path.is_dir():
+                parse_sacred_run_dir(path, run)
 
     logs_dir = results_dir / "logs"
     if logs_dir.exists():
@@ -78,6 +100,8 @@ def collect_result_artifacts(results_dir: Path) -> dict[str, RunArtifacts]:
             run = add_run(runs, token)
             run.paths.add(path)
             run.step_candidates.extend(parse_steps_from_log(path))
+            if log_indicates_failure(path):
+                run.failed = True
 
     models_dir = results_dir / "models"
     if models_dir.exists():
@@ -90,18 +114,90 @@ def collect_result_artifacts(results_dir: Path) -> dict[str, RunArtifacts]:
     return runs
 
 
-def parse_steps_from_log(path: Path) -> list[int]:
+def parse_sacred_run_dir(path: Path, run: RunArtifacts) -> None:
+    for sacred_id_dir in path.iterdir():
+        if not sacred_id_dir.is_dir():
+            continue
+
+        metrics_path = sacred_id_dir / "metrics.json"
+        if metrics_path.exists():
+            run.step_candidates.extend(parse_steps_from_metrics(metrics_path))
+
+        cout_path = sacred_id_dir / "cout.txt"
+        if cout_path.exists():
+            run.step_candidates.extend(parse_steps_from_log(cout_path))
+            if log_indicates_failure(cout_path):
+                run.failed = True
+
+        run_path = sacred_id_dir / "run.json"
+        if run_path.exists():
+            status, steps = parse_sacred_run_json(run_path)
+            run.step_candidates.extend(steps)
+            if status in ABNORMAL_SACRED_STATUSES:
+                run.failed = True
+
+
+def parse_steps_from_metrics(path: Path) -> list[int]:
+    try:
+        data = json.loads(path.read_text(errors="ignore"))
+    except (OSError, json.JSONDecodeError):
+        return []
+
     steps: list[int] = []
+    if not isinstance(data, dict):
+        return steps
+
+    for metric in data.values():
+        if not isinstance(metric, dict):
+            continue
+        raw_steps = metric.get("steps")
+        if isinstance(raw_steps, list):
+            steps.extend(step for step in raw_steps if isinstance(step, int))
+    return steps
+
+
+def parse_sacred_run_json(path: Path) -> tuple[str | None, list[int]]:
+    try:
+        data = json.loads(path.read_text(errors="ignore"))
+    except (OSError, json.JSONDecodeError):
+        return None, []
+
+    if not isinstance(data, dict):
+        return None, []
+
+    steps: list[int] = []
+    status = data.get("status")
+    captured_out = data.get("captured_out")
+    if isinstance(captured_out, str):
+        steps.extend(parse_steps_from_text(captured_out))
+    return status if isinstance(status, str) else None, steps
+
+
+def parse_steps_from_log(path: Path) -> list[int]:
     try:
         text = path.read_text(errors="ignore")
     except OSError:
-        return steps
+        return []
+
+    return parse_steps_from_text(text)
+
+
+def parse_steps_from_text(text: str) -> list[int]:
+    steps: list[int] = []
 
     for match in STEP_RE.finditer(text):
         steps.append(normalise_step(match.group(1)))
     for match in MODEL_SAVE_RE.finditer(text):
         steps.append(normalise_step(match.group(3)))
     return steps
+
+
+def log_indicates_failure(path: Path) -> bool:
+    try:
+        text = path.read_text(errors="ignore")
+    except OSError:
+        return False
+    return FAIL_RE.search(text) is not None
 
 
 def parse_steps_from_model_dir(run_dir: Path) -> list[int]:
@@ -116,7 +212,6 @@ def collect_root_logs(root_log_dir: Path, runs: dict[str, RunArtifacts]) -> None
     if not root_log_dir.exists():
         return
 
-    token_by_model_path = {f"results/models/{token}/": token for token in runs}
     for path in root_log_dir.glob("*.log"):
         try:
             text = path.read_text(errors="ignore")
@@ -124,9 +219,9 @@ def collect_root_logs(root_log_dir: Path, runs: dict[str, RunArtifacts]) -> None
             continue
 
         matched_tokens = {
-            token
-            for marker, token in token_by_model_path.items()
-            if marker in text
+            normalise_token(match.group(2))
+            for match in MODEL_SAVE_RE.finditer(text)
+            if normalise_token(match.group(2)) in runs
         }
         for token in matched_tokens:
             runs[token].paths.add(path)
@@ -139,6 +234,8 @@ def collect_root_logs(root_log_dir: Path, runs: dict[str, RunArtifacts]) -> None
                 if log_path.exists():
                     runs[token].paths.add(log_path)
             runs[token].step_candidates.extend(parse_steps_from_log(path))
+            if FAIL_RE.search(text):
+                runs[token].failed = True
 
 
 def choose_deletion_candidates(
@@ -152,7 +249,10 @@ def choose_deletion_candidates(
     for run in runs.values():
         max_steps = run.max_steps
         if max_steps is None:
-            if delete_unknown:
+            if run.failed:
+                run.step_candidates.append(0)
+                candidates.append(run)
+            elif delete_unknown:
                 candidates.append(run)
             else:
                 skipped_unknown.append(run)
