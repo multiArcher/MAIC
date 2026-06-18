@@ -426,6 +426,9 @@ def parse_buffer_scheme(env_info: dict, common_reward: bool = True):
             "group": "agents",
             "dtype": torch.int,
         },
+        "obs_delay": {"vshape": (1,), "group": "agents", "dtype": torch.long},
+        "obs_gen_t": {"vshape": (1,), "group": "agents", "dtype": torch.long},
+        "obs_fresh_mask": {"vshape": (1,), "group": "agents", "dtype": torch.float32},
         "terminated": {"vshape": (1,), "dtype": torch.uint8},
     }
     # For individual rewards in gymmai reward is of shape (1, n_agents)
@@ -434,3 +437,5 @@ def parse_buffer_scheme(env_info: dict, common_reward: bool = True):
     else:
         scheme["reward"] = {"vshape": (env_info["n_agents"],)}
     return scheme
+
+

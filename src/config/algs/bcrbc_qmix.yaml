@@ -1,0 +1,128 @@
+# ------------------------------------------------------------------------------
+# ---Environment specific parameters---
+# ------------------------------------------------------------------------------
+name: "bcrbc_qmix"
+
+runner: "parallel"
+batch_size_run: 16
+
+entity_scheme: False
+
+test_nepisode: 128
+test_interval: 50000
+log_interval: 50000
+runner_log_interval: 50000
+learner_log_interval: 50000
+t_max: 10050000
+
+save_model: True
+save_model_interval: 1000000
+
+use_tensorboard: True
+buffer_cpu_only: False
+
+# ------------------------------------------------------------------------------
+# --- Algorithm specific parameters ---
+# ------------------------------------------------------------------------------
+mac: "bcrbc_mac"
+learner: "bcrbc_learner"
+mixer: "new_qmix_mixer"
+
+# ------------------------------------------------------------------------------
+# --- Controller specific parameters ---
+# ------------------------------------------------------------------------------
+agent_output_type: "q"
+
+action_selector: "epsilon_greedy"
+epsilon_start: 1.0
+epsilon_finish: 0.05
+epsilon_anneal_time: 500000
+evaluation_epsilon: 0.0
+
+# ------------------------------------------------------------------------------
+# --- BC-RBC model parameters ---
+# ------------------------------------------------------------------------------
+obs_agent_id: True
+obs_last_action: True
+
+bcrbc_d_model: 128
+bcrbc_belief_dim: 128
+bcrbc_z_dim: 64
+bcrbc_n_latent_tokens: 2
+bcrbc_depth: 4
+bcrbc_heads: 4
+bcrbc_dropout: 0.0
+bcrbc_q_hidden_dim: 128
+bcrbc_retro_max_replay_len: 0
+
+# Communication-delay pathway (messages = senders' observations, delayed).
+# Train is always no-delay; comm delay is sampled only at eval (test_mode).
+# Separate switch from the obs-delay generative mechanism; off by default.
+bcrbc_use_comm: False
+comm_gaussian_delay_mean: 1.0
+comm_gaussian_delay_std: 1.0
+bcrbc_max_delay: 16
+
+# --- DCRBC v2 generative world model (the method) ---
+# Eval-time autoregressive imputation + correction-on-arrival. Trained no-delay;
+# at eval, not-yet-arrived observations are replaced by latents the world model
+# generates from history, and late arrivals re-roll the latent buffer.
+bcrbc_generative_eval: True
+# NOTE (not yet implemented): a `belief_scheduled_sampling_ratio` ablation knob is
+# planned — fraction of training steps that feed the Q-head a self-generated
+# latent instead of the real belief, to measure the train/eval distribution shift.
+# The learner does not read it yet; add the flag here only when it is wired.
+
+# Loss weights. The generative method is ACTIVE by default:
+#  - flow_loss: the world-model objective (next-latent flow matching). REQUIRED
+#    for the generative eval rollout to produce meaningful latents.
+#  - rec_loss: reconstruct obs from the bottleneck z. LOAD-BEARING here (not just
+#    scaffolding) — z is a bottleneck and obs_decoder is its anchor; at 0 the
+#    latent is unconstrained. Keep > 0 whenever flow_loss > 0.
+#  - dyn_loss: legacy MLP next-latent loss, SUPERSEDED by flow_loss; keep 0.
+#  - retro_loss: stage-1 batch patch-and-replay consistency; the generative
+#    rollout is the inference-time mechanism, so keep 0 unless ablating.
+#  - msg_rec/arr: only meaningful with comm on / delay-aware training; keep 0.
+# For the plain no-delay QMIX baseline, set flow/rec to 0 and bcrbc_generative_eval False.
+td_loss_weight: 1.0
+rec_loss_weight: 1.0
+dyn_loss_weight: 0.0
+retro_loss_weight: 0.0
+msg_rec_loss_weight: 0.0
+arr_loss_weight: 0.0
+# Flow-matching world model (next-latent generator). flow_steps = Euler steps
+# used when sampling at eval.
+flow_loss_weight: 1.0
+bcrbc_flow_steps: 8
+bcrbc_flow_tau_embed_dim: 32
+bcrbc_flow_tau_buckets: 64
+
+# ------------------------------------------------------------------------------
+# --- Learner specific parameters ---
+# ------------------------------------------------------------------------------
+target_type: "td"
+
+standardise_returns: False
+standardise_rewards: True
+
+gamma: 0.99
+
+optimizer: adamW
+lr: 0.0004
+
+grad_norm_clip: 10
+
+batch_size: 32
+buffer_size: 5000
+
+double_q: True
+target_update_interval_or_tau: 200
+target_update_interval: 200
+
+# ------------------------------------------------------------------------------
+# --- Mixer specific parameters ---
+# ------------------------------------------------------------------------------
+mixing_embed_dim: 32
+
+hypernet_layers: 2
+hypernet_embed: 64
