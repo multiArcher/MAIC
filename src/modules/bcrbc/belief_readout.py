@@ -5,11 +5,11 @@ import torch.nn as nn
 class BeliefReadout(nn.Module):
     """Gather per-agent query tokens from joint block-causal latents."""
 
-    def __init__(self, d_model: int, belief_dim: int):
+    def __init__(self, model_hidden_dim: int, belief_dim: int):
         super().__init__()
         self.proj = nn.Sequential(
-            nn.LayerNorm(d_model),
-            nn.Linear(d_model, belief_dim),
+            nn.LayerNorm(model_hidden_dim),
+            nn.Linear(model_hidden_dim, belief_dim),
             nn.ReLU(inplace=True),
             nn.Linear(belief_dim, belief_dim),
         )

@@ -15,13 +15,16 @@ class RetroReplay:
     project rule that delay only appears at evaluation.
     """
 
-    def __init__(self, max_replay_len: int = 0, use_comm: bool = False, n_agents: int | None = None):
+    def __init__(self, max_replay_len: int, use_comm: bool, n_agents: int):
         self.max_replay_len = max_replay_len
         self.use_comm = use_comm
         self.n_agents = n_agents
 
     def compute(self, mac, batch, t: slice, delayed_out: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         obs_delay = batch["obs_delay"][:, t]
+        # Design choice: cap the teacher replay to the most recent max_replay_len steps
+        # (0 means replay the full window). Truncating shrinks the patched history the
+        # zero-delay teacher recomputes over.
         if self.max_replay_len > 0 and obs_delay.size(1) > self.max_replay_len:
             start = obs_delay.size(1) - self.max_replay_len
             obs_delay = obs_delay[:, start:]
@@ -38,6 +41,7 @@ class RetroReplay:
         patched_obs = self.patch_observations(raw_obs, obs_gen_t, start_t=start_t)
         clean_metadata = self._zero_delay_metadata(batch, t)
 
+        # Design choice: when comm is on, also rebuild full-information teacher messages.
         if self.use_comm:
             # Full-information teacher messages: each sender's patched (gen-time
             # aligned) observation, delivered with zero delay and full freshness.

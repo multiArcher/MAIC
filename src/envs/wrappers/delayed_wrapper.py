@@ -17,16 +17,16 @@ class DelayedObservationWrapper(MultiAgentEnv):
         delay_mean: float = 0.0,
         delay_std: float = 0.0,
         max_delay: int = 0,
-        per_agent: bool = True,
+        delay_per_agent: bool = True,
         seed: int | None = None,
     ):
         self.env = env
         self.delay_type = delay_type
-        self.delay = max(0, int(delay))
+        # self.delay = max(0, int(delay))
         self.delay_mean = float(delay_mean)
         self.delay_std = max(0.0, float(delay_std))
         self.max_delay = max(0, int(max_delay))
-        self.per_agent = bool(per_agent)
+        self.delay_per_agent = bool(delay_per_agent)
         self._rng = np.random.default_rng(seed)
 
         self.episode_limit = env.episode_limit
@@ -117,7 +117,7 @@ class DelayedObservationWrapper(MultiAgentEnv):
         ]
 
     def _sample_delays(self):
-        sample_size = self.n_agents if self.per_agent else 1
+        sample_size = self.n_agents if self.delay_per_agent else 1
         if self.delay_type == "fixed":
             sampled = np.full(sample_size, self.delay, dtype=np.int64)
         elif self.delay_type == "uniform":
@@ -128,7 +128,7 @@ class DelayedObservationWrapper(MultiAgentEnv):
             ).astype(np.int64)
             sampled = np.clip(sampled, 0, self.max_delay)
 
-        if not self.per_agent:
+        if not self.delay_per_agent:
             sampled = np.repeat(sampled, self.n_agents)
         return sampled
 

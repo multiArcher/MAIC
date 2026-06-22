@@ -32,43 +32,44 @@ class FlowDynamics(nn.Module):
     rectified flow / flow matching.
     """
 
-    def __init__(self, context_dim: int, z_dim: int, hidden_dim: int | None = None,
-                 tau_embed_dim: int = 32, n_tau_buckets: int = 64, n_tokens: int = 1):
+    def __init__(self, context_dim: int, latent_dim: int, hidden_dim: int,
+                 flow_time_embed_dim: int, num_flow_time_buckets: int, num_latent_tokens: int):
         super().__init__()
-        self.z_dim = z_dim
+        self.latent_dim = latent_dim
         self.context_dim = context_dim
-        self.n_tokens = n_tokens
-        hidden_dim = hidden_dim or max(context_dim, z_dim)
-        self.n_tau_buckets = n_tau_buckets
-        # Discrete tau embedding (lookup), matching DreamerV4's discrete tau.
-        self.tau_embed = nn.Embedding(n_tau_buckets + 1, tau_embed_dim)
-        # Per-token query embedding so the n_tokens latents generated from the
+        self.num_latent_tokens = num_latent_tokens
+        self.num_flow_time_buckets = num_flow_time_buckets
+        # Discrete flow-time embedding (lookup), matching DreamerV4's discrete tau.
+        self.tau_embed = nn.Embedding(num_flow_time_buckets + 1, flow_time_embed_dim)
+        # Per-token query embedding so the num_latent_tokens latents generated from the
         # same per-agent context can differ (homogeneous-capacity tokens). Added
-        # to the context along an explicit token axis; n_tokens=1 is a no-op zero.
-        self.token_query = nn.Parameter(torch.zeros(n_tokens, context_dim))
-        if n_tokens > 1:
+        # to the context along an explicit token axis.
+        self.token_query = nn.Parameter(torch.zeros(num_latent_tokens, context_dim))
+        # With a single latent token the query is a pure additive zero, so leave it at
+        # zero; only break the symmetry between tokens when there is more than one.
+        if num_latent_tokens > 1:
             nn.init.normal_(self.token_query, std=0.02)
         self.net = nn.Sequential(
-            nn.Linear(context_dim + z_dim + tau_embed_dim, hidden_dim),
+            nn.Linear(context_dim + latent_dim + flow_time_embed_dim, hidden_dim),
             nn.SiLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.SiLU(),
-            nn.Linear(hidden_dim, z_dim),
+            nn.Linear(hidden_dim, latent_dim),
         )
 
     def _with_token_axis(self, context: torch.Tensor) -> torch.Tensor:
-        """Broadcast the per-agent size-1 slot axis up to n_tokens, add per-token query.
+        """Broadcast the per-agent size-1 slot axis up to num_latent_tokens, add per-token query.
 
         The belief context arrives with the explicit size-1 vector axis
         ``[..., 1, context_dim]`` (the per-agent slot). Adding the learned
-        ``token_query`` (shape ``[n_tokens, context_dim]``) broadcasts that axis to
-        ``[..., n_tokens, context_dim]`` so each generated token differs. Pure
-        broadcast; no reshape of the batch prefix. n_tokens=1 is an additive zero.
+        ``token_query`` (shape ``[num_latent_tokens, context_dim]``) broadcasts that axis
+        to ``[..., num_latent_tokens, context_dim]`` so each generated token differs. Pure
+        broadcast; no reshape of the batch prefix. num_latent_tokens=1 is an additive zero.
         """
-        return context + self.token_query  # [...,1,ctx] + [n_tokens,ctx] -> [...,n_tokens,ctx]
+        return context + self.token_query  # [...,1,ctx] + [num_latent_tokens,ctx] -> [...,num_latent_tokens,ctx]
 
     def _tau_ids(self, tau: torch.Tensor) -> torch.Tensor:
-        return (tau.clamp(0.0, 1.0) * self.n_tau_buckets).round().long().clamp(0, self.n_tau_buckets)
+        return (tau.clamp(0.0, 1.0) * self.num_flow_time_buckets).round().long().clamp(0, self.num_flow_time_buckets)
 
     def predict_z1(self, context: torch.Tensor, x_tau: torch.Tensor, tau: torch.Tensor) -> torch.Tensor:
         """Predict the clean latent z_1 from a noised latent x_tau.
@@ -76,10 +77,10 @@ class FlowDynamics(nn.Module):
         Args:
             context: [..., context_dim] history summary (already carries the token
                 axis if one is present).
-            x_tau: [..., z_dim] noised latent at flow-time tau.
+            x_tau: [..., latent_dim] noised latent at flow-time tau.
             tau: [..., 1] flow-time in [0, 1].
         Returns:
-            z_1 prediction [..., z_dim].
+            z_1 prediction [..., latent_dim].
         """
         tau_emb = self.tau_embed(self._tau_ids(tau).squeeze(-1))
         net_in = torch.cat([context, x_tau, tau_emb], dim=-1)
@@ -95,12 +96,12 @@ class FlowDynamics(nn.Module):
 
         Args:
             context: [..., 1, context_dim] per-agent belief summary carrying the
-                size-1 slot axis; broadcast to n_tokens internally.
-            z_target: [..., n_tokens, z_dim] clean target latents (stop-grad here).
-            mask: optional [..., 1, 1] valid-step mask (broadcasts over n_tokens).
+                size-1 slot axis; broadcast to num_latent_tokens internally.
+            z_target: [..., num_latent_tokens, latent_dim] clean target latents (stop-grad here).
+            mask: optional [..., 1, 1] valid-step mask (broadcasts over num_latent_tokens).
         """
         z1 = z_target.detach()
-        ctx = self._with_token_axis(context)  # [..., n_tokens, context_dim]
+        ctx = self._with_token_axis(context)  # [..., num_latent_tokens, context_dim]
         tau = torch.rand(*z1.shape[:-1], 1, device=z1.device, dtype=z1.dtype)
         noise = torch.randn_like(z1)
         x_tau = (1.0 - tau) * noise + tau * z1
@@ -121,13 +122,13 @@ class FlowDynamics(nn.Module):
 
         Args:
             context: [..., 1, context_dim] per-agent belief carrying the size-1
-                slot axis; broadcast to n_tokens internally.
+                slot axis; broadcast to num_latent_tokens internally.
             steps: number of Euler steps K (4-16 is plenty for low-dim z).
         Returns:
-            generated latent z [..., n_tokens, z_dim].
+            generated latent z [..., num_latent_tokens, latent_dim].
         """
-        context = self._with_token_axis(context)  # [..., n_tokens, context_dim]
-        shape = (*context.shape[:-1], self.z_dim)
+        context = self._with_token_axis(context)  # [..., num_latent_tokens, context_dim]
+        shape = (*context.shape[:-1], self.latent_dim)
         x = torch.randn(shape, device=context.device, dtype=context.dtype)
         dt = 1.0 / steps
         for k in range(steps):

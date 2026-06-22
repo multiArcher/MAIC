@@ -51,7 +51,7 @@ class EnvMaker(Maker):
             "delay_mean": kwargs.pop("delay_mean", 0.0),
             "delay_std": kwargs.pop("delay_std", 0.0),
             "max_delay": kwargs.pop("max_delay", 0),
-            "per_agent": kwargs.pop("delay_per_agent", True),
+            "delay_per_agent": kwargs.pop("delay_per_agent", True),
             "seed": kwargs.get("seed"),
         }
         env = SMACWrapper(*args, **kwargs)

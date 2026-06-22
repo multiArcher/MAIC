@@ -10,55 +10,57 @@ from .layers import BlockCasualTransformer
 
 class BlockCausalTransformer(nn.Module):
     """Causal space-time block transformer wrapper.
-    
+
     Wraps the axial space-time transformer with a clean interface compatible
     with dynamics_core.py.
     """
 
     def __init__(
         self,
-        d_model: int,
-        depth: int,
-        heads: int,
-        dropout: float = 0.0,
-        kv_heads: Optional[int] = None,
-        dim_head: Optional[int] = None,
+        model_hidden_dim: int,
+        num_transformer_layers: int,
+        num_attention_heads: int,
+        dropout: float,
+        agent_slice: Optional[slice],
         time_block_every: int = 4,
         attn_softclamp_value: float = 50.,
         feed_forward_expansion_factor: int = 4,
-        agent_slice: Optional[slice] = None,
     ):
         """Initialize the transformer wrapper.
 
         Args:
-            d_model: Model dimension.
-            depth: Number of transformer blocks.
-            heads: Number of attention heads.
+            model_hidden_dim: Model dimension.
+            num_transformer_layers: Number of transformer blocks.
+            num_attention_heads: Number of attention heads.
             dropout: Dropout rate (unused in axial transformer).
-            kv_heads: Number of key/value heads for GQA. Defaults to heads.
-            dim_head: Dimension per head. Defaults to d_model // heads.
-            time_block_every: Apply temporal attention every N layers.
-            attn_softclamp_value: Softclamp value for attention logits.
-            feed_forward_expansion_factor: FFN expansion factor.
-            agent_slice: Optional slice for causal-confusion masking.
+            agent_slice: Slice for causal-confusion masking (the query-token span).
+            time_block_every: Apply temporal attention every N layers (architecture
+                constant, not a per-run hyperparameter).
+            attn_softclamp_value: Softclamp value for attention logits (architecture
+                constant).
+            feed_forward_expansion_factor: FFN expansion factor (architecture constant).
         """
         super().__init__()
 
-        if dim_head is None:
-            assert d_model % heads == 0, f"d_model must be divisible by heads"
-            dim_head = d_model // heads
+        # Per-head dimension is fully determined by the model dim and head count;
+        # a non-divisible config is a setup error and must fail loudly.
+        assert model_hidden_dim % num_attention_heads == 0, (
+            f"model_hidden_dim {model_hidden_dim} not divisible by "
+            f"num_attention_heads {num_attention_heads}"
+        )
+        attention_head_dim = model_hidden_dim // num_attention_heads
 
-        self.d_model = d_model
-        self.depth = depth
-        self.heads = heads
-        self.dim_head = dim_head
+        self.model_hidden_dim = model_hidden_dim
+        self.num_transformer_layers = num_transformer_layers
+        self.num_attention_heads = num_attention_heads
+        self.attention_head_dim = attention_head_dim
 
         self.transformer = BlockCasualTransformer(
-            dim=d_model,
-            depth=depth,
-            heads=heads,
-            kv_heads=kv_heads,
-            dim_head=dim_head,
+            dim=model_hidden_dim,
+            depth=num_transformer_layers,
+            heads=num_attention_heads,
+            kv_heads=num_attention_heads,
+            dim_head=attention_head_dim,
             q_norm=False,
             k_norm=True,
             attn_softclamp_value=attn_softclamp_value,
@@ -86,8 +88,8 @@ class BlockCausalTransformer(nn.Module):
             output: Tensor of the same shape [..., T, S, D].
         """
         assert tokens.ndim >= 3, f"Expected at least [T, S, D], got {tokens.shape}"
-        assert tokens.shape[-1] == self.d_model, (
-            f"Input dim {tokens.shape[-1]} != model dim {self.d_model}"
+        assert tokens.shape[-1] == self.model_hidden_dim, (
+            f"Input dim {tokens.shape[-1]} != model dim {self.model_hidden_dim}"
         )
 
         output = self.transformer(tokens)

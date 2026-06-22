@@ -41,6 +41,8 @@ evaluation_epsilon: 0.0
 
 # ------------------------------------------------------------------------------
 # --- BC-RBC model parameters ---
+# Every key below is read directly (args.X) with NO code-side default. A missing
+# or mistyped key raises at construction instead of silently using a fallback.
 # ------------------------------------------------------------------------------
 obs_agent_id: True
 obs_last_action: True
@@ -91,9 +93,10 @@ retro_loss_weight: 0.0
 msg_rec_loss_weight: 0.0
 arr_loss_weight: 0.0
 # Flow-matching world model (next-latent generator). flow_steps = Euler steps
-# used when sampling at eval.
+# used when sampling at eval. flow_hidden_dim = width of the flow head MLP.
 flow_loss_weight: 1.0
 bcrbc_flow_steps: 8
+bcrbc_flow_hidden_dim: 128
 bcrbc_flow_tau_embed_dim: 32
 bcrbc_flow_tau_buckets: 64
 

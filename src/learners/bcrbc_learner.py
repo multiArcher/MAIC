@@ -73,8 +73,8 @@ class BCRBCLearner(Learner):
             rew_shape = (1,) if self.args.common_reward else (self.n_agents,)
             self.rew_ms = RunningMeanStd(shape=rew_shape, device=self.device)
         self.retro_replay = RetroReplay(
-            getattr(args, "bcrbc_retro_max_replay_len", 0),
-            use_comm=getattr(args, "bcrbc_use_comm", False),
+            args.bcrbc_retro_max_replay_len,
+            use_comm=args.bcrbc_use_comm,
             n_agents=self.n_agents,
         )
 
@@ -119,7 +119,7 @@ class BCRBCLearner(Learner):
                 target_joint_action_value = target_joint_action_value * torch.sqrt(self.ret_ms.var) + self.ret_ms.mean
 
         with torch.no_grad():
-            match target_type := getattr(self.args, "target_type", "td"):
+            match target_type := self.args.target_type:
                 case "td":
                     td_targets = rewards[..., None, None] + self.args.gamma * target_joint_action_value[:, 1:] * (1 - terminated[..., None, None])
                 case "td_lambda":
@@ -137,11 +137,11 @@ class BCRBCLearner(Learner):
         masked_td_error = td_error * mixer_mask
         td_loss = (masked_td_error**2).sum() / mixer_mask.sum().clamp_min(1.0)
 
-        rec_weight = getattr(self.args, "rec_loss_weight", 0.0)
-        dyn_weight = getattr(self.args, "dyn_loss_weight", 0.0)
-        flow_weight = getattr(self.args, "flow_loss_weight", 0.0)
-        msg_rec_weight = getattr(self.args, "msg_rec_loss_weight", 0.0)
-        arr_weight = getattr(self.args, "arr_loss_weight", 0.0)
+        rec_weight = self.args.rec_loss_weight
+        dyn_weight = self.args.dyn_loss_weight
+        flow_weight = self.args.flow_loss_weight
+        msg_rec_weight = self.args.msg_rec_loss_weight
+        arr_weight = self.args.arr_loss_weight
 
         if rec_weight > 0 or msg_rec_weight > 0 or arr_weight > 0 or flow_weight > 0:
             # Per-agent mask with the explicit vector axis: [b, t, n, 1, 1].
@@ -172,7 +172,7 @@ class BCRBCLearner(Learner):
             )
         else:
             flow_loss = td_loss.new_zeros(())
-        if msg_rec_weight > 0 and getattr(self.mac, "use_comm", False):
+        if msg_rec_weight > 0 and self.mac.use_comm:
             with torch.no_grad():
                 teacher_msgs = self.mac.comm_delay(
                     batch["obs"][:, t_slice].to(self.device), start_t=0, training=True
@@ -182,15 +182,15 @@ class BCRBCLearner(Learner):
             )
         else:
             msg_rec_loss = td_loss.new_zeros(())
-        if arr_weight > 0 and "obs_delay" in batch.scheme:
+        if arr_weight > 0:
             # delay_logits [b,t,n,1,buckets]; lift delay target to [b,t,n,1,1].
             arr_loss = arrival_loss(
                 mac_out["delay_logits"][:, :-1], batch["obs_delay"][:, :-1].to(self.device).unsqueeze(-2), agent_mask
             )
         else:
             arr_loss = td_loss.new_zeros(())
-        retro_weight = getattr(self.args, "retro_loss_weight", 0.0)
-        if retro_weight > 0 and all(k in batch.scheme for k in ("obs_delay", "obs_gen_t", "obs_fresh_mask")):
+        retro_weight = self.args.retro_loss_weight
+        if retro_weight > 0:
             retro = self.retro_replay.compute(self.mac, batch, t_slice, mac_out)
             retro_time_mask = mask[:, retro["time_slice"]]
             loss_steps = min(retro_time_mask.size(1), retro["retro_mask"].size(1))
@@ -206,7 +206,7 @@ class BCRBCLearner(Learner):
             retro_loss = td_loss.new_zeros(())
 
         total_loss = (
-            getattr(self.args, "td_loss_weight", 1.0) * td_loss
+            self.args.td_loss_weight * td_loss
             + rec_weight * rec_loss
             + dyn_weight * dyn_loss
             + retro_weight * retro_loss

@@ -189,20 +189,22 @@ class BlockCasualTransformer(nn.Module):
             agent   |  True   |  True  |  True |
         """
         if self.is_dynamics:
-                    # 动力学模型中，同一时间步内的普通 Tokens 是全连接相互关注的
-                    mask = torch.ones((dim, dim), device=device, dtype=torch.bool)
+            # In the dynamics (world-model) mode, ordinary tokens within the same
+            # time step attend to each other fully (bidirectional).
+            mask = torch.ones((dim, dim), device=device, dtype=torch.bool)
 
-                    if self.agent_slice is not None:
-                        # 遵循论文 3.3 节规则防因果混淆 (Causal Confusion)
-                        # 规则 1: 任何其他模态都不能反过来关注 Agent Tokens
-                        # (即 mask[:, agent_slice] 所在的列为 False)
-                        mask[:, self.agent_slice] = False
+            if self.agent_slice is not None:
+                # Follow the paper's section 3.3 rule to prevent causal confusion.
+                # Rule 1: no other modality may attend back to the agent tokens
+                # (i.e. the columns at agent_slice are set to False).
+                mask[:, self.agent_slice] = False
 
-                        # 规则 2: Agent Token 可以关注自身以及所有其他模态
-                        # (即 mask[agent_slice, :] 所在的行为 True，这也把上面自身对自身的关注补了回来)
-                        mask[self.agent_slice, :] = True
+                # Rule 2: agent tokens may attend to themselves and to all other
+                # modalities (i.e. the rows at agent_slice are set to True, which
+                # also restores agent-token self-attention disabled by rule 1).
+                mask[self.agent_slice, :] = True
 
-                    return mask
+            return mask
 
         if self.num_special_tokens == 0:
             return None
@@ -293,7 +295,7 @@ class BlockCasualTransformer(nn.Module):
             else:
                 x = layer_out
 
-            # 3. 处理返回
+            # 3. Transpose back to time-major if this was a time layer.
             if is_time_layer:
                 x = x.transpose(-2, -3)  # (..., T, S, D)
 

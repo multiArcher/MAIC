@@ -23,19 +23,14 @@ class BlockBuilder(nn.Module):
     the [B, T, S, D] token tensor with explicit query-token positioning.
     """
 
-    def __init__(self, tokenizer: nn.Module, window_len: int | None = None):
+    def __init__(self, tokenizer: nn.Module):
         """Initialize the block builder.
 
         Args:
-            tokenizer: DelayTokenizer instance (assumed to be already built)
-            window_len: Rolling window length for token blocks (None = full sequence).
-                        Currently not implemented; defaults to full sequence.
+            tokenizer: DelayTokenizer instance (assumed to be already built).
         """
         super().__init__()
         self.tokenizer = tokenizer
-        self.window_len = window_len
-        if window_len is not None:
-            raise NotImplementedError("Rolling window tokenization is deferred to Phase F")
 
     @property
     def query_indices(self) -> torch.Tensor:
