@@ -4,17 +4,17 @@
 # ! Should check every time before running.
 # ! ============================================================================
 # Experiment parameters
-EXPERIMENT_NAME=code_qmix_protoss_5_vs_5_baseline_seed2024  # Experiment name for logging.
+EXPERIMENT_NAME=code_qmix_5m_vs_6m_action0p1_seed2024  # Experiment name for logging.
 CONFIG=code_qmix  # Algorithm config name in src/config/alg
 ENV_CONFIG=sc2v2  # Environment config in src/config/envs
-MAP_NAME=protoss_5_vs_5  # Map name, e.g., 3m in StarCraftII.
+MAP_NAME=5m_vs_6m  # Map name, e.g., 3m in StarCraftII.
 REPEAT_TIMES=1  # Times to run the experiment.
 BATCH_SIZE_RUN=4 # Batch size for each run, which is used to calculate the total batch size as BATCH_SIZE_RUN * REPEAT_TIMES.
 COMM_GAUSSIAN_DELAY_MEAN=0  # delay mean of communication.
 COMM_GAUSSIAN_DELAY_STD=0   # delay std of communication.
 
 TD_LOSS_WEIGHT=1.0        # Weight for TD loss
-ACTION_LOSS_WEIGHT=0.01    # Weight for inference loss (future action prediction)
+ACTION_LOSS_WEIGHT=0.1    # Weight for inference loss (future action prediction)
 CONTINUE_LOSS_WEIGHT=0.01    # Weight for continuity loss (intent stability)
 AUX_LOSS_WEIGHT=0.01     # Weight for KL divergence loss (intent regularization)
 ENTROPY_LOSS_WEIGHT=0.01  # Weight for attention entropy regularization
@@ -83,11 +83,12 @@ if [[ "${IN_TRAIN_SCREEN:-0}" != "1" ]]; then
         echo "screen not found. Install screen first, then rerun this script." >&2
         exit 1
     fi
-    if screen -list | grep -q "\\.${SCREEN_SESSION}[[:space:]]"; then
-        echo "screen session already exists: $SCREEN_SESSION" >&2
-        echo "Attach with: screen -r $SCREEN_SESSION"
-        exit 1
-    fi
+    BASE_SCREEN_SESSION="$SCREEN_SESSION"
+    screen_session_idx=1
+    while screen -list | grep -q "\\.${SCREEN_SESSION}[[:space:]]"; do
+        screen_session_idx=$((screen_session_idx + 1))
+        SCREEN_SESSION="${BASE_SCREEN_SESSION}_${screen_session_idx}"
+    done
 
     screen -dmS "$SCREEN_SESSION" bash -lc "
         source \"\$HOME/miniconda3/etc/profile.d/conda.sh\" &&

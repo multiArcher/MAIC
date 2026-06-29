@@ -178,8 +178,17 @@ if __name__ == "__main__":
         "entropy_loss_weight",
     ]
     _apply_flat_cli_overrides(config_dict, params, loss_weight_keys)
+    loss_weight_suffix_names = {
+        "td_loss_weight": "td_",
+        "action_loss_weight": "action_",
+        "continue_loss_weight": "continue_",
+        "aux_loss_weight": "aux_",
+        "entropy_loss_weight": "entropy_",
+    }
     loss_weight_suffix = "".join(
-        f"-{key}={config_dict[key]}" for key in loss_weight_keys if key in config_dict
+        f"-{loss_weight_suffix_names[key]}={config_dict[key]}"
+        for key in loss_weight_keys
+        if key in config_dict
     )
     unique_token = (
         f"{experiment_name}__{map_name}__{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"

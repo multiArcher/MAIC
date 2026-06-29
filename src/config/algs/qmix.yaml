@@ -61,6 +61,16 @@ target_update_interval_or_tau: 200
 
 obs_individual_obs: False
 
+# Optional observation delay at the agent input boundary. The replay buffer keeps
+# true observations; delay only changes which historical observation is fed to
+# the controller during forward passes.
+obs_delay_enabled: False
+obs_delay_apply_train: False
+obs_delay_apply_test: False
+obs_gaussian_delay_mean: 0.0
+obs_gaussian_delay_std: 0.0
+obs_delay_discretization: round
+
 # use the Q_Learner to train
 standardise_returns: False
 standardise_rewards: True

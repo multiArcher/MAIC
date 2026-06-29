@@ -1,152 +1,184 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Compare one or more checkpoints with and without observation delay.
+# Evaluate one checkpoint under communication and observation delay.
+# Only the final matrix TSV is kept; per-evaluation logs/artifacts are removed
+# after extracting metric/test_battle_won_mean.
 #
-# Usage:
+# Choose the algorithm, map, model, and checkpoint with variables below or
+# environment overrides:
 #   bash scripts/eval_scripts/compare_obs_delay.sh
+#   CONFIG=qmix MAP_NAME=MMM2 \
+#   MODEL_NAME=qmix_mmm2_baseline_seed2024_run1__MMM2__2026-06-16_00-02-02 \
+#   LOAD_STEPS=2000266 bash scripts/eval_scripts/compare_obs_delay.sh
 #
-# Edit MODEL_DIR_DEFAULT below, then run the script directly. Optional command-line
-# arguments still override the default:
-#   bash scripts/eval_scripts/compare_obs_delay.sh <MODEL_DIR> [LOAD_STEP ...]
+# Single-model usage is still supported:
+#   CONFIG=qmix MAP_NAME=MMM2 bash scripts/eval_scripts/compare_obs_delay.sh <MODEL_DIR> [LOAD_STEP ...]
 #
-# Example:
-#   bash scripts/eval_scripts/compare_obs_delay.sh \
-#     "results/models/code_qmix_win_6_run1__5m_vs_6m__2026-06-08_23-46-53-td_=1.0-action_=0.01-continue_=0.1-aux_=0.01-entropy_=0.01" \
-#     114 1000115 2000157 3000232
-#
-# You can override the important parameters from the command line:
-#   MAP_NAME=5m_vs_6m TEST_NEPISODE=200 SEEDS="2024 2025" \
-#   OBS_DELAY_MEAN=1.0 OBS_DELAY_STD=1.0 \
-#   bash scripts/eval_scripts/compare_obs_delay.sh <MODEL_DIR> 3000232
+# Useful overrides:
+#   TEST_NEPISODE=16 GROUP_SEEDS="2024 2025 2026 2027 2028" \
+#   COMM_DELAY_GRID="0:0 1:1 2:1 2:2 3:1 3:2 5:2" \
+#   OBS_DELAY_GRID="0:1 -1:1 0:0 1:1 2:1 2:2 3:1 3:2" INCLUDE_ZERO_ZERO_BASELINE=True \
+#   bash scripts/eval_scripts/compare_obs_delay.sh
 
 # -------- Main experiment controls --------
 
-# Default model directory. Change this one line when evaluating a different run.
-MODEL_DIR_DEFAULT="${MODEL_DIR_DEFAULT:-results/models/code_qmix_win_6_run1__5m_vs_6m__2026-06-08_23-46-53-td_=1.0-action_=0.01-continue_=0.1-aux_=0.01-entropy_=0.01}"
+CONFIG="${CONFIG:-qmix}"  # code_qmix
+ENV_CONFIG="${ENV_CONFIG:-sc2}"
+MAP_NAME="${MAP_NAME:-MMM2}"  # 5m_vs_6m
 
-# Leave empty to evaluate the latest numeric checkpoint under MODEL_DIR_DEFAULT.
-# Example:
-#   LOAD_STEPS_DEFAULT=(114 1000115 2000157 3000232)
-LOAD_STEPS_DEFAULT=()
+# MODEL_NAME is resolved under results/models. MODEL_DIR may be used instead
+# when an absolute or custom model path is preferred.
+MODEL_NAME="${MODEL_NAME:-qmix_mmm2_baseline_seed2024_run1__MMM2__2026-06-16_00-02-02}"
+MODEL_DIR="${MODEL_DIR:-}"
 
-# StarCraft map/environment. Must match the model's trained map for a clean comparison.
-MAP_NAME="${MAP_NAME:-5m_vs_6m}"
+# Space-separated numeric checkpoint steps. Set LOAD_STEPS="" to choose the
+# checkpoint closest to TARGET_LOAD_STEP.
+LOAD_STEPS="${LOAD_STEPS-2000218}"
 
-# Number of evaluation episodes per run. Larger values reduce variance but take longer.
-TEST_NEPISODE="${TEST_NEPISODE:-64}"
-
-# Number of SC2 environments launched in parallel. Keep this small on local WSL.
-# code_qmix.yaml defaults to 16, which often causes PySC2 connection failures locally.
+TEST_NEPISODE="${TEST_NEPISODE:-16}"
 BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-4}"
+GROUP_SEEDS="${GROUP_SEEDS:-${SEEDS:-2024 2025 2026 2027 2028}}"
 
-# Evaluation seeds. Multiple seeds are recommended because SC2 and delay sampling are stochastic.
-SEEDS="${SEEDS:-2024}"
-
-# Device controls. Set CUDA_VISIBLE_DEVICES="" and DEVICE=cpu if you want CPU evaluation.
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 DEVICE="${DEVICE:-cuda}"
-
-# StarCraft II install path used by SMAC/PySC2. This matches the training scripts.
-# Override it if your game is installed somewhere else:
-#   SC2PATH=/path/to/StarCraftII bash scripts/eval_scripts/compare_obs_delay.sh ...
 SC2PATH="${SC2PATH:-$HOME/.local/share/StarCraftII}"
 
-# Algorithm/environment configs used by the saved code_qmix checkpoint.
-CONFIG="${CONFIG:-code_qmix}"
-ENV_CONFIG="${ENV_CONFIG:-sc2}"
+# The script chooses the numeric checkpoint closest to this value when a step is
+# not provided explicitly. Numeric checkpoints are required by src/run.py.
+TARGET_LOAD_STEP="${TARGET_LOAD_STEP:-2000000}"
 
-# Forward/training config values used by the checkpoint. Keep these aligned with
-# the training script that produced MODEL_DIR_DEFAULT.
-TEMPORAL_DISCOUNT_GAMMA_T="${TEMPORAL_DISCOUNT_GAMMA_T:-0.9}"
-CONTINUE_LOSS_WEIGHT="${CONTINUE_LOSS_WEIGHT:-0.1}"
-
-# -------- Delay controls --------
-
-# Communication delay is fixed to zero by default so the comparison isolates observation delay.
-COMM_DELAY_MEAN="${COMM_DELAY_MEAN:-0}"
-COMM_DELAY_STD="${COMM_DELAY_STD:-0}"
-
-# Observation delay distribution. RBC-style observation delay commonly uses N(1, 1).
-# 这里切换延迟程度
-OBS_DELAY_MEAN="${OBS_DELAY_MEAN:-1.0}"
-OBS_DELAY_STD="${OBS_DELAY_STD:-1.0}"
-
-# How to convert sampled continuous Gaussian delay to integer timesteps.
-# round keeps the realized mean closest to OBS_DELAY_MEAN; ceil is more pessimistic.
+# Delay grids use "mean:std" entries separated by spaces.
+COMM_DELAY_GRID="${COMM_DELAY_GRID:-0:0 1:1 2:1 2:2 3:1 3:2 5:2}"
+OBS_DELAY_GRID="${OBS_DELAY_GRID:-0:1 -1:1 0:0 1:1 2:1 2:2 3:1 3:2}"
 OBS_DELAY_DISCRETIZATION="${OBS_DELAY_DISCRETIZATION:-round}"
+INCLUDE_ZERO_ZERO_BASELINE="${INCLUDE_ZERO_ZERO_BASELINE:-False}"
+MATRIX_VALUE_SCALE="${MATRIX_VALUE_SCALE:-percent}"
 
-# Prefix in result names. The script appends step, seed, and obs/no_obs automatically.
-NAME_PREFIX="${NAME_PREFIX:-eval_obs_delay_compare}"
+# Optional extra Sacred config overrides, for algorithms/checkpoints that need
+# additional eval-time values.
+EVAL_EXTRA_ARGS="${EVAL_EXTRA_ARGS:-}"
+CONFIG_HAS_COMM_DELAY=False
 
-# Evaluation summary output. The script appends one row per eval run.
-SUMMARY_DIR="${SUMMARY_DIR:-results/eval_summaries}"
-SUMMARY_PATH="${SUMMARY_PATH:-$SUMMARY_DIR/${NAME_PREFIX}_$(date +%Y-%m-%d_%H-%M-%S).tsv}"
+NAME_PREFIX="${NAME_PREFIX:-eval_delay_grid}"
+SUMMARY_ROOT="${SUMMARY_ROOT:-eval_summaries}"
+SUMMARY_DIR="${SUMMARY_DIR:-}"
+SUMMARY_PATH="${SUMMARY_PATH:-}"
+RAW_SUMMARY_KEEP="${RAW_SUMMARY_KEEP:-False}"
+RAW_SUMMARY_KEEP_PATH="${RAW_SUMMARY_KEEP_PATH:-}"
+RAW_SUMMARY_PATH="$(mktemp /tmp/${NAME_PREFIX}_raw_XXXXXX.tsv)"
+trap 'rm -f "$RAW_SUMMARY_PATH"' EXIT
 
-# -------- Arguments --------
+# -------- Helpers --------
 
-if [[ $# -gt 0 ]]; then
-  MODEL_DIR="$1"
-  shift
-else
-  MODEL_DIR="$MODEL_DIR_DEFAULT"
-fi
-
-if [[ ! -d "$MODEL_DIR" ]]; then
-  echo "ERROR: model directory does not exist: $MODEL_DIR" >&2
+die() {
+  echo "ERROR: $*" >&2
   exit 1
-fi
+}
 
-# Numeric checkpoint directories are required by src/run.py. best_model is not loaded directly.
-if [[ $# -gt 0 ]]; then
-  LOAD_STEPS=("$@")
-elif [[ ${#LOAD_STEPS_DEFAULT[@]} -gt 0 ]]; then
-  LOAD_STEPS=("${LOAD_STEPS_DEFAULT[@]}")
-else
-  mapfile -t LOAD_STEPS < <(
-    find "$MODEL_DIR" -maxdepth 1 -mindepth 1 -type d -printf "%f\n" \
-      | awk '/^[0-9]+$/' \
-      | sort -n
-  )
-  if [[ ${#LOAD_STEPS[@]} -gt 0 ]]; then
-    LOAD_STEPS=("${LOAD_STEPS[-1]}")
+sanitize_label_part() {
+  local value="$1"
+  value="${value//./p}"
+  value="${value//-/_neg_}"
+  echo "$value"
+}
+
+parse_delay_pair() {
+  local pair="$1"
+  local mean="${pair%%:*}"
+  local std="${pair#*:}"
+  [[ "$pair" == *:* && -n "$mean" && -n "$std" ]] || die "delay grid entry must be mean:std, got: $pair"
+  printf "%s\t%s\n" "$mean" "$std"
+}
+
+normalise_map_name() {
+  case "$1" in
+    5V6|5v6|5m6m|5m_vs_6m) echo "5m_vs_6m" ;;
+    protoss|Protoss|protoss_5v5|protoss_5_vs_5) echo "protoss_5_vs_5" ;;
+    MMM|mmm) echo "MMM" ;;
+    MMM2|mmm2) echo "MMM2" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+resolve_model_dir() {
+  local model_dir="$1"
+  local model_name="$2"
+
+  if [[ -n "$model_dir" ]]; then
+    echo "$model_dir"
+  elif [[ -n "$model_name" ]]; then
+    echo "results/models/$model_name"
+  else
+    return 1
   fi
-fi
+}
 
-if [[ ${#LOAD_STEPS[@]} -eq 0 ]]; then
-  echo "ERROR: no numeric checkpoint directories found under: $MODEL_DIR" >&2
-  exit 1
-fi
+delay_label() {
+  local mean="$1"
+  local std="$2"
+  echo "N($mean,$std)"
+}
 
-export CUDA_VISIBLE_DEVICES
-export SC2PATH
-export NO_PROXY="${NO_PROXY:+$NO_PROXY,}127.0.0.1,localhost"
-export no_proxy="${no_proxy:+$no_proxy,}127.0.0.1,localhost"
+append_code_qmix_training_args() {
+  local model_dir="$1"
+  local -n out_args="$2"
+  local model_name
+  model_name="$(basename "$model_dir")"
 
-if [[ ! -d "$SC2PATH/Versions" ]]; then
-  echo "ERROR: StarCraft II Versions directory not found: $SC2PATH/Versions" >&2
-  echo "Set SC2PATH to your StarCraftII install, for example:" >&2
-  echo "  SC2PATH=\$HOME/.local/share/StarCraftII bash $0 <MODEL_DIR> [LOAD_STEP ...]" >&2
-  exit 1
-fi
+  out_args+=("temporal_discount_gamma_T=${CODE_QMIX_TEMPORAL_DISCOUNT_GAMMA_T:-0.9}")
 
-mkdir -p "$SUMMARY_DIR"
-printf "step\tseed\tcondition\ttest_battle_won_mean\tlog_path\n" > "$SUMMARY_PATH"
+  if [[ "$model_name" =~ td_=([^:-]+) ]]; then
+    out_args+=("td_loss_weight=${BASH_REMATCH[1]}")
+  fi
+  if [[ "$model_name" =~ action_=([^:-]+) ]]; then
+    out_args+=("action_loss_weight=${BASH_REMATCH[1]}")
+  fi
+  if [[ "$model_name" =~ continue_=([^:-]+) ]]; then
+    out_args+=("continue_loss_weight=${BASH_REMATCH[1]}")
+  fi
+  if [[ "$model_name" =~ aux_=([^:-]+) ]]; then
+    out_args+=("aux_loss_weight=${BASH_REMATCH[1]}")
+  fi
+  if [[ "$model_name" =~ entropy_=([^:-]+) ]]; then
+    out_args+=("entropy_loss_weight=${BASH_REMATCH[1]}")
+  fi
+}
+
+closest_checkpoint() {
+  local model_dir="$1"
+  find "$model_dir" -maxdepth 1 -mindepth 1 -type d -printf "%f\n" \
+    | awk -v target="$TARGET_LOAD_STEP" '
+        /^[0-9]+$/ {
+          diff = $1 - target
+          if (diff < 0) diff = -diff
+          if (!seen || diff < best_diff || (diff == best_diff && $1 < best_step)) {
+            best_step = $1
+            best_diff = diff
+            seen = 1
+          }
+        }
+        END {
+          if (seen) print best_step
+        }
+      '
+}
 
 extract_latest_winrate() {
   local run_name="$1"
+  local map_name="$2"
   local log_path
   local winrate
 
   log_path="$(
-    find results/logs -maxdepth 1 -type f -name "${run_name}__${MAP_NAME}__*.log" -printf "%T@ %p\n" \
+    find results/logs -maxdepth 1 -type f -name "${run_name}__${map_name}__*.log" -printf "%T@ %p\n" \
       | sort -nr \
       | head -1 \
       | cut -d' ' -f2-
   )"
 
   if [[ -z "$log_path" || ! -f "$log_path" ]]; then
-    echo "NA"
+    echo "NA|NA"
     return
   fi
 
@@ -156,101 +188,302 @@ extract_latest_winrate() {
   echo "$winrate|$log_path"
 }
 
-run_eval() {
-  local step="$1"
-  local seed="$2"
-  local obs_enabled="$3"
-  local obs_label="$4"
+cleanup_eval_artifacts() {
+  local run_name="$1"
+  local map_name="$2"
+  local token_prefix="${run_name}__${map_name}__"
 
-  local run_name="${NAME_PREFIX}_${MAP_NAME}_step${step}_seed${seed}_${obs_label}"
+  find results/logs -maxdepth 1 -type f -name "${token_prefix}*.log" -delete 2>/dev/null || true
+  find results/sacred -maxdepth 1 -mindepth 1 -type d -name "${token_prefix}*" -exec rm -rf {} + 2>/dev/null || true
+  find results/tensorboard_logs -maxdepth 1 -mindepth 1 -type d -name "${token_prefix}*" -exec rm -rf {} + 2>/dev/null || true
+  find results/traces -maxdepth 1 -mindepth 1 -type d -name "${token_prefix}*" -exec rm -rf {} + 2>/dev/null || true
+}
+
+run_eval() {
+  local map_name="$1"
+  local model_dir="$2"
+  local step="$3"
+  local seed="$4"
+  local comm_mean="$5"
+  local comm_std="$6"
+  local obs_mean="$7"
+  local obs_std="$8"
+
+  local comm_label_mean
+  local comm_label_std
+  local obs_label_mean
+  local obs_label_std
+  comm_label_mean="$(sanitize_label_part "$comm_mean")"
+  comm_label_std="$(sanitize_label_part "$comm_std")"
+  obs_label_mean="$(sanitize_label_part "$obs_mean")"
+  obs_label_std="$(sanitize_label_part "$obs_std")"
+
+  local condition="comm_m${comm_label_mean}_s${comm_label_std}__obs_m${obs_label_mean}_s${obs_label_std}_${OBS_DELAY_DISCRETIZATION}"
+  local run_name="${NAME_PREFIX}_${map_name}_step${step}_seed${seed}_${condition}"
+  local obs_enabled=True
+  if [[ "$obs_mean" == "0" && "$obs_std" == "0" ]]; then
+    obs_enabled=False
+  fi
 
   echo "================================================================================"
-  echo "MODEL_DIR:      $MODEL_DIR"
-  echo "MAP_NAME:       $MAP_NAME"
+  echo "MODEL_DIR:      $model_dir"
+  echo "CONFIG:         $CONFIG"
+  echo "MAP_NAME:       $map_name"
   echo "LOAD_STEP:      $step"
   echo "SEED:           $seed"
-  echo "OBS_DELAY:      $obs_enabled"
+  echo "COMM_DELAY:     N($comm_mean, $comm_std)"
+  echo "OBS_DELAY:      N($obs_mean, $obs_std), enabled=$obs_enabled"
   echo "RUN_NAME:       $run_name"
   echo "TEST_NEPISODE:  $TEST_NEPISODE"
   echo "BATCH_SIZE_RUN: $BATCH_SIZE_RUN"
+  echo "EVAL_EXTRA_ARGS:${EVAL_EXTRA_ARGS:+ $EVAL_EXTRA_ARGS}"
   echo "================================================================================"
 
-  python src/main.py --config="$CONFIG" --env-config="$ENV_CONFIG" with \
-    evaluate=True \
-    checkpoint_path="$MODEL_DIR" \
-    load_step="$step" \
-    env_args.map_name="$MAP_NAME" \
-    test_nepisode="$TEST_NEPISODE" \
-    batch_size_run="$BATCH_SIZE_RUN" \
-    seed="$seed" \
-    device="$DEVICE" \
-    comm_gaussian_delay_mean="$COMM_DELAY_MEAN" \
-    comm_gaussian_delay_std="$COMM_DELAY_STD" \
-    obs_delay_enabled="$obs_enabled" \
-    obs_delay_apply_train=False \
-    obs_delay_apply_test="$obs_enabled" \
-    obs_gaussian_delay_mean="$OBS_DELAY_MEAN" \
-    obs_gaussian_delay_std="$OBS_DELAY_STD" \
-    obs_delay_discretization="$OBS_DELAY_DISCRETIZATION" \
-    temporal_discount_gamma_T="$TEMPORAL_DISCOUNT_GAMMA_T" \
-    continue_loss_weight="$CONTINUE_LOSS_WEIGHT" \
+  local extra_args=()
+  if [[ -n "$EVAL_EXTRA_ARGS" ]]; then
+    read -r -a extra_args <<< "$EVAL_EXTRA_ARGS"
+  fi
+
+  local eval_cmd=(
+    python src/main.py --config="$CONFIG" --env-config="$ENV_CONFIG" with
+    evaluate=True
+    use_tensorboard=False
+    use_wandb=False
+    save_model=False
+    save_replay=False
+    save_evaluate_state=False
+    checkpoint_path="$model_dir"
+    load_step="$step"
+    env_args.map_name="$map_name"
+    test_nepisode="$TEST_NEPISODE"
+    batch_size_run="$BATCH_SIZE_RUN"
+    seed="$seed"
+    device="$DEVICE"
+    obs_delay_enabled="$obs_enabled"
+    obs_delay_apply_train=False
+    obs_delay_apply_test="$obs_enabled"
+    obs_gaussian_delay_mean="$obs_mean"
+    obs_gaussian_delay_std="$obs_std"
+    obs_delay_discretization="$OBS_DELAY_DISCRETIZATION"
     name="$run_name"
+  )
+  if [[ "$CONFIG_HAS_COMM_DELAY" == "True" ]]; then
+    eval_cmd+=(
+      comm_gaussian_delay_mean="$comm_mean"
+      comm_gaussian_delay_std="$comm_std"
+    )
+  fi
+  if [[ "$CONFIG" == "code_qmix" ]]; then
+    append_code_qmix_training_args "$model_dir" eval_cmd
+  fi
+  eval_cmd+=("${extra_args[@]}")
+
+  printf "EVAL_CMD:"
+  printf " %q" "${eval_cmd[@]}"
+  printf "\n"
+
+  set +e
+  "${eval_cmd[@]}"
+  local eval_status=$?
+  set -e
+  if [[ $eval_status -ne 0 ]]; then
+    cleanup_eval_artifacts "$run_name" "$map_name"
+    return "$eval_status"
+  fi
 
   local extracted
   local winrate
   local log_path
-  extracted="$(extract_latest_winrate "$run_name")"
+  extracted="$(extract_latest_winrate "$run_name" "$map_name")"
   winrate="${extracted%%|*}"
   log_path="${extracted#*|}"
-  if [[ "$extracted" == "$winrate" ]]; then
-    log_path="NA"
-  fi
 
-  printf "%s\t%s\t%s\t%s\t%s\n" "$step" "$seed" "$obs_label" "$winrate" "$log_path" >> "$SUMMARY_PATH"
-  echo "RESULT: step=$step seed=$seed condition=$obs_label metric/test_battle_won_mean=$winrate"
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    "$map_name" "$(basename "$model_dir")" "$step" "$seed" \
+    "$comm_mean" "$comm_std" "$obs_mean" "$obs_std" "$condition" "$winrate" "$log_path" \
+    >> "$RAW_SUMMARY_PATH"
+
+  cleanup_eval_artifacts "$run_name" "$map_name"
+
+  echo "RESULT: map=$map_name step=$step seed=$seed condition=$condition metric/test_battle_won_mean=$winrate"
 }
 
-for step in "${LOAD_STEPS[@]}"; do
-  if [[ ! "$step" =~ ^[0-9]+$ ]]; then
-    echo "ERROR: LOAD_STEP must be numeric for current src/run.py: $step" >&2
-    exit 1
+print_delay_matrix() {
+  awk -v scale="$MATRIX_VALUE_SCALE" -F '\t' '
+    NR == 1 { next }
+    {
+      row = "N(" $7 "," $8 ")"
+      col = "N(" $5 "," $6 ")"
+      key = $1 "\t" $2 "\t" $3
+      if ($10 != "NA") {
+        sample_count[key, row, col] += 1
+        sum[key, row, col] += $10
+        sumsq[key, row, col] += ($10 * $10)
+      }
+
+      if (!(row in row_seen)) {
+        row_seen[row] = 1
+        row_order[++row_count] = row
+      }
+      if (!(col in col_seen)) {
+        col_seen[col] = 1
+        col_order[++col_count] = col
+      }
+      if (!(key in key_seen)) {
+        key_seen[key] = 1
+        key_order[++key_count] = key
+      }
+    }
+    END {
+      for (k = 1; k <= key_count; k++) {
+        key = key_order[k]
+        split(key, parts, "\t")
+        printf "checkpoint:%s\tmap:%s\tstep:%s\tcommunication delay", parts[2], parts[1], parts[3]
+        for (c = 1; c <= col_count; c++) {
+          printf "\t%s", col_order[c]
+        }
+        printf "\n"
+
+        printf "observation delay"
+        for (c = 1; c <= col_count + 3; c++) {
+          printf "\t"
+        }
+        printf "\n"
+
+        for (r = 1; r <= row_count; r++) {
+          row = row_order[r]
+          printf "%s", row
+          for (c = 1; c <= col_count; c++) {
+            col = col_order[c]
+            n = sample_count[key, row, col] + 0
+            if (n > 0) {
+              mean = sum[key, row, col] / n
+              variance = (sumsq[key, row, col] / n) - (mean * mean)
+              if (variance < 0 && variance > -0.000000001) variance = 0
+              std = sqrt(variance)
+              if (scale == "percent") {
+                cell = sprintf("%.0f±%.0f", mean * 100, std * 100)
+              } else {
+                cell = sprintf("%.4f±%.4f", mean, std)
+              }
+            } else {
+              cell = "NA"
+            }
+            printf "\t%s", cell
+          }
+          printf "\n"
+        }
+        if (k < key_count) {
+          printf "\n"
+        }
+      }
+    }
+  ' "$RAW_SUMMARY_PATH"
+}
+
+# -------- Preflight --------
+
+export CUDA_VISIBLE_DEVICES
+export SC2PATH
+export NO_PROXY="${NO_PROXY:+$NO_PROXY,}127.0.0.1,localhost"
+export no_proxy="${no_proxy:+$no_proxy,}127.0.0.1,localhost"
+
+[[ -d "$SC2PATH/Versions" ]] || die "StarCraft II Versions directory not found: $SC2PATH/Versions"
+[[ -f "src/config/algs/$CONFIG.yaml" ]] || die "algorithm config not found: src/config/algs/$CONFIG.yaml"
+[[ -f "src/config/envs/$ENV_CONFIG.yaml" ]] || die "env config not found: src/config/envs/$ENV_CONFIG.yaml"
+if rg -q '^[[:space:]]*comm_gaussian_delay_mean:' "src/config/algs/$CONFIG.yaml"; then
+  CONFIG_HAS_COMM_DELAY=True
+fi
+
+MODEL_SPECS=()
+OUTPUT_MODEL_DIR=""
+MAP_NAME="$(normalise_map_name "$MAP_NAME")"
+if [[ -z "$SUMMARY_DIR" ]]; then
+  SUMMARY_DIR="$SUMMARY_ROOT/$CONFIG/$MAP_NAME"
+fi
+mkdir -p "$SUMMARY_DIR"
+printf "map\tmodel\tstep\tseed\tcomm_mean\tcomm_std\tobs_mean\tobs_std\tcondition\ttest_battle_won_mean\tlog_path\n" > "$RAW_SUMMARY_PATH"
+
+if [[ $# -gt 0 ]]; then
+  CLI_MODEL_DIR="$1"
+  shift
+  [[ -d "$CLI_MODEL_DIR" ]] || die "model directory does not exist: $CLI_MODEL_DIR"
+  OUTPUT_MODEL_DIR="$CLI_MODEL_DIR"
+  [[ -n "$MAP_NAME" ]] || die "MAP_NAME is required for single-model usage"
+  if [[ $# -gt 0 ]]; then
+    MODEL_SPECS+=("$MAP_NAME|$CLI_MODEL_DIR|$*")
+  else
+    MODEL_SPECS+=("$MAP_NAME|$CLI_MODEL_DIR|$LOAD_STEPS")
+  fi
+else
+  MODEL_DIR="$(resolve_model_dir "$MODEL_DIR" "$MODEL_NAME")" || die "MODEL_NAME or MODEL_DIR is required"
+  [[ -d "$MODEL_DIR" ]] || die "model directory does not exist: $MODEL_DIR"
+  OUTPUT_MODEL_DIR="$MODEL_DIR"
+  MODEL_SPECS+=("$MAP_NAME|$MODEL_DIR|$LOAD_STEPS")
+fi
+
+if [[ -z "$SUMMARY_PATH" ]]; then
+  SUMMARY_PATH="$SUMMARY_DIR/$(basename "$OUTPUT_MODEL_DIR")_matrix.tsv"
+fi
+if [[ -z "$RAW_SUMMARY_KEEP_PATH" ]]; then
+  RAW_SUMMARY_KEEP_PATH="${SUMMARY_PATH%.tsv}_raw.tsv"
+fi
+
+for spec in "${MODEL_SPECS[@]}"; do
+  IFS='|' read -r map_name model_dir step_text <<< "$spec"
+  [[ -n "$map_name" && -n "$model_dir" ]] || die "bad model spec: $spec"
+  [[ -d "$model_dir" ]] || die "model directory does not exist: $model_dir"
+
+  if [[ -z "$step_text" ]]; then
+    step_text="$(closest_checkpoint "$model_dir")"
+    [[ -n "$step_text" ]] || die "no numeric checkpoint directories found under: $model_dir"
   fi
 
-  for seed in $SEEDS; do
-    run_eval "$step" "$seed" False "no_obs_delay"
-    run_eval "$step" "$seed" True "obs_delay_n${OBS_DELAY_MEAN}_${OBS_DELAY_STD}_${OBS_DELAY_DISCRETIZATION}"
+  read -r -a load_steps <<< "$step_text"
+  for step in "${load_steps[@]}"; do
+    [[ "$step" =~ ^[0-9]+$ ]] || die "LOAD_STEP must be numeric: $step"
+
+    for seed in $GROUP_SEEDS; do
+      unset RUN_CONDITION_SEEN
+      declare -A RUN_CONDITION_SEEN=()
+      case "$INCLUDE_ZERO_ZERO_BASELINE" in
+        True|true|1|yes|Yes)
+          RUN_CONDITION_SEEN["0:0|0:0"]=1
+          run_eval "$map_name" "$model_dir" "$step" "$seed" 0 0 0 0
+          ;;
+      esac
+      for comm_pair in $COMM_DELAY_GRID; do
+        comm_values="$(parse_delay_pair "$comm_pair")"
+        comm_mean="${comm_values%%$'\t'*}"
+        comm_std="${comm_values#*$'\t'}"
+
+        for obs_pair in $OBS_DELAY_GRID; do
+          obs_values="$(parse_delay_pair "$obs_pair")"
+          obs_mean="${obs_values%%$'\t'*}"
+          obs_std="${obs_values#*$'\t'}"
+          condition_key="${comm_mean}:${comm_std}|${obs_mean}:${obs_std}"
+          if [[ -n "${RUN_CONDITION_SEEN[$condition_key]:-}" ]]; then
+            echo "SKIP duplicate delay condition: comm=$(delay_label "$comm_mean" "$comm_std") obs=$(delay_label "$obs_mean" "$obs_std")"
+            continue
+          fi
+          RUN_CONDITION_SEEN[$condition_key]=1
+          run_eval "$map_name" "$model_dir" "$step" "$seed" "$comm_mean" "$comm_std" "$obs_mean" "$obs_std"
+        done
+      done
+    done
   done
 done
 
 echo "================================================================================"
-echo "Raw summary saved to: $SUMMARY_PATH"
-column -t -s $'\t' "$SUMMARY_PATH" || cat "$SUMMARY_PATH"
+echo "Delay matrix: metric/test_battle_won_mean mean±std across seeds ($TEST_NEPISODE episodes per seed)"
+print_delay_matrix | tee "$SUMMARY_PATH"
 
 echo "================================================================================"
-echo "No-delay vs obs-delay comparison"
-awk -F '\t' '
-  NR == 1 { next }
-  {
-    key = $1 "\t" $2
-    if ($3 == "no_obs_delay") {
-      no[key] = $4
-    } else {
-      obs[key] = $4
-      obs_label[key] = $3
-    }
-  }
-  END {
-    printf "%-12s %-8s %-14s %-14s %-14s %-24s\n", "step", "seed", "no_obs", "obs_delay", "delta", "obs_condition"
-    for (key in no) {
-      split(key, parts, "\t")
-      if ((key in obs) && no[key] != "NA" && obs[key] != "NA") {
-        delta = obs[key] - no[key]
-        printf "%-12s %-8s %-14.4f %-14.4f %-14.4f %-24s\n", parts[1], parts[2], no[key], obs[key], delta, obs_label[key]
-      } else {
-        printf "%-12s %-8s %-14s %-14s %-14s %-24s\n", parts[1], parts[2], no[key], (key in obs ? obs[key] : "NA"), "NA", (key in obs_label ? obs_label[key] : "NA")
-      }
-    }
-  }
-' "$SUMMARY_PATH"
-
-echo "Done. Check results/logs or tensorboard for full evaluation logs."
+echo "Delay matrix saved to: $SUMMARY_PATH"
+case "$RAW_SUMMARY_KEEP" in
+  True|true|1|yes|Yes)
+    cp "$RAW_SUMMARY_PATH" "$RAW_SUMMARY_KEEP_PATH"
+    echo "Raw summary saved to: $RAW_SUMMARY_KEEP_PATH"
+    ;;
+esac
+echo "Done."

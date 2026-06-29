@@ -1,6 +1,7 @@
 import torch as th
 
 from controllers.mac import MAC
+from components.observation_delay_model import ObservationDelayModel
 from utils.maker import AgentMaker, ActionSelectorMaker
 
 
@@ -17,6 +18,7 @@ class BasicMAC(MAC):
         self._build_agents(input_shape)
 
         self.action_selector = ActionSelectorMaker.make(args.action_selector, args)
+        self.observation_delay_model = ObservationDelayModel(args)
 
         self.hidden_states = None
 
@@ -76,8 +78,17 @@ class BasicMAC(MAC):
         # Assumes homogenous agents with flat observations.
         # Other MACs might want to e.g. delegate building inputs to each agent
         bs = batch.batch_size
+        if isinstance(t, int):
+            obs_t = self.observation_delay_model.apply(
+                batch["obs"], slice(t, t + 1), training=self.training
+            ).squeeze(1)
+        else:
+            obs_t = self.observation_delay_model.apply(
+                batch["obs"], t, training=self.training
+            )
+
         inputs = []
-        inputs.append(batch["obs"][:, t])  # b1av
+        inputs.append(obs_t)  # b1av
         if self.args.obs_last_action:
             if t == 0:
                 inputs.append(th.zeros_like(batch["actions_onehot"][:, t]))
