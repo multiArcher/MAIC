@@ -53,31 +53,6 @@ def message_reconstruction_loss(
     return (per_agent * mask).sum() / mask.sum().clamp_min(1.0)
 
 
-def arrival_loss(
-    delay_logits: torch.Tensor,
-    delay_target: torch.Tensor,
-    mask: torch.Tensor,
-) -> torch.Tensor:
-    """Classify the (bucketized) delay of each agent's observation.
-
-    Rank-agnostic: works whether the per-agent vector axis is present or not, as
-    long as ``delay_logits`` is [..., buckets], ``delay_target`` is [..., 1], and
-    ``mask`` broadcasts to [..., 1].
-
-    Args:
-        delay_logits: [B, T, n, 1, max_delay + 1] per-agent bucket logits.
-        delay_target: [B, T, n, 1, 1] true delay bucket (long).
-        mask: [B, T, n, 1, 1] valid-step mask.
-    """
-    buckets = delay_logits.size(-1)
-    target = delay_target.long().clamp(min=0, max=buckets - 1)  # [..., 1]
-    logits_flat = delay_logits.reshape(-1, buckets)
-    target_flat = target.reshape(-1)
-    ce = F.cross_entropy(logits_flat, target_flat, reduction="none")
-    ce = ce.reshape(target.shape)  # [..., 1], matches the target/mask layout
-    return (ce * mask).sum() / mask.sum().clamp_min(1.0)
-
-
 def flow_matching_loss(
     flow_dynamics,
     context: torch.Tensor,

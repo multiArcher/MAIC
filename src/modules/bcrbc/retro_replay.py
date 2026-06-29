@@ -6,13 +6,13 @@ class RetroReplay:
 
     The teacher recomputes beliefs from a *patched* history in which every
     delayed observation (and, when communication is enabled, every delayed
-    message) is written back to its generation step and presented with
-    zero-delay / fresh metadata. The corrected (delayed) beliefs from the online
-    pass are then aligned to these full-information teacher beliefs.
+    message) is written back to its generation step. The corrected (delayed)
+    beliefs from the online pass are then aligned to these full-information
+    teacher beliefs.
 
     Unarrived evidence (generation step outside the replay window) is left as a
-    zero-filled, not-fresh slot rather than a learnable token, matching the
-    project rule that delay only appears at evaluation.
+    zero-filled slot, matching the project rule that delay only appears at
+    evaluation and is never fed to the model as a token.
     """
 
     def __init__(self, max_replay_len: int, use_comm: bool, n_agents: int):
@@ -39,16 +39,15 @@ class RetroReplay:
         obs_gen_t = batch["obs_gen_t"][:, t]
         raw_obs = batch["obs"][:, t]
         patched_obs = self.patch_observations(raw_obs, obs_gen_t, start_t=start_t)
-        clean_metadata = self._zero_delay_metadata(batch, t)
 
-        # Design choice: when comm is on, also rebuild full-information teacher messages.
+        # Design choice: when comm is on, also rebuild full-information teacher
+        # messages from the patched (gen-time aligned) sender observations.
+        teacher_kwargs = {}
         if self.use_comm:
-            # Full-information teacher messages: each sender's patched (gen-time
-            # aligned) observation, delivered with zero delay and full freshness.
-            clean_metadata.update(self._zero_delay_messages(patched_obs, start_t=start_t))
+            teacher_kwargs["messages"] = self._zero_delay_messages(patched_obs)
 
         with torch.no_grad():
-            clean_out = mac.forward(batch, t, obs_override=patched_obs, test_mode=False, **clean_metadata)
+            clean_out = mac.forward(batch, t, obs_override=patched_obs, test_mode=False, **teacher_kwargs)
 
         in_window = obs_gen_t >= start_t
         retro_mask = ((obs_delay > 0) & in_window).to(corrected_beliefs.dtype)
@@ -60,22 +59,8 @@ class RetroReplay:
         }
 
     @staticmethod
-    def _zero_delay_metadata(batch, t: slice) -> dict[str, torch.Tensor]:
-        obs = batch["obs"][:, t]
-        batch_size, time_size, n_agents = obs.shape[:3]
-        device = obs.device
-        start_t = t.start or 0
-        time_ids = torch.arange(start_t, start_t + time_size, device=device).view(1, time_size, 1, 1)
-        time_ids = time_ids.expand(batch_size, -1, n_agents, -1)
-        return {
-            "obs_delay": torch.zeros(batch_size, time_size, n_agents, 1, dtype=torch.long, device=device),
-            "obs_gen_t": time_ids.long(),
-            "obs_fresh_mask": torch.ones(batch_size, time_size, n_agents, 1, dtype=torch.float32, device=device),
-        }
-
-    @staticmethod
-    def _zero_delay_messages(obs: torch.Tensor, start_t: int = 0) -> dict[str, torch.Tensor]:
-        """Build full-information (zero-delay, fresh) messages from an obs window.
+    def _zero_delay_messages(obs: torch.Tensor) -> torch.Tensor:
+        """Build full-information (zero-delay) messages from an obs window.
 
         messages[b,t,i,k] = obs[b,t, sender_k(i)] where sender_k enumerates j != i.
         """
@@ -83,29 +68,13 @@ class RetroReplay:
         device = obs.device
         n_send = max(n_agents - 1, 0)
         if n_send == 0:
-            empty = obs.new_zeros(batch_size, time_size, n_agents, 0, 1)
-            return {
-                "messages": obs.new_zeros(batch_size, time_size, n_agents, 0, obs_dim),
-                "msg_gen_t": empty.long(),
-                "msg_arrive_t": empty.long(),
-                "msg_delay": empty.long(),
-                "msg_fresh_mask": empty,
-            }
+            return obs.new_zeros(batch_size, time_size, n_agents, 0, obs_dim)
         sender_idx = torch.tensor(
             [[j for j in range(n_agents) if j != i] for i in range(n_agents)],
             dtype=torch.long, device=device,
         ).reshape(n_agents, n_send)
         # messages[b,t,i,k] = obs[b,t,sender_idx[i,k]]
-        messages = obs[:, :, sender_idx]  # [B,T,n,n_send,obs_dim]
-        t_ids = torch.arange(start_t, start_t + time_size, device=device).view(1, time_size, 1, 1, 1)
-        t_ids = t_ids.expand(batch_size, time_size, n_agents, n_send, 1).long()
-        return {
-            "messages": messages,
-            "msg_gen_t": t_ids,
-            "msg_arrive_t": t_ids,
-            "msg_delay": torch.zeros_like(t_ids),
-            "msg_fresh_mask": torch.ones(batch_size, time_size, n_agents, n_send, 1, device=device),
-        }
+        return obs[:, :, sender_idx]  # [B,T,n,n_send,obs_dim]
 
     @staticmethod
     def patch_observations(obs: torch.Tensor, obs_gen_t: torch.Tensor, start_t: int = 0) -> torch.Tensor:

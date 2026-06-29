@@ -3,7 +3,15 @@ import torch.nn as nn
 
 
 class DelayTokenizer(nn.Module):
-    """Tokenize observations, actions, messages, and per-agent query tokens."""
+    """Tokenize observation latents, actions, messages, and per-agent query tokens.
+
+    Delay never enters the model as input: training is no-delay and at eval the
+    generative rollout presents timely latents, so tokens carry only content +
+    agent id + modality type + absolute time. Delayed observations/messages are
+    resolved in controller code (latent imputation + correction-on-arrival), not
+    by a delay/freshness embedding. Message payloads are sender observations whose
+    staleness, when comm delay is active at eval, lives in the content itself.
+    """
 
     OBS_TOKEN = 0
     ACTION_TOKEN = 1
@@ -18,7 +26,6 @@ class DelayTokenizer(nn.Module):
         n_agents: int,
         model_hidden_dim: int,
         max_t: int,
-        max_delay: int,
         num_messages_per_agent: int,
         message_dim: int,
         num_latent_tokens: int,
@@ -43,11 +50,6 @@ class DelayTokenizer(nn.Module):
         # n_agents, so there is no index collision or out-of-range lookup.
         self.type_embed = nn.Embedding(self.NUM_MODALITIES, model_hidden_dim)
         self.time_embed = nn.Embedding(max_t, model_hidden_dim)
-        self.generation_time_embed = nn.Embedding(max_t, model_hidden_dim)
-        self.arrival_time_embed = nn.Embedding(max_t, model_hidden_dim)
-        self.delay_embed = nn.Embedding(max_delay + 1, model_hidden_dim)
-        self.fresh_embed = nn.Embedding(2, model_hidden_dim)
-        self.max_delay = max_delay
         self.max_t = max_t
         self.model_hidden_dim = model_hidden_dim
         self.norm = nn.LayerNorm(model_hidden_dim)
@@ -63,9 +65,7 @@ class DelayTokenizer(nn.Module):
         sequence_length = self.n_agents * self.tokens_per_agent + self.n_agents
         return slice(sequence_length - self.n_agents, sequence_length)
 
-    def forward(self, obs, last_actions, start_t=0, obs_delay=None, obs_gen_t=None,
-                obs_fresh_mask=None, messages=None, msg_gen_t=None, msg_arrive_t=None,
-                msg_delay=None, msg_fresh_mask=None):
+    def forward(self, obs, last_actions, start_t=0, messages=None):
         # obs is the per-agent bottleneck latents [B, T, n, num_latent_tokens, latent_dim].
         batch_size, time_steps, n_agents, num_latent_tokens, _ = obs.shape
         assert num_latent_tokens == self.num_latent_tokens, (
@@ -74,8 +74,8 @@ class DelayTokenizer(nn.Module):
         device = obs.device
         obs_tokens = self.obs_proj(obs)  # [B,T,n,num_latent_tokens,model_hidden_dim]
         action_tokens = self.action_proj(last_actions.float()).unsqueeze(3)  # [B,T,n,1,model_hidden_dim]
-        # Message slots: present only when the comm pathway supplies them; otherwise
-        # zero-filled (the comm-off design, not a defensive fallback).
+        # Message slots: filled when the comm pathway supplies sender observations,
+        # otherwise zero (comm-off config). Staleness, if any, is in the content.
         if messages is not None:
             msg_flat = messages.reshape(
                 batch_size * time_steps * n_agents * self.num_messages_per_agent, self.message_dim
@@ -120,39 +120,4 @@ class DelayTokenizer(nn.Module):
             query_idx = sequence_length - n_agents + agent_idx
             tokens[:, :, query_idx] = (tokens[:, :, query_idx] + agent_emb
                 + self.type_embed(torch.tensor(self.QUERY_TOKEN, device=device)) + time_emb)
-        # Obs delay metadata is always supplied by the caller in the designed flow.
-        delay_ids = obs_delay.long().squeeze(-1).clamp(min=0, max=self.max_delay)
-        gen_ids = obs_gen_t.long().squeeze(-1).clamp(min=0, max=self.time_embed.num_embeddings - 1)
-        arrive_ids = (gen_ids + delay_ids).clamp(min=0, max=self.time_embed.num_embeddings - 1)
-        fresh_ids = (obs_fresh_mask.squeeze(-1) > 0).long()
-        # Add delay/freshness embeddings onto every obs-latent slot of each agent.
-        for agent_idx in range(n_agents):
-            # Same obs metadata applies to all num_latent_tokens obs slots of the agent.
-            obs_meta = (self.delay_embed(delay_ids[:, :, agent_idx])
-                + self.generation_time_embed(gen_ids[:, :, agent_idx]) + self.arrival_time_embed(arrive_ids[:, :, agent_idx])
-                + self.fresh_embed(fresh_ids[:, :, agent_idx]))
-            for latent_idx in range(num_latent_tokens):
-                obs_idx = agent_idx * self.tokens_per_agent + latent_idx
-                tokens[:, :, obs_idx] = tokens[:, :, obs_idx] + obs_meta
-        # Message delay metadata: present together with the comm pathway, absent when
-        # comm is off (then message slots carry only the not-fresh marker).
-        if messages is not None:
-            msg_delay_ids = msg_delay.long().squeeze(-1).clamp(min=0, max=self.max_delay)
-            msg_gen_ids = msg_gen_t.long().squeeze(-1).clamp(min=0, max=self.time_embed.num_embeddings - 1)
-            msg_arrive_ids = msg_arrive_t.long().squeeze(-1).clamp(min=0, max=self.time_embed.num_embeddings - 1)
-            msg_fresh_ids = (msg_fresh_mask.squeeze(-1) > 0).long()
-            for agent_idx in range(n_agents):
-                for msg_idx in range(self.num_messages_per_agent):
-                    token_pos = agent_idx * self.tokens_per_agent + num_latent_tokens + 1 + msg_idx
-                    tokens[:, :, token_pos] = (tokens[:, :, token_pos]
-                        + self.delay_embed(msg_delay_ids[:, :, agent_idx, msg_idx])
-                        + self.generation_time_embed(msg_gen_ids[:, :, agent_idx, msg_idx])
-                        + self.arrival_time_embed(msg_arrive_ids[:, :, agent_idx, msg_idx])
-                        + self.fresh_embed(msg_fresh_ids[:, :, agent_idx, msg_idx]))
-        else:
-            zero_fresh = self.fresh_embed(torch.tensor(0, device=device))
-            for agent_idx in range(n_agents):
-                for msg_idx in range(self.num_messages_per_agent):
-                    token_pos = agent_idx * self.tokens_per_agent + num_latent_tokens + 1 + msg_idx
-                    tokens[:, :, token_pos] = tokens[:, :, token_pos] + zero_fresh
         return self.norm(tokens)

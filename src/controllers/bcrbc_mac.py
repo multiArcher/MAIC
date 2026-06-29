@@ -73,13 +73,13 @@ class BCRBCMAC(MAC):
             return self._generative_forward(ep_batch, t)
         obs_override = kwargs.pop("obs_override", None)
         obs, last_actions = self._build_inputs(ep_batch, t, obs_override=obs_override)
-        delay_metadata = self._build_delay_metadata(ep_batch, t)
-        delay_metadata.update(kwargs)
-        if self.comm_delay is not None and "messages" not in delay_metadata:
+        # Build delayed messages (sender observations) for the comm pathway unless a
+        # caller already supplied them. Delay lives in the message content only.
+        messages = kwargs.pop("messages", None)
+        if self.comm_delay is not None and messages is None:
             raw_obs = cast(torch.Tensor, ep_batch["obs"][:, t]).to(self.device)
-            comm = self.comm_delay(raw_obs, start_t=t.start or 0, training=not test_mode)
-            delay_metadata.update(comm)
-        out = self.agent(obs, last_actions, start_t=t.start or 0, **delay_metadata)
+            messages = self.comm_delay(raw_obs, start_t=t.start or 0, training=not test_mode)
+        out = self.agent(obs, last_actions, start_t=t.start or 0, messages=messages, **kwargs)
         avail_actions = cast(torch.Tensor, ep_batch["avail_actions"][:, t]).unsqueeze(-2)
         out["q_values"] = out["q_values"].masked_fill(avail_actions == 0, -1e7)
         return out
@@ -88,10 +88,9 @@ class BCRBCMAC(MAC):
         """Reconstruct the per-(slot, agent) latent buffer over window [0, end).
 
         Returns the corrected/imputed latent buffer ``z_cur``
-        [B, end, n, num_token, z_dim], the ``is_real`` mask [B, end, n] (1 where a
-        real obs occupies the slot), plus ``obs_aug``/``last_actions``/``clean_meta``
-        needed to run the world model over the buffer. Shared by the eval forward
-        and the diagnostics.
+        [B, end, n, num_token, latent_dim], the ``is_real`` mask [B, end, n] (1 where
+        a real obs occupies the slot), plus ``obs_aug``/``last_actions`` needed to run
+        the world model over the buffer. Shared by the eval forward and diagnostics.
         """
         device = self.device
         win = slice(0, end)
@@ -120,8 +119,6 @@ class BCRBCMAC(MAC):
         z_buf.scatter_(1, idx, z_delivered)
         is_real.scatter_(1, local_gen, torch.ones(batch_size, end, num_agents, device=device))
 
-        clean_meta = self._clean_window_metadata(batch_size, end, num_agents, device)
-
         # Fill generated slots left-to-right, re-rolling from the latest real history.
         z_cur = z_buf.clone()
         for tau in range(end):
@@ -133,7 +130,7 @@ class BCRBCMAC(MAC):
             prefix = slice(0, tau)
             out = self.agent(
                 obs_aug[:, prefix], last_actions[:, prefix],
-                start_t=0, z_override=z_cur[:, prefix], **clean_meta[prefix],
+                start_t=0, z_override=z_cur[:, prefix],
             )
             belief_prev = out["beliefs"][:, tau - 1]  # [B, n, belief_dim]
             gen_z = self.agent.flow_dynamics.sample(
@@ -142,7 +139,7 @@ class BCRBCMAC(MAC):
             real_mask = is_real[:, tau].view(batch_size, num_agents, 1, 1)
             z_cur[:, tau] = real_mask * z_cur[:, tau] + (1.0 - real_mask) * gen_z
 
-        return z_cur, is_real, obs_aug, last_actions, clean_meta
+        return z_cur, is_real, obs_aug, last_actions
 
     def _generative_forward(self, ep_batch: EpisodeBatch, t: slice):
         """Eval-time autoregressive imputation + correction-on-arrival.
@@ -154,19 +151,11 @@ class BCRBCMAC(MAC):
         packet simply means this step's reconstruction has a *real* latent where an
         earlier step had a *generated* one, so the re-roll from that slot corrects
         all later latents.
-
-        The buffer is presented to the world model with clean/timely metadata
-        (delay 0, fresh 1) so the transformer stays in-distribution with the
-        no-delay training regime.
         """
         end = t.stop
-        win = slice(0, end)
-        z_cur, is_real, obs_aug, last_actions, clean_meta = self._rollout_latent_buffer(ep_batch, end)
+        z_cur, is_real, obs_aug, last_actions = self._rollout_latent_buffer(ep_batch, end)
 
-        out = self.agent(
-            obs_aug, last_actions, start_t=0,
-            z_override=z_cur, **clean_meta[win],
-        )
+        out = self.agent(obs_aug, last_actions, start_t=0, z_override=z_cur)
         # Keep only the final step to match the per-step call contract.
         final = {k: (v[:, -1:] if isinstance(v, torch.Tensor) and v.dim() >= 2 else v)
                  for k, v in out.items()}
@@ -205,15 +194,14 @@ class BCRBCMAC(MAC):
             batch_size, time_steps, num_agents, num_latent_tokens, latent_dim
         )
 
-        z_corr, is_real, _, _, clean_meta = self._rollout_latent_buffer(ep_batch, time_steps)
+        z_corr, is_real, _, _ = self._rollout_latent_buffer(ep_batch, time_steps)
 
         # masks carry the token axis (broadcast over it): [B, T, n, 1, 1].
         gen_mask = (is_real < 1).view(batch_size, time_steps, num_agents, 1, 1).float()
         denom = gen_mask.sum().clamp_min(1.0)
         latent_recon_error = (((z_corr - z_full) ** 2).mean(-1, keepdim=True) * gen_mask).sum() / denom
 
-        out = self.agent(obs_aug_full, last_actions, start_t=0,
-                         z_override=z_corr, **clean_meta[slice(0, time_steps)])
+        out = self.agent(obs_aug_full, last_actions, start_t=0, z_override=z_corr)
         beliefs = out["beliefs"]
         gen_est = z_corr.clone()
         if time_steps > 1:
@@ -232,28 +220,10 @@ class BCRBCMAC(MAC):
             "diag/correction_improvement": correction_improvement.item(),
         }
         if self.comm_delay is not None:
-            teacher = self.comm_delay(full_obs.to(device), start_t=0, training=True)["messages"]
+            teacher = self.comm_delay(full_obs.to(device), start_t=0, training=True)
             tgt = teacher.mean(dim=3, keepdim=True)  # [B,T,n,1,d] to match recon_msg's vector axis
             diag["diag/msg_recovery_error"] = ((out["recon_msg"] - tgt) ** 2).mean().item()
         return diag
-
-    def _clean_window_metadata(self, batch_size: int, length: int, num_agents: int, device):
-        """Timely (delay 0, fresh 1) metadata indexable by a time-slice.
-
-        Returns an object whose __getitem__(slice) yields the obs delay metadata
-        dict restricted to that time-slice, so the rollout can feed prefixes.
-        """
-        gen = torch.arange(length, device=device).view(1, length, 1, 1).expand(batch_size, -1, num_agents, -1).long()
-
-        class _Meta:
-            def __getitem__(self, sl):
-                return {
-                    "obs_delay": torch.zeros(batch_size, sl.stop - (sl.start or 0), num_agents, 1, dtype=torch.long, device=device),
-                    "obs_gen_t": gen[:, sl],
-                    "obs_fresh_mask": torch.ones(batch_size, sl.stop - (sl.start or 0), num_agents, 1, device=device),
-                }
-
-        return _Meta()
 
     def init_hidden(self, batch_size):
         self.hidden_states = None
@@ -269,15 +239,6 @@ class BCRBCMAC(MAC):
 
     def _build_agents(self, input_shape):
         self.agent = BCRBCDynamicsCore(input_shape, self.n_actions, self.n_agents, self.args, dynamic_obs_dim=self.obs_shape)
-
-    def _build_delay_metadata(self, batch, t: slice):
-        # The three obs-delay keys are added to the scheme unconditionally in run.py
-        # and filled by both runners, so they are always present here.
-        return {
-            "obs_delay": batch["obs_delay"][:, t].to(self.device),
-            "obs_gen_t": batch["obs_gen_t"][:, t].to(self.device),
-            "obs_fresh_mask": batch["obs_fresh_mask"][:, t].to(self.device),
-        }
 
     def _get_last_actions(self, batch, t: slice, batch_size: int, n_agents: int):
         if t.start == 0:
@@ -311,4 +272,4 @@ class BCRBCMAC(MAC):
             obs_data = torch.cat([obs_data, agent_id_one_hot], dim=-1)
         if self.args.obs_last_action:
             obs_data = torch.cat([obs_data, last_actions], dim=-1)
-        return obs_data.squeeze(-2).float(), last_actions.squeeze(-2).float()
+        return obs_data.squeeze(-2).float(), last_actions.squeeze(-2).float()   # TODO: remove squeeze

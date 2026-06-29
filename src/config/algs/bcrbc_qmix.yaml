@@ -57,10 +57,12 @@ bcrbc_dropout: 0.0
 bcrbc_q_hidden_dim: 128
 bcrbc_retro_max_replay_len: 0
 
-# Communication-delay pathway (messages = senders' observations, delayed).
-# Train is always no-delay; comm delay is sampled only at eval (test_mode).
-# Separate switch from the obs-delay generative mechanism; off by default.
-bcrbc_use_comm: False
+# Communication pathway (messages = senders' observations). BC-RBC is a
+# communication method, so this is ON by default. Train is always no-delay; comm
+# delay is sampled only at eval (test_mode), and the staleness lives in the
+# message content (no delay token is fed to the model). bcrbc_max_delay caps the
+# sampled eval delay.
+bcrbc_use_comm: True
 comm_gaussian_delay_mean: 1.0
 comm_gaussian_delay_std: 1.0
 bcrbc_max_delay: 16
@@ -68,7 +70,8 @@ bcrbc_max_delay: 16
 # --- DCRBC v2 generative world model (the method) ---
 # Eval-time autoregressive imputation + correction-on-arrival. Trained no-delay;
 # at eval, not-yet-arrived observations are replaced by latents the world model
-# generates from history, and late arrivals re-roll the latent buffer.
+# generates from history, and late arrivals re-roll the latent buffer. Delay is
+# never an input to the network: it is resolved entirely in controller code.
 bcrbc_generative_eval: True
 # NOTE (not yet implemented): a `belief_scheduled_sampling_ratio` ablation knob is
 # planned — fraction of training steps that feed the Q-head a self-generated
@@ -84,14 +87,13 @@ bcrbc_generative_eval: True
 #  - dyn_loss: legacy MLP next-latent loss, SUPERSEDED by flow_loss; keep 0.
 #  - retro_loss: stage-1 batch patch-and-replay consistency; the generative
 #    rollout is the inference-time mechanism, so keep 0 unless ablating.
-#  - msg_rec/arr: only meaningful with comm on / delay-aware training; keep 0.
+#  - msg_rec: reconstruct each agent's incoming messages from its belief (comm).
 # For the plain no-delay QMIX baseline, set flow/rec to 0 and bcrbc_generative_eval False.
 td_loss_weight: 1.0
 rec_loss_weight: 1.0
 dyn_loss_weight: 0.0
 retro_loss_weight: 0.0
 msg_rec_loss_weight: 0.0
-arr_loss_weight: 0.0
 # Flow-matching world model (next-latent generator). flow_steps = Euler steps
 # used when sampling at eval. flow_hidden_dim = width of the flow head MLP.
 flow_loss_weight: 1.0

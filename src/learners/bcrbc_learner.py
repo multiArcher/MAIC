@@ -9,7 +9,7 @@ from components.episode_buffer import EpisodeBatch
 from components.standarize_stream import RunningMeanStd
 from controllers.bcrbc_mac import BCRBCMAC
 from learners.learner import Learner
-from modules.bcrbc.losses import arrival_loss, dynamics_loss, flow_matching_loss, message_reconstruction_loss, reconstruction_loss, retro_consistency_loss
+from modules.bcrbc.losses import dynamics_loss, flow_matching_loss, message_reconstruction_loss, reconstruction_loss, retro_consistency_loss
 from modules.bcrbc.retro_replay import RetroReplay
 from utils.custom_logging import PyMARLLogger
 from utils.maker import MixerMaker
@@ -141,9 +141,8 @@ class BCRBCLearner(Learner):
         dyn_weight = self.args.dyn_loss_weight
         flow_weight = self.args.flow_loss_weight
         msg_rec_weight = self.args.msg_rec_loss_weight
-        arr_weight = self.args.arr_loss_weight
 
-        if rec_weight > 0 or msg_rec_weight > 0 or arr_weight > 0 or flow_weight > 0:
+        if rec_weight > 0 or msg_rec_weight > 0 or flow_weight > 0:
             # Per-agent mask with the explicit vector axis: [b, t, n, 1, 1].
             # Broadcasts over feature / token axes in every aux loss.
             agent_mask = mask.unsqueeze(2).unsqueeze(-1).expand(-1, -1, self.n_agents, 1, 1)
@@ -176,19 +175,12 @@ class BCRBCLearner(Learner):
             with torch.no_grad():
                 teacher_msgs = self.mac.comm_delay(
                     batch["obs"][:, t_slice].to(self.device), start_t=0, training=True
-                )["messages"]
+                )
             msg_rec_loss = message_reconstruction_loss(
                 mac_out["recon_msg"][:, :-1], teacher_msgs[:, :-1], agent_mask
             )
         else:
             msg_rec_loss = td_loss.new_zeros(())
-        if arr_weight > 0:
-            # delay_logits [b,t,n,1,buckets]; lift delay target to [b,t,n,1,1].
-            arr_loss = arrival_loss(
-                mac_out["delay_logits"][:, :-1], batch["obs_delay"][:, :-1].to(self.device).unsqueeze(-2), agent_mask
-            )
-        else:
-            arr_loss = td_loss.new_zeros(())
         retro_weight = self.args.retro_loss_weight
         if retro_weight > 0:
             retro = self.retro_replay.compute(self.mac, batch, t_slice, mac_out)
@@ -211,7 +203,6 @@ class BCRBCLearner(Learner):
             + dyn_weight * dyn_loss
             + retro_weight * retro_loss
             + msg_rec_weight * msg_rec_loss
-            + arr_weight * arr_loss
             + flow_weight * flow_loss
         )
 
@@ -238,7 +229,6 @@ class BCRBCLearner(Learner):
                 self.logger.log_stat("loss/dyn_loss", dyn_loss.item(), t_env)
                 self.logger.log_stat("loss/retro_loss", retro_loss.item(), t_env)
                 self.logger.log_stat("loss/msg_rec_loss", msg_rec_loss.item(), t_env)
-                self.logger.log_stat("loss/arr_loss", arr_loss.item(), t_env)
                 self.logger.log_stat("loss/flow_loss", flow_loss.item(), t_env)
                 self.logger.log_stat("loss/total_loss", total_loss.item(), t_env)
                 self.logger.log_stat("running/grad_norm", grad_norm.item(), t_env)

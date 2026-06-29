@@ -24,8 +24,6 @@ class BCRBCDynamicsCore(nn.Module):
         # env_info is set by the runner before any module is built, so episode_limit
         # is always available; +1 covers the terminal observation step.
         max_time_steps = args.env_info["episode_limit"] + 1
-        max_delay = args.bcrbc_max_delay
-        self.max_delay = max_delay
 
         # dynamic_obs_dim is the raw environment observation (no agent-id / last-action
         # augmentation): exactly the part the obs decoder must reconstruct.
@@ -46,11 +44,11 @@ class BCRBCDynamicsCore(nn.Module):
             nn.Linear(model_hidden_dim, latent_dim * num_latent_tokens),
         )
         # Tokenizer consumes the bottleneck latents z (dim latent_dim) in the obs slots.
-        # Messages (when comm is on) carry raw sender observations, so message_dim is
-        # the dynamic obs dim; each receiver has n_agents - 1 senders.
+        # Messages carry raw sender observations, so message_dim is the dynamic obs
+        # dim; each receiver has n_agents - 1 senders.
         self.tokenizer = DelayTokenizer(
             latent_dim, n_actions, n_agents, model_hidden_dim,
-            max_t=max_time_steps + 1, max_delay=max_delay,
+            max_t=max_time_steps + 1,
             num_messages_per_agent=n_agents - 1, message_dim=dynamic_obs_dim,
             num_latent_tokens=num_latent_tokens,
         )
@@ -85,7 +83,6 @@ class BCRBCDynamicsCore(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(model_hidden_dim, model_hidden_dim),
         )
-        self.arr_head = nn.Linear(belief_dim, max_delay + 1)
         # Flow-matching world model: predicts/generates the next-step bottleneck
         # latent z_{t+1} conditioned on the per-agent belief summary at step t.
         self.flow_dynamics = FlowDynamics(
@@ -97,9 +94,7 @@ class BCRBCDynamicsCore(nn.Module):
             num_latent_tokens=num_latent_tokens,
         )
 
-    def forward(self, obs, last_actions, start_t=0, obs_delay=None, obs_gen_t=None,
-                obs_fresh_mask=None, messages=None, msg_gen_t=None, msg_arrive_t=None,
-                msg_delay=None, msg_fresh_mask=None, z_override=None):
+    def forward(self, obs, last_actions, start_t=0, messages=None, z_override=None):
         # Encode augmented obs into num_latent_tokens bottleneck latents
         # z [B, T, n, num_token, latent_dim]. z_override (same shape) lets the eval
         # rollout substitute generated latents for not-yet-arrived observations.
@@ -109,10 +104,7 @@ class BCRBCDynamicsCore(nn.Module):
         )
         if z_override is not None:
             z = z_override
-        tokens = self.block_builder(z, last_actions, start_t=start_t, obs_delay=obs_delay,
-                                    obs_gen_t=obs_gen_t, obs_fresh_mask=obs_fresh_mask,
-                                    messages=messages, msg_gen_t=msg_gen_t, msg_arrive_t=msg_arrive_t,
-                                    msg_delay=msg_delay, msg_fresh_mask=msg_fresh_mask)
+        tokens = self.block_builder(z, last_actions, start_t=start_t, messages=messages)
         latents = self.transformer(tokens)
         query_indices = self.block_builder.query_indices.to(obs.device)
         beliefs = self.readout(latents, query_indices)  # [b, t, n, 1, belief_dim]
@@ -127,5 +119,4 @@ class BCRBCDynamicsCore(nn.Module):
             "recon_obs": self.obs_decoder(z_flat).unsqueeze(-2),
             "recon_msg": self.msg_decoder(beliefs),
             "pred_latents": self.latent_predictor(latents),
-            "delay_logits": self.arr_head(beliefs),
         }
