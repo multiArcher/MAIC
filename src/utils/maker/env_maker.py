@@ -46,14 +46,15 @@ class EnvMaker(Maker):
 
         kwargs = EnvMaker._check_and_prepare_smac_kwargs(kwargs)
         delay_kwargs = {
-            "delay_type": kwargs.pop("delay_type", "fixed"),
-            "delay": kwargs.pop("delay", 0),
+            "delay_type": kwargs.pop("delay_type", "gaussian"),
             "delay_mean": kwargs.pop("delay_mean", 0.0),
             "delay_std": kwargs.pop("delay_std", 0.0),
             "max_delay": kwargs.pop("max_delay", 0),
             "delay_per_agent": kwargs.pop("delay_per_agent", True),
             "seed": kwargs.get("seed"),
         }
+        # "delay" (the legacy fixed-delay scalar) is dropped: a fixed delay d is N(d, 0).
+        kwargs.pop("delay", None)
         env = SMACWrapper(*args, **kwargs)
         return DelayedObservationWrapper(env, **delay_kwargs)
 

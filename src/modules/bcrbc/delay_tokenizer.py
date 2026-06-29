@@ -65,6 +65,19 @@ class DelayTokenizer(nn.Module):
         sequence_length = self.n_agents * self.tokens_per_agent + self.n_agents
         return slice(sequence_length - self.n_agents, sequence_length)
 
+    @property
+    def group_ids(self) -> torch.Tensor:
+        """Per-token agent-group id over the space axis (length S).
+
+        content of agent a -> a (tokens_per_agent entries), query of agent a -> a.
+        Used to build the block-diagonal (CTDE) spatial attention mask: tokens with
+        the same group id form one agent's block; cross-agent flow goes only through
+        the message tokens (sender obs) that already live inside the receiver block.
+        """
+        agents = torch.arange(self.n_agents, dtype=torch.long)
+        content = agents.repeat_interleave(self.tokens_per_agent)
+        return torch.cat([content, agents])
+
     def forward(self, obs, last_actions, start_t=0, messages=None):
         # obs is the per-agent bottleneck latents [B, T, n, num_latent_tokens, latent_dim].
         batch_size, time_steps, n_agents, num_latent_tokens, _ = obs.shape
@@ -98,26 +111,29 @@ class DelayTokenizer(nn.Module):
         query_flat = query_tokens.reshape(batch_size, time_steps, n_agents, self.model_hidden_dim)
         tokens = torch.cat([content_flat, query_flat], dim=2)
         time_ids = torch.arange(start_t, start_t + time_steps, device=device).clamp(max=self.time_embed.num_embeddings - 1)
-        time_emb = self.time_embed(time_ids).view(1, time_steps, -1)
+        time_emb = self.time_embed(time_ids)  # [T, d]
         sequence_length = tokens.shape[2]
-        msg_type_emb = self.type_embed(torch.tensor(self.MSG_TOKEN, device=device))
-        # Add per-token identity embeddings (agent id + modality type + absolute time)
-        # to every content/query slot, following the fixed per-agent token layout.
-        for agent_idx in range(n_agents):
-            agent_emb = self.agent_embed(torch.tensor(agent_idx, device=device))
-            content_start = agent_idx * self.tokens_per_agent
-            for latent_idx in range(num_latent_tokens):
-                obs_idx = content_start + latent_idx
-                tokens[:, :, obs_idx] = (tokens[:, :, obs_idx] + agent_emb
-                    + self.type_embed(torch.tensor(self.OBS_TOKEN, device=device)) + time_emb)
-            action_idx = content_start + num_latent_tokens
-            tokens[:, :, action_idx] = (tokens[:, :, action_idx] + agent_emb
-                + self.type_embed(torch.tensor(self.ACTION_TOKEN, device=device)) + time_emb)
-            for msg_idx in range(self.num_messages_per_agent):
-                token_pos = content_start + num_latent_tokens + 1 + msg_idx
-                tokens[:, :, token_pos] = (tokens[:, :, token_pos] + agent_emb
-                    + msg_type_emb + time_emb)
-            query_idx = sequence_length - n_agents + agent_idx
-            tokens[:, :, query_idx] = (tokens[:, :, query_idx] + agent_emb
-                + self.type_embed(torch.tensor(self.QUERY_TOKEN, device=device)) + time_emb)
+
+        # Build the per-position identity (agent id + modality type) as a structured
+        # [S, model_hidden_dim] tensor, then add it (plus the absolute-time embedding)
+        # to every slot with a single broadcast. No per-position scalar lookups, no
+        # in-place per-agent writes: the per-agent token layout is encoded by the
+        # repeat/concat structure instead of a Python loop.
+        # Per-agent content type row: [OBS]*nt, ACTION, [MSG]*nm  -> [tokens_per_agent]
+        content_type_ids = torch.tensor(
+            [self.OBS_TOKEN] * num_latent_tokens + [self.ACTION_TOKEN]
+            + [self.MSG_TOKEN] * self.num_messages_per_agent,
+            device=device, dtype=torch.long,
+        )
+        content_type_emb = self.type_embed(content_type_ids)  # [tpa, d]
+        agent_emb_all = self.agent_embed(torch.arange(n_agents, device=device))  # [n, d]
+        # content identity [n, tpa, d] = agent id (broadcast over tpa) + modality type.
+        content_identity = agent_emb_all.unsqueeze(1) + content_type_emb.unsqueeze(0)
+        content_identity = content_identity.reshape(n_agents * self.tokens_per_agent, self.model_hidden_dim)
+        query_identity = agent_emb_all + self.type_embed(
+            torch.tensor(self.QUERY_TOKEN, device=device)
+        )  # [n, d]
+        identity = torch.cat([content_identity, query_identity], dim=0)  # [S, d]
+        # tokens [B,T,S,d] + identity [1,1,S,d] + time [1,T,1,d] -> single broadcast add.
+        tokens = tokens + identity.view(1, 1, sequence_length, self.model_hidden_dim) + time_emb.view(1, time_steps, 1, self.model_hidden_dim)
         return self.norm(tokens)

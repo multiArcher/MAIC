@@ -22,6 +22,7 @@ class BlockCausalTransformer(nn.Module):
         num_attention_heads: int,
         dropout: float,
         agent_slice: Optional[slice],
+        block_group_ids: Optional[torch.Tensor] = None,
         time_block_every: int = 4,
         attn_softclamp_value: float = 50.,
         feed_forward_expansion_factor: int = 4,
@@ -34,6 +35,9 @@ class BlockCausalTransformer(nn.Module):
             num_attention_heads: Number of attention heads.
             dropout: Dropout rate (unused in axial transformer).
             agent_slice: Slice for causal-confusion masking (the query-token span).
+            block_group_ids: Optional per-token agent-group id over the space axis
+                (length S). When set, the dynamics spatial mask is block-diagonal per
+                agent (CTDE): cross-agent info flows only through message tokens.
             time_block_every: Apply temporal attention every N layers (architecture
                 constant, not a per-run hyperparameter).
             attn_softclamp_value: Softclamp value for attention logits (architecture
@@ -70,6 +74,7 @@ class BlockCausalTransformer(nn.Module):
             is_decoder=False,
             is_dynamics=(agent_slice is not None),
             agent_slice=agent_slice,
+            block_group_ids=block_group_ids,
             dropout=dropout,
         )
 

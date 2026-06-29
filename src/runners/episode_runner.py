@@ -16,7 +16,8 @@ def get_obs_delay_data(env, n_agents, t):
         gen_t = np.asarray(env.get_obs_generation_time(), dtype=np.int64).reshape(n_agents, 1)
     else:
         gen_t = np.full((n_agents, 1), t, dtype=np.int64)
-    fresh = (delay == 0).astype(np.float32)
+    # Unarrived slots (gen_t < 0) are never fresh; an arrived slot is fresh iff delay 0.
+    fresh = ((gen_t >= 0) & (delay == 0)).astype(np.float32)
     return {"obs_delay": delay, "obs_gen_t": gen_t, "obs_fresh_mask": fresh}
 
 

@@ -122,6 +122,7 @@ class BlockCasualTransformer(nn.Module):
         is_decoder = False,
         is_dynamics = False,
         agent_slice: Optional[slice] = None,
+        block_group_ids: Optional[Tensor] = None,
         dropout = 0.0,
         device=None
     ):
@@ -133,6 +134,14 @@ class BlockCasualTransformer(nn.Module):
         self.device = device
         self.is_dynamics = is_dynamics
         self.agent_slice = agent_slice
+        # Per-token agent-group id over the space axis (length S). When present in
+        # dynamics mode, the spatial mask is block-diagonal per agent (CTDE): an
+        # agent's tokens attend only within its own block, so cross-agent information
+        # flows solely through the message tokens placed inside each receiver block.
+        if block_group_ids is not None:
+            self.register_buffer("block_group_ids", block_group_ids.long(), persistent=False)
+        else:
+            self.block_group_ids = None
 
         self.layers = nn.ModuleList([])
         self.is_time_layer = []
@@ -193,16 +202,33 @@ class BlockCasualTransformer(nn.Module):
             # time step attend to each other fully (bidirectional).
             mask = torch.ones((dim, dim), device=device, dtype=torch.bool)
 
+            if self.block_group_ids is not None:
+                # CTDE: restrict the base attention to a block-diagonal pattern, so an
+                # agent's tokens attend only within its own per-agent block (own obs
+                # latents, own action, the messages it received, own query). Direct
+                # cross-agent observation access is removed; the only cross-agent
+                # channel is the message tokens (sender obs) sitting inside each
+                # receiver's block. With comm off (no message tokens) agents become
+                # fully independent, i.e. decentralizable.
+                g = self.block_group_ids.to(device)
+                mask = (g[:, None] == g[None, :])
+
             if self.agent_slice is not None:
                 # Follow the paper's section 3.3 rule to prevent causal confusion.
-                # Rule 1: no other modality may attend back to the agent tokens
-                # (i.e. the columns at agent_slice are set to False).
+                # Rule 1: no other modality may attend back to the agent (query)
+                # tokens (i.e. the columns at agent_slice are set to False).
                 mask[:, self.agent_slice] = False
 
-                # Rule 2: agent tokens may attend to themselves and to all other
-                # modalities (i.e. the rows at agent_slice are set to True, which
-                # also restores agent-token self-attention disabled by rule 1).
-                mask[self.agent_slice, :] = True
+                # Rule 2: restore the agent (query) token ROWS. Without block ids this
+                # is full attention (legacy all-ones behaviour); with block ids the
+                # rows are restored to the block-diagonal pattern only, so a query
+                # attends its own block (own content + self) and NOT other agents.
+                if self.block_group_ids is not None:
+                    g = self.block_group_ids.to(device)
+                    block = (g[:, None] == g[None, :])
+                    mask[self.agent_slice] = block[self.agent_slice]
+                else:
+                    mask[self.agent_slice, :] = True
 
             return mask
 

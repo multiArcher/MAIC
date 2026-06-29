@@ -2,59 +2,71 @@ import copy
 from typing import Any
 
 import numpy as np
+import torch
 
 from envs.multiagentenv import MultiAgentEnv
+from components.delay_model import DelayModel
 
 
 class DelayedObservationWrapper(MultiAgentEnv):
-    """Delay local observations while leaving state and action availability fresh."""
+    """Delay local observations while leaving state and action availability fresh.
+
+    Delay is an environment property (applied here, identically for every algorithm
+    that runs on the delayed env), so benchmarking stays fair. The arrival-time logic
+    is delegated to the shared :class:`components.delay_model.DelayModel` (single env =
+    batch axis ``b=1``): each step's fresh observation is produced at ``sent_time = t``
+    and arrives at ``t + delay``; the agent receives the freshest observation that has
+    arrived by step ``t``. When no observation has arrived yet (sampled delay exceeds
+    the elapsed steps) the slot is zero-filled and flagged unarrived
+    (``generation_time = -1``), so the very first steps honor the delay distribution
+    instead of being forced fresh.
+    """
 
     def __init__(
         self,
         env: MultiAgentEnv,
-        delay_type: str = "fixed",
-        delay: int = 0,
+        delay_type: str = "gaussian",
         delay_mean: float = 0.0,
         delay_std: float = 0.0,
         max_delay: int = 0,
         delay_per_agent: bool = True,
         seed: int | None = None,
+        **_ignored,
     ):
         self.env = env
-        self.delay_type = delay_type
-        # self.delay = max(0, int(delay))
-        self.delay_mean = float(delay_mean)
-        self.delay_std = max(0.0, float(delay_std))
-        self.max_delay = max(0, int(max_delay))
-        self.delay_per_agent = bool(delay_per_agent)
-        self._rng = np.random.default_rng(seed)
-
         self.episode_limit = env.episode_limit
         env_info = env.get_env_info()
         self.n_agents = env_info["n_agents"]
+
+        self.delay_model = DelayModel(
+            delay_type=delay_type,
+            delay_mean=delay_mean,
+            delay_std=delay_std,
+            max_delay=max_delay,
+            delay_per_source=delay_per_agent,
+        )
+        self._max_t = self.episode_limit + 1
+        if seed is not None:
+            torch.manual_seed(seed)
+
         self._time = 0
-        self._obs_history: list[list[np.ndarray]] = []
         self._current_obs: list[np.ndarray] = []
         self._current_delays = np.zeros(self.n_agents, dtype=np.int64)
         self._current_generation_times = np.zeros(self.n_agents, dtype=np.int64)
 
-        if self.delay_type not in {"fixed", "uniform", "gaussian"}:
-            raise ValueError(f"Unknown delay_type: {self.delay_type}")
-
     def reset(self, seed=None, options=None):
         fresh_obs, info = self.env.reset(seed=seed, options=options)
         if seed is not None:
-            self._rng = np.random.default_rng(seed)
+            torch.manual_seed(seed)
         self._time = 0
-        self._obs_history = [self._copy_obs(fresh_obs)]
-        self._refresh_delayed_obs()
+        self.delay_model.reset()
+        self._push_and_refresh(fresh_obs)
         return self.get_obs(), info
 
     def step(self, actions):
         _, reward, terminated, truncated, info = self.env.step(actions)
         self._time += 1
-        self._obs_history.append(self._copy_obs(self.env.get_obs()))
-        self._refresh_delayed_obs()
+        self._push_and_refresh(self.env.get_obs())
         return self.get_obs(), reward, terminated, truncated, info
 
     def get_obs(self):
@@ -94,7 +106,8 @@ class DelayedObservationWrapper(MultiAgentEnv):
         return self.env.close()
 
     def seed(self, seed=None):
-        self._rng = np.random.default_rng(seed)
+        if seed is not None:
+            torch.manual_seed(seed)
         return self.env.seed(seed)
 
     def save_replay(self):
@@ -106,31 +119,21 @@ class DelayedObservationWrapper(MultiAgentEnv):
     def get_stats(self):
         return self.env.get_stats()
 
-    def _refresh_delayed_obs(self):
-        delays = self._sample_delays()
-        generation_times = np.maximum(self._time - delays, 0)
-        self._current_delays = self._time - generation_times
-        self._current_generation_times = generation_times
-        self._current_obs = [
-            np.array(self._obs_history[generation_times[agent_id]][agent_id], copy=True)
-            for agent_id in range(self.n_agents)
-        ]
+    def _push_and_refresh(self, fresh_obs):
+        """Push this step's fresh obs into the delay model and pull the delivered obs.
 
-    def _sample_delays(self):
-        sample_size = self.n_agents if self.delay_per_agent else 1
-        if self.delay_type == "fixed":
-            sampled = np.full(sample_size, self.delay, dtype=np.int64)
-        elif self.delay_type == "uniform":
-            sampled = self._rng.integers(0, self.max_delay + 1, size=sample_size, dtype=np.int64)
-        else:
-            sampled = np.ceil(
-                self._rng.normal(self.delay_mean, self.delay_std, size=sample_size)
-            ).astype(np.int64)
-            sampled = np.clip(sampled, 0, self.max_delay)
-
-        if not self.delay_per_agent:
-            sampled = np.repeat(sampled, self.n_agents)
-        return sampled
+        Eval-time delay is always sampled (the wrapper exists to model delay); the
+        DelayModel's ``training`` flag is therefore False here. Shapes use the b=1
+        batch axis: payload [1, n_agents, obs_dim].
+        """
+        obs_arr = np.asarray(fresh_obs, dtype=np.float32)            # [n_agents, obs_dim]
+        payload = torch.from_numpy(obs_arr).unsqueeze(0)             # [1, n, d]
+        self.delay_model.push_step(payload, self._time, training=False, max_t=self._max_t, feat_ndims=1)
+        delivered, gen_t, delay, _ = self.delay_model.query_step(self._time)
+        # Squeeze the b=1 axis back to per-agent numpy.
+        self._current_obs = [delivered[0, a].numpy().copy() for a in range(self.n_agents)]
+        self._current_generation_times = gen_t[0].numpy().astype(np.int64)   # [n], -1 == unarrived
+        self._current_delays = delay[0].numpy().astype(np.int64)
 
     @staticmethod
     def _copy_obs(obs: Any):

@@ -111,13 +111,19 @@ class BCRBCMAC(MAC):
         # Scatter each delivered latent to its *generation* slot; mark which slots
         # hold a real (received) latent. A delayed obs still provides a real
         # observation for its generation slot, so every delivered packet counts
-        # regardless of freshness. Later arrivals overwrite earlier copies.
+        # regardless of freshness. Later arrivals overwrite earlier copies. An
+        # unarrived obs is flagged by gen_t < 0 (sentinel): it has no real latent
+        # anywhere and must be left for the world model to generate.
         z_buf = torch.zeros_like(z_delivered)
         is_real = torch.zeros(batch_size, end, num_agents, device=device)
+        arrived = gen_t >= 0                                       # [B, end, n]
         local_gen = gen_t.clamp(min=0, max=end - 1)
         idx = local_gen.view(batch_size, end, num_agents, 1, 1).expand(-1, -1, -1, num_latent_tokens, latent_dim)
-        z_buf.scatter_(1, idx, z_delivered)
-        is_real.scatter_(1, local_gen, torch.ones(batch_size, end, num_agents, device=device))
+        # Only scatter latents/real-flags for arrived packets; unarrived query steps
+        # contribute nothing to any generation slot.
+        z_src = z_delivered * arrived.view(batch_size, end, num_agents, 1, 1).to(z_delivered.dtype)
+        z_buf.scatter_(1, idx, z_src)
+        is_real.scatter_(1, local_gen, arrived.to(is_real.dtype))
 
         # Fill generated slots left-to-right, re-rolling from the latest real history.
         z_cur = z_buf.clone()

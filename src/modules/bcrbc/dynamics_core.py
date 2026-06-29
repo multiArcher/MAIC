@@ -59,6 +59,7 @@ class BCRBCDynamicsCore(nn.Module):
         self.transformer = BlockCausalTransformer(
             model_hidden_dim, num_transformer_layers, num_attention_heads,
             dropout=dropout, agent_slice=agent_slice,
+            block_group_ids=self.tokenizer.group_ids,
         )
         self.readout = BeliefReadout(model_hidden_dim, belief_dim)
         self.q_head = BCRBCQHead(belief_dim, n_actions, args.bcrbc_q_hidden_dim)
