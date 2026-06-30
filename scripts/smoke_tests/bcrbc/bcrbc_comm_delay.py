@@ -1,5 +1,4 @@
 import sys
-from types import SimpleNamespace as SN
 
 import torch
 
@@ -9,6 +8,8 @@ from components.episode_buffer import EpisodeBatch
 from components.transforms import OneHot
 from controllers.bcrbc_mac import BCRBCMAC
 from learners.bcrbc_learner import BCRBCLearner
+
+from scripts.smoke_tests.bcrbc._bcrbc_args import make_bcrbc_args, delay_scheme, zero_delay_fill
 
 
 class Logger:
@@ -30,6 +31,7 @@ scheme = {
     "avail_actions": {"vshape": (N_ACTIONS,), "group": "agents", "dtype": torch.int},
     "reward": {"vshape": (1,), "dtype": torch.float32},
     "terminated": {"vshape": (1,), "dtype": torch.uint8},
+    **delay_scheme(),
 }
 groups = {"agents": N_AGENTS}
 preprocess = {"actions": ("actions_onehot", [OneHot(out_dim=N_ACTIONS)])}
@@ -43,52 +45,21 @@ batch.update(
         "avail_actions": torch.ones(BATCH_SIZE, TIME_SIZE, N_AGENTS, N_ACTIONS, dtype=torch.int),
         "reward": torch.randn(BATCH_SIZE, TIME_SIZE, 1),
         "terminated": torch.zeros(BATCH_SIZE, TIME_SIZE, 1, dtype=torch.uint8),
+        **zero_delay_fill(BATCH_SIZE, TIME_SIZE, N_AGENTS),
     },
     slice(None),
     slice(0, TIME_SIZE),
 )
 
-args = SN(
-    device=torch.device("cpu"),
-    use_cuda=False,
+args = make_bcrbc_args(
     n_agents=N_AGENTS,
     n_actions=N_ACTIONS,
     state_shape=STATE_DIM,
-    common_reward=True,
-    agent_output_type="q",
-    action_selector="epsilon_greedy",
-    epsilon_start=1.0,
-    epsilon_finish=0.05,
-    epsilon_anneal_time=100,
-    evaluation_epsilon=0.0,
-    obs_agent_id=True,
-    obs_last_action=True,
-    bcrbc_d_model=32,
-    bcrbc_belief_dim=32,
-    bcrbc_depth=1,
-    bcrbc_heads=4,
-    bcrbc_dropout=0.0,
     bcrbc_use_comm=True,
     comm_gaussian_delay_mean=2.0,
     comm_gaussian_delay_std=1.5,
     bcrbc_max_delay=8,
     env_info={"episode_limit": TIME_SIZE - 1},
-    mixer="new_qmix_mixer",
-    mixing_embed_dim=8,
-    hypernet_embed=16,
-    optimizer="adamW",
-    lr=0.001,
-    standardise_returns=False,
-    standardise_rewards=False,
-    target_type="td",
-    gamma=0.99,
-    double_q=True,
-    target_update_interval_or_tau=200,
-    learner_log_interval=999999,
-    grad_norm_clip=10,
-    td_loss_weight=1.0,
-    rec_loss_weight=0.0,
-    dyn_loss_weight=0.0,
 )
 
 torch.manual_seed(0)
@@ -107,17 +78,20 @@ assert torch.isfinite(out_eval["q_values"]).all()
 assert not torch.allclose(out_train["q_values"], out_eval["q_values"]), \
     "comm delay at eval should change Q values vs no-delay train forward"
 
-# message slot count: n_agents-1 senders per agent
+# message slot count: n_agents-1 senders per agent. Training delivers each
+# sender's current-step observation (delay 0), so messages[b,t,i,k] == obs of the
+# k-th sender of agent i at step t.
 comm = mac.comm_delay(batch["obs"][:, slice(0, TIME_SIZE)], start_t=0, training=True)
-assert comm["messages"].shape == (BATCH_SIZE, TIME_SIZE, N_AGENTS, N_AGENTS - 1, OBS_DIM)
-assert comm["msg_fresh_mask"].min().item() == 1.0, "training comm must be all-fresh"
+assert comm.shape == (BATCH_SIZE, TIME_SIZE, N_AGENTS, N_AGENTS - 1, OBS_DIM)
+sender_idx = torch.tensor([[j for j in range(N_AGENTS) if j != i] for i in range(N_AGENTS)])
+expected_fresh = batch["obs"][:, slice(0, TIME_SIZE)][:, :, sender_idx]  # [B,T,n,n-1,obs]
+assert torch.allclose(comm, expected_fresh), "training comm must deliver current-step sender obs"
 
+# eval: Gaussian delay -> stale content (taken from an earlier step), so at least
+# some message slots differ from the fresh (current-step) delivery.
 comm_eval = mac.comm_delay(batch["obs"][:, slice(0, TIME_SIZE)], start_t=0, training=False)
-assert comm_eval["msg_delay"].max().item() > 0, "eval comm should have nonzero delay"
-# t-d<0 slots zero-filled
-gen = comm_eval["msg_gen_t"]
-arrive = comm_eval["msg_arrive_t"]
-assert (gen <= arrive).all(), "generation time must not exceed arrival time"
+assert comm_eval.shape == comm.shape
+assert not torch.allclose(comm_eval, expected_fresh), "eval comm should deliver stale content"
 
 # full learner train step with comm enabled
 learner = BCRBCLearner(mac, batch.scheme, Logger(), args)

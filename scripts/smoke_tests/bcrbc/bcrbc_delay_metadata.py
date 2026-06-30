@@ -1,5 +1,13 @@
+"""Smoke: obs delay metadata must NOT affect BC-RBC Q values.
+
+In the v2 design delay is never an input to the network — it is resolved in
+controller code (latent imputation + correction-on-arrival). This test pins that
+guarantee: two batches that differ ONLY in the obs delay metadata
+(obs_delay / obs_gen_t / obs_fresh_mask), with identical obs/actions, must produce
+identical Q values through the plain (non-generative) forward path.
+"""
+
 import sys
-from types import SimpleNamespace as SN
 
 import torch
 
@@ -8,6 +16,8 @@ sys.path.insert(0, "src")
 from components.episode_buffer import EpisodeBatch
 from components.transforms import OneHot
 from controllers.bcrbc_mac import BCRBCMAC
+
+from scripts.smoke_tests.bcrbc._bcrbc_args import make_bcrbc_args
 
 
 BATCH_SIZE = 1
@@ -31,24 +41,16 @@ scheme = {
 groups = {"agents": N_AGENTS}
 preprocess = {"actions": ("actions_onehot", [OneHot(out_dim=N_ACTIONS)])}
 
-args = SN(
-    device=torch.device("cpu"),
+# Comm off: isolate the obs path so the only difference between batches is the
+# (now-ignored) obs delay metadata.
+args = make_bcrbc_args(
     n_agents=N_AGENTS,
     n_actions=N_ACTIONS,
-    agent_output_type="q",
-    action_selector="epsilon_greedy",
     epsilon_start=0.0,
     epsilon_finish=0.0,
     epsilon_anneal_time=1,
-    evaluation_epsilon=0.0,
-    obs_agent_id=True,
-    obs_last_action=True,
-    bcrbc_d_model=32,
-    bcrbc_belief_dim=32,
-    bcrbc_depth=1,
-    bcrbc_heads=4,
-    bcrbc_dropout=0.0,
     bcrbc_max_delay=8,
+    bcrbc_use_comm=False,
     env_info={"episode_limit": TIME_SIZE - 1},
 )
 
@@ -83,8 +85,11 @@ torch.manual_seed(7)
 mac = BCRBCMAC(scheme | {"actions_onehot": {"vshape": (N_ACTIONS,), "group": "agents", "dtype": torch.float32}}, groups, args)
 mac.eval()
 with torch.no_grad():
+    # Plain forward path (test_mode False -> no generative rollout); only the obs
+    # delay metadata differs between the two batches.
     q_no_delay = mac.forward(make_batch(0), slice(0, TIME_SIZE))["q_values"]
     q_delayed = mac.forward(make_batch(3), slice(0, TIME_SIZE))["q_values"]
 
-assert not torch.allclose(q_no_delay, q_delayed), "delay metadata should affect BC-RBC Q values"
-print("delay metadata affects q ok")
+assert torch.allclose(q_no_delay, q_delayed), \
+    "obs delay metadata must NOT affect Q values (delay is not a model input)"
+print("delay metadata does not leak into the model ok")

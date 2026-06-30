@@ -9,7 +9,6 @@ Replicates the worked example for one agent and asserts the headline behavior:
 """
 
 import sys
-from types import SimpleNamespace as SN
 
 import torch
 
@@ -18,6 +17,8 @@ sys.path.insert(0, "src")
 from components.episode_buffer import EpisodeBatch
 from components.transforms import OneHot
 from controllers.bcrbc_mac import BCRBCMAC
+
+from scripts.smoke_tests.bcrbc._bcrbc_args import make_bcrbc_args
 
 BATCH, TIME, NA, OBS, NACT, STATE = 1, 5, 3, 6, 4, 8
 
@@ -35,15 +36,9 @@ scheme = {
 groups = {"agents": NA}
 preprocess = {"actions": ("actions_onehot", [OneHot(out_dim=NACT)])}
 
-args = SN(
-    device=torch.device("cpu"), use_cuda=False, n_agents=NA, n_actions=NACT, state_shape=STATE,
-    common_reward=True, agent_output_type="q", action_selector="epsilon_greedy",
-    epsilon_start=1.0, epsilon_finish=0.05, epsilon_anneal_time=100, evaluation_epsilon=0.0,
-    obs_agent_id=True, obs_last_action=True, bcrbc_d_model=32, bcrbc_belief_dim=32, bcrbc_z_dim=16,
-    bcrbc_depth=1, bcrbc_heads=4, bcrbc_dropout=0.0, env_info={"episode_limit": TIME - 1},
-    mixer="new_qmix_mixer", mixing_embed_dim=8, hypernet_embed=16, optimizer="adamW", lr=0.001,
-    standardise_returns=False, standardise_rewards=False, target_type="td", gamma=0.99,
-    double_q=True, target_update_interval_or_tau=200, learner_log_interval=999999, grad_norm_clip=10,
+args = make_bcrbc_args(
+    n_agents=NA, n_actions=NACT, state_shape=STATE,
+    env_info={"episode_limit": TIME - 1},
     bcrbc_generative_eval=True, bcrbc_flow_steps=8,
 )
 

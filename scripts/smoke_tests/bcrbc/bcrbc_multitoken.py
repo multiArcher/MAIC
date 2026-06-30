@@ -8,7 +8,6 @@ num_token=1 still produces a size-1 token axis (degenerate case).
 """
 
 import sys
-from types import SimpleNamespace as SN
 
 import torch
 
@@ -18,6 +17,8 @@ from components.episode_buffer import EpisodeBatch
 from components.transforms import OneHot
 from controllers.bcrbc_mac import BCRBCMAC
 from learners.bcrbc_learner import BCRBCLearner
+
+from scripts.smoke_tests.bcrbc._bcrbc_args import make_bcrbc_args
 
 
 class Logger:
@@ -62,17 +63,11 @@ def build_batch_and_args(n_latent_tokens, generative_eval=False):
         slice(None),
         slice(0, TIME),
     )
-    args = SN(
-        device=torch.device("cpu"), use_cuda=False, n_agents=NA, n_actions=NACT, state_shape=STATE,
-        common_reward=True, agent_output_type="q", action_selector="epsilon_greedy",
-        epsilon_start=1.0, epsilon_finish=0.05, epsilon_anneal_time=100, evaluation_epsilon=0.0,
-        obs_agent_id=True, obs_last_action=True, bcrbc_d_model=32, bcrbc_belief_dim=32,
+    args = make_bcrbc_args(
+        n_agents=NA, n_actions=NACT, state_shape=STATE,
         bcrbc_z_dim=Z_DIM, bcrbc_n_latent_tokens=n_latent_tokens,
-        bcrbc_depth=1, bcrbc_heads=4, bcrbc_dropout=0.0, env_info={"episode_limit": TIME - 1},
-        mixer="new_qmix_mixer", mixing_embed_dim=8, hypernet_embed=16, optimizer="adamW", lr=0.001,
-        standardise_returns=False, standardise_rewards=False, target_type="td", gamma=0.99,
-        double_q=True, target_update_interval_or_tau=200, learner_log_interval=999999, grad_norm_clip=10,
-        td_loss_weight=1.0, rec_loss_weight=0.5, dyn_loss_weight=0.0, flow_loss_weight=0.5,
+        env_info={"episode_limit": TIME - 1},
+        rec_loss_weight=0.5, flow_loss_weight=0.5,
         bcrbc_generative_eval=generative_eval, bcrbc_flow_steps=4,
     )
     return batch, groups, args

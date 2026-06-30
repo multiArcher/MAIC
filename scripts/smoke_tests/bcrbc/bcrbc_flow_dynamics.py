@@ -8,7 +8,6 @@ Checks the FlowDynamics head in isolation and wired into the learner:
 """
 
 import sys
-from types import SimpleNamespace as SN
 
 import torch
 
@@ -18,6 +17,7 @@ from components.episode_buffer import EpisodeBatch
 from components.transforms import OneHot
 from controllers.bcrbc_mac import BCRBCMAC
 from learners.bcrbc_learner import BCRBCLearner
+from scripts.smoke_tests.bcrbc._bcrbc_args import make_bcrbc_args, delay_scheme, zero_delay_fill
 from modules.bcrbc.flow_dynamics import FlowDynamics
 
 
@@ -30,10 +30,11 @@ class Logger:
 torch.manual_seed(0)
 B, T, N = 2, 5, 3
 CTX, ZD = 16, 8
-flow = FlowDynamics(context_dim=CTX, z_dim=ZD, hidden_dim=32)
+flow = FlowDynamics(context_dim=CTX, latent_dim=ZD, hidden_dim=32,
+                    flow_time_embed_dim=32, num_flow_time_buckets=64, num_latent_tokens=1)
 
 # context carries the explicit size-1 per-agent slot axis [...,1,CTX]; targets
-# carry the token axis [...,n_tokens,ZD]; masks are [...,1,1].
+# carry the token axis [...,num_latent_tokens,ZD]; masks are [...,1,1].
 context = torch.randn(B, T, N, 1, CTX, requires_grad=True)
 z_target = torch.randn(B, T, N, 1, ZD)
 mask = torch.ones(B, T, N, 1, 1)
@@ -44,14 +45,15 @@ loss.backward()
 assert context.grad is not None and torch.isfinite(context.grad).all(), "grad must flow to context"
 assert flow.net[0].weight.grad is not None, "flow head must receive gradient"
 
-# sample shape + no-grad (n_tokens=1 -> size-1 token axis)
+# sample shape + no-grad (num_latent_tokens=1 -> size-1 token axis)
 samp = flow.sample(torch.randn(B, T, N, 1, CTX), steps=8)
 assert samp.shape == (B, T, N, 1, ZD), f"sample shape {samp.shape}"
 assert not samp.requires_grad, "sample must run under no_grad"
 
-# ---- 1b. Multi-token capacity (n_tokens > 1) --------------------------------
+# ---- 1b. Multi-token capacity (num_latent_tokens > 1) -----------------------
 NTOK = 3
-flow_mt = FlowDynamics(context_dim=CTX, z_dim=ZD, hidden_dim=32, n_tokens=NTOK)
+flow_mt = FlowDynamics(context_dim=CTX, latent_dim=ZD, hidden_dim=32,
+                       flow_time_embed_dim=32, num_flow_time_buckets=64, num_latent_tokens=NTOK)
 ctx_mt = torch.randn(B, T, N, 1, CTX, requires_grad=True)
 z_tgt_mt = torch.randn(B, T, N, NTOK, ZD)
 mask_mt = torch.ones(B, T, N, 1, 1)
@@ -67,7 +69,8 @@ assert not torch.allclose(samp_mt[..., 0, :], samp_mt[..., 1, :]), "tokens shoul
 # ---- 2. The WM can actually learn a fixed mapping ---------------------------
 # Train flow to generate a target that is a deterministic function of context.
 torch.manual_seed(1)
-flow2 = FlowDynamics(context_dim=CTX, z_dim=ZD, hidden_dim=64)
+flow2 = FlowDynamics(context_dim=CTX, latent_dim=ZD, hidden_dim=64,
+                     flow_time_embed_dim=32, num_flow_time_buckets=64, num_latent_tokens=1)
 opt = torch.optim.Adam(flow2.parameters(), lr=1e-2)
 W = torch.randn(CTX, ZD)
 fixed_ctx = torch.randn(64, 1, CTX)  # carry the size-1 slot axis
@@ -97,6 +100,7 @@ scheme = {
     "avail_actions": {"vshape": (NACT,), "group": "agents", "dtype": torch.int},
     "reward": {"vshape": (1,), "dtype": torch.float32},
     "terminated": {"vshape": (1,), "dtype": torch.uint8},
+    **delay_scheme(),
 }
 groups = {"agents": NA}
 preprocess = {"actions": ("actions_onehot", [OneHot(out_dim=NACT)])}
@@ -109,20 +113,15 @@ batch.update(
         "avail_actions": torch.ones(BATCH, TIME, NA, NACT, dtype=torch.int),
         "reward": torch.randn(BATCH, TIME, 1),
         "terminated": torch.zeros(BATCH, TIME, 1, dtype=torch.uint8),
+        **zero_delay_fill(BATCH, TIME, NA),
     },
     slice(None),
     slice(0, TIME),
 )
-args = SN(
-    device=torch.device("cpu"), use_cuda=False, n_agents=NA, n_actions=NACT, state_shape=STATE,
-    common_reward=True, agent_output_type="q", action_selector="epsilon_greedy",
-    epsilon_start=1.0, epsilon_finish=0.05, epsilon_anneal_time=100, evaluation_epsilon=0.0,
-    obs_agent_id=True, obs_last_action=True, bcrbc_d_model=32, bcrbc_belief_dim=32, bcrbc_z_dim=16,
-    bcrbc_depth=1, bcrbc_heads=4, bcrbc_dropout=0.0, env_info={"episode_limit": TIME - 1},
-    mixer="new_qmix_mixer", mixing_embed_dim=8, hypernet_embed=16, optimizer="adamW", lr=0.001,
-    standardise_returns=False, standardise_rewards=False, target_type="td", gamma=0.99,
-    double_q=True, target_update_interval_or_tau=200, learner_log_interval=999999, grad_norm_clip=10,
-    td_loss_weight=1.0, rec_loss_weight=0.5, dyn_loss_weight=0.0, flow_loss_weight=0.5,
+args = make_bcrbc_args(
+    n_agents=NA, n_actions=NACT, state_shape=STATE,
+    env_info={"episode_limit": TIME - 1},
+    rec_loss_weight=0.5, flow_loss_weight=0.5,
 )
 torch.manual_seed(2)
 mac = BCRBCMAC(batch.scheme, groups, args)

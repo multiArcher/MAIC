@@ -29,12 +29,13 @@ def test_bcrbc_axial_shape():
     space_size = 9  # 3 agents * 3 tokens per agent (obs, action, query)
     d_model = 128
 
-    print(f"Creating BlockCausalTransformer(d_model={d_model}, depth=4, heads=4)")
+    print(f"Creating BlockCausalTransformer(model_hidden_dim={d_model}, num_transformer_layers=4, num_attention_heads=4)")
     transformer = BlockCausalTransformer(
-        d_model=d_model,
-        depth=4,
-        heads=4,
-        dropout=0.0
+        model_hidden_dim=d_model,
+        num_transformer_layers=4,
+        num_attention_heads=4,
+        dropout=0.0,
+        agent_slice=None,
     )
     print(f"  Model created successfully")
 

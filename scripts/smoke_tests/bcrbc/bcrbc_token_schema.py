@@ -32,31 +32,32 @@ def test_bcrbc_token_schema():
     d_model = 32
     belief_dim = 32
 
-    print(f"Creating DelayTokenizer(n_agents={n_agents}, d_model={d_model})")
+    print(f"Creating DelayTokenizer(n_agents={n_agents}, model_hidden_dim={d_model})")
     tokenizer = DelayTokenizer(
         obs_dim=obs_dim,
         n_actions=n_actions,
         n_agents=n_agents,
-        d_model=d_model,
+        model_hidden_dim=d_model,
         max_t=time_steps + 10,
-        max_delay=8,
-        d_msg=16,
+        num_messages_per_agent=n_agents - 1,
+        message_dim=16,
+        num_latent_tokens=1,
     )
 
-    print(f"  n_msg_per_agent: {tokenizer.n_msg_per_agent}")
+    print(f"  num_messages_per_agent: {tokenizer.num_messages_per_agent}")
     print(f"  tokens_per_agent: {tokenizer.tokens_per_agent}")
 
     # Expected space size: n_agents * tokens_per_agent (content) + n_agents (queries)
-    # With n_agents=3, n_msg_per_agent=2:
-    #   tokens_per_agent = 2 + 2 = 4
+    # With n_agents=3, num_messages_per_agent=2:
+    #   tokens_per_agent = 1 + 1 + 2 = 4
     #   S = 3 * 4 + 3 = 15
     expected_S = n_agents * tokenizer.tokens_per_agent + n_agents
     print(f"  Expected S: {expected_S}")
 
     block_builder = BlockBuilder(tokenizer)
 
-    # Create fake obs and actions
-    obs = torch.randn(batch_size, time_steps, n_agents, obs_dim)
+    # obs is the per-agent bottleneck latents [B, T, n, num_latent_tokens, latent_dim].
+    obs = torch.randn(batch_size, time_steps, n_agents, 1, obs_dim)
     last_actions = torch.zeros(batch_size, time_steps, n_agents, n_actions)
     last_actions[:, :, :, 0] = 1.0  # one-hot
 
@@ -90,15 +91,11 @@ def test_bcrbc_token_schema():
     print(f"\n[Test 4] Forward WITH messages...")
     d_msg = 16
     messages = torch.randn(batch_size, time_steps, n_agents, n_agents - 1, d_msg)
-    msg_fresh_mask = torch.ones(batch_size, time_steps, n_agents, n_agents - 1, 1)
-    msg_gen_t = torch.zeros(batch_size, time_steps, n_agents, n_agents - 1, 1, dtype=torch.long)
 
     tokens_with_msg = block_builder(
         obs,
         last_actions,
         messages=messages,
-        msg_gen_t=msg_gen_t,
-        msg_fresh_mask=msg_fresh_mask,
     )
     print(f"  tokens_with_msg shape: {tokens_with_msg.shape}")
     assert tokens_with_msg.shape == (batch_size, time_steps, expected_S, d_model)
@@ -108,9 +105,10 @@ def test_bcrbc_token_schema():
     # Test 5: Forward through transformer + readout
     print(f"\n[Test 5] Forward through transformer + readout...")
     transformer = BlockCausalTransformer(
-        d_model=d_model,
-        depth=2,
-        heads=4,
+        model_hidden_dim=d_model,
+        num_transformer_layers=2,
+        num_attention_heads=4,
+        dropout=0.0,
         agent_slice=agent_slice,
     )
     readout = BeliefReadout(d_model, belief_dim)
