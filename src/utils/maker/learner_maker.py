@@ -85,4 +85,9 @@ class LearnerMaker(Maker):
         """Kernel (QMIX-like) learner."""
         from learners.kernel_q_learner import KernelQLearner
         return KernelQLearner(*args, **kwargs)
-    
+    @staticmethod
+    def make_bcrbc_learner(*args, **kwargs) -> 'Learner':
+        """BC-RBC QMIX learner."""
+        from learners.bcrbc_learner import BCRBCLearner
+        return BCRBCLearner(*args, **kwargs)
+

@@ -78,6 +78,7 @@ def _get_config(params, arg_name, subfolder):
                 "{}.yaml".format(config_name),
             ),
             "r",
+            encoding="utf-8",
         ) as f:
             try:
                 config_dict = yaml.load(f, Loader=yaml.FullLoader)
