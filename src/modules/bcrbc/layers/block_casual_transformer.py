@@ -123,6 +123,7 @@ class BlockCasualTransformer(nn.Module):
         is_dynamics = False,
         agent_slice: Optional[slice] = None,
         block_group_ids: Optional[Tensor] = None,
+        context_window: Optional[int] = None,
         dropout = 0.0,
         device=None
     ):
@@ -134,6 +135,12 @@ class BlockCasualTransformer(nn.Module):
         self.device = device
         self.is_dynamics = is_dynamics
         self.agent_slice = agent_slice
+        # Temporal context window: when set (> 0), the causal time mask is *banded* so
+        # each step attends only the previous `context_window` steps (instead of the
+        # whole causal past). Bounds receptive field + cost on long episodes and keeps
+        # train consistent with the windowed eval rollout. None / 0 => unbounded (exact
+        # legacy lower-triangular causal mask).
+        self.context_window = context_window if (context_window and context_window > 0) else None
         # Per-token agent-group id over the space axis (length S). When present in
         # dynamics mode, the spatial mask is block-diagonal per agent (CTDE): an
         # agent's tokens attend only within its own block, so cross-agent information
@@ -256,7 +263,8 @@ class BlockCasualTransformer(nn.Module):
         self,
         x: Tensor, #TODO：Support source from different inputs.
         kv_cache = None,
-        use_kv_cache: bool = False
+        use_kv_cache: bool = False,
+        rope_offset: Optional[int] = None,
     ):
         """Forward pass of the Block Casual Transformer.
 
@@ -264,6 +272,12 @@ class BlockCasualTransformer(nn.Module):
             x: Input tensor of shape (..., time_steps, sequence_len, dim).
             kv_cache: List of cached (k_cache, v_cache) tuples for time layers during inference.
             use_kv_cache: Whether to use and return KV caches for time layers.
+            rope_offset: Absolute time position of the first token in ``x``. When None
+                (default) the offset is inferred from the cached-key length — correct only
+                while the cache is never evicted (within-build append). With an evicted /
+                sliding cache, cache length no longer equals absolute position, so the
+                caller MUST pass the true absolute offset. RoPE is shift-invariant, so
+                supplying the absolute offset is bit-identical to the dense forward.
         Returns:
             If use_kv_cache is False:
                 output: Tensor of shape (..., time_steps, sequence_len, dim).
@@ -296,13 +310,38 @@ class BlockCasualTransformer(nn.Module):
 
                 x = x.transpose(-2, -3)  # (..., S, T, D)
 
-                # RoPE
-                offset = layer_cache[0].shape[-2] if layer_cache is not None else 0 # Offset for cached keys
+                # RoPE: position of the new query/key tokens. Prefer the explicit absolute
+                # offset (required once the cache is evicted/slid); fall back to cached-key
+                # length for the non-evicting append path.
+                if rope_offset is not None:
+                    offset = rope_offset
+                else:
+                    offset = layer_cache[0].shape[-2] if layer_cache is not None else 0
                 freqs = self.rotary(time_steps, offset=offset)
 
                 # Time Mask (Causal)
                 if layer_cache is None and not use_kv_cache:
                     time_mask = torch.ones((time_steps, time_steps), device=x.device, dtype=torch.bool).tril()
+                    if self.context_window is not None:
+                        # Band the causal mask: each step attends only the previous
+                        # `context_window` steps (including itself) -> tril & triu(-(W-1)).
+                        time_mask = time_mask & torch.ones(
+                            (time_steps, time_steps), device=x.device, dtype=torch.bool
+                        ).triu(diagonal=-(self.context_window - 1))
+                elif use_kv_cache and self.context_window is not None:
+                    # Cached path with a sliding window: keys are [cached.. , new..] and the
+                    # query tokens sit at absolute positions [offset, offset+time_steps).
+                    # The cache may retain MORE than W entries (so a corrected tail slot can
+                    # still see its full W-window), so we cannot rely on plain causality —
+                    # build an explicit [time_steps, n_cached+time_steps] band so each query
+                    # attends exactly its own W-window (q-W < k <= q) over the joined keys.
+                    n_cached = layer_cache[0].shape[-2] if layer_cache is not None else 0
+                    total_kv = n_cached + time_steps
+                    q_abs = torch.arange(offset, offset + time_steps, device=x.device).view(time_steps, 1)
+                    # absolute position of each key: cached keys end just before the new ones.
+                    k_abs = torch.arange(offset - n_cached, offset + time_steps, device=x.device).view(1, total_kv)
+                    rel = q_abs - k_abs
+                    time_mask = (rel >= 0) & (rel < self.context_window)
 
             # 2. Block Computation
             # Transformer accross dim -2 (Time or Space).

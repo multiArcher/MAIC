@@ -23,6 +23,7 @@ class BlockCausalTransformer(nn.Module):
         dropout: float,
         agent_slice: Optional[slice],
         block_group_ids: Optional[torch.Tensor] = None,
+        context_window: Optional[int] = None,
         time_block_every: int = 4,
         attn_softclamp_value: float = 50.,
         feed_forward_expansion_factor: int = 4,
@@ -38,6 +39,9 @@ class BlockCausalTransformer(nn.Module):
             block_group_ids: Optional per-token agent-group id over the space axis
                 (length S). When set, the dynamics spatial mask is block-diagonal per
                 agent (CTDE): cross-agent info flows only through message tokens.
+            context_window: Optional temporal context window. When set (> 0), the causal
+                time attention is banded to the previous `context_window` steps. None / 0
+                => unbounded causal attention (legacy).
             time_block_every: Apply temporal attention every N layers (architecture
                 constant, not a per-run hyperparameter).
             attn_softclamp_value: Softclamp value for attention logits (architecture
@@ -75,10 +79,17 @@ class BlockCausalTransformer(nn.Module):
             is_dynamics=(agent_slice is not None),
             agent_slice=agent_slice,
             block_group_ids=block_group_ids,
+            context_window=context_window,
             dropout=dropout,
         )
 
-    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        tokens: torch.Tensor,
+        kv_cache=None,
+        use_kv_cache: bool = False,
+        rope_offset=None,
+    ):
         """Forward pass through the axial space-time transformer.
 
         Args:
@@ -88,14 +99,23 @@ class BlockCausalTransformer(nn.Module):
                 attends over, and D is the model dim. The underlying axial core
                 operates on ``*batch_dims`` so no flattening of the batch prefix
                 is required.
+            kv_cache: Optional list of cached (k, v) tuples for the time layers
+                (incremental decoding across time). When supplied with
+                ``use_kv_cache=True``, ``tokens`` is the *new* time slice only and
+                each time layer attends it against the cached past.
+            use_kv_cache: When True, return the updated per-time-layer KV caches
+                alongside the output so the caller can persist them.
 
         Returns:
             output: Tensor of the same shape [..., T, S, D].
+            If ``use_kv_cache`` is True, also returns the updated kv cache list.
         """
         assert tokens.ndim >= 3, f"Expected at least [T, S, D], got {tokens.shape}"
         assert tokens.shape[-1] == self.model_hidden_dim, (
             f"Input dim {tokens.shape[-1]} != model dim {self.model_hidden_dim}"
         )
 
-        output = self.transformer(tokens)
-        return output
+        if use_kv_cache:
+            return self.transformer(tokens, kv_cache=kv_cache, use_kv_cache=True,
+                                    rope_offset=rope_offset)
+        return self.transformer(tokens)

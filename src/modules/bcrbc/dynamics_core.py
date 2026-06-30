@@ -33,6 +33,10 @@ class BCRBCDynamicsCore(nn.Module):
         self.num_latent_tokens = num_latent_tokens
         self.obs_dim = obs_dim
         self.dynamic_obs_dim = dynamic_obs_dim
+        # Temporal context window (0 = unbounded). Bands the temporal attention and
+        # bounds the eval rollout to the last W steps; see bcrbc_mac for the windowed
+        # rollout. Stored so the controller can read it back.
+        self.context_window = args.bcrbc_context_window
 
         # Encoder E: augmented obs input -> num_latent_tokens bottleneck latents z
         # (homogeneous capacity tokens, like DreamerV4 spatial tokens). z is what
@@ -60,6 +64,7 @@ class BCRBCDynamicsCore(nn.Module):
             model_hidden_dim, num_transformer_layers, num_attention_heads,
             dropout=dropout, agent_slice=agent_slice,
             block_group_ids=self.tokenizer.group_ids,
+            context_window=self.context_window,
         )
         self.readout = BeliefReadout(model_hidden_dim, belief_dim)
         self.q_head = BCRBCQHead(belief_dim, n_actions, args.bcrbc_q_hidden_dim)
@@ -95,7 +100,8 @@ class BCRBCDynamicsCore(nn.Module):
             num_latent_tokens=num_latent_tokens,
         )
 
-    def forward(self, obs, last_actions, start_t=0, messages=None, z_override=None):
+    def forward(self, obs, last_actions, start_t=0, messages=None, z_override=None,
+                kv_cache=None, use_kv_cache=False, rope_offset=None):
         # Encode augmented obs into num_latent_tokens bottleneck latents
         # z [B, T, n, num_token, latent_dim]. z_override (same shape) lets the eval
         # rollout substitute generated latents for not-yet-arrived observations.
@@ -106,7 +112,15 @@ class BCRBCDynamicsCore(nn.Module):
         if z_override is not None:
             z = z_override
         tokens = self.block_builder(z, last_actions, start_t=start_t, messages=messages)
-        latents = self.transformer(tokens)
+        # KV-cache path (eval incremental rollout): feed only the new time slice and
+        # attend it against the cached past; return the updated per-time-layer caches so
+        # the controller can persist / truncate them across env steps.
+        if use_kv_cache:
+            latents, new_kv_cache = self.transformer(tokens, kv_cache=kv_cache, use_kv_cache=True,
+                                                     rope_offset=rope_offset)
+        else:
+            latents = self.transformer(tokens)
+            new_kv_cache = None
         query_indices = self.block_builder.query_indices.to(obs.device)
         beliefs = self.readout(latents, query_indices)  # [b, t, n, 1, belief_dim]
         q_values = self.q_head(beliefs)  # [b, t, n, 1, n_actions] (vector axis native)
@@ -120,4 +134,5 @@ class BCRBCDynamicsCore(nn.Module):
             "recon_obs": self.obs_decoder(z_flat).unsqueeze(-2),
             "recon_msg": self.msg_decoder(beliefs),
             "pred_latents": self.latent_predictor(latents),
+            "kv_cache": new_kv_cache,
         }

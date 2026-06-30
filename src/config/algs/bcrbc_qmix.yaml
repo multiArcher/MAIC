@@ -66,6 +66,21 @@ bcrbc_use_comm: True
 comm_gaussian_delay_mean: 1.0
 comm_gaussian_delay_std: 1.0
 bcrbc_max_delay: 16
+# Context window: cap how many recent steps the belief/world-model rollout attends
+# (temporal attention is banded to the previous W steps; the eval generative rollout
+# is rebuilt over the last W steps). Bounds eval cost from O(T^3) to O(T*W^2) and keeps
+# memory constant on long episodes. Speed<->imputation-quality knob, NOT a hard floor:
+# a late arrival whose generation step has slid out of the window simply stays
+# world-model-generated (agent still acts; only that slot's imputation degrades).
+# 0 = unbounded (exact legacy behaviour). Default ties to bcrbc_max_delay.
+# Across-step KV cache only helps when W > max_delay (the committed prefix [lo, t-D)
+# is non-empty), so the default window is widened past max_delay below.
+bcrbc_context_window: 48
+# Persistent across-step KV cache for the eval generative rollout: cache the frozen
+# committed prefix [lo, t - max_delay) between env steps so each step is an O(W) append
+# plus an O(max_delay^2) tail recompute, instead of re-walking the whole window O(W^2).
+# Provably bit-identical to the uncached rollout (asserted in smokes). 0/False = off.
+bcrbc_kv_cache: True
 
 # --- DCRBC v2 generative world model (the method) ---
 # Eval-time autoregressive imputation + correction-on-arrival. Trained no-delay;

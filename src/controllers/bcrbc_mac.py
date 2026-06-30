@@ -42,7 +42,13 @@ class BCRBCMAC(MAC):
         # world model generates from history; late arrivals are written back to
         # their generation slot and the rollout is re-rolled (correction-on-arrival).
         self.use_generative_eval = args.bcrbc_generative_eval
+        # Persistent across-step eval cache (freeze-on-commit). 0/False => recompute the
+        # whole window each step (still freezes committed latents); True => also persist
+        # the committed-prefix KV so only the mutable tail [t-D, t] is recomputed.
+        self.use_kv_cache = bool(getattr(args, "bcrbc_kv_cache", False))
         self.hidden_states = None
+        # Stateful generative-eval buffer, rebuilt lazily and reset in init_hidden.
+        self._eval_state = None
 
     def select_actions(
         self,
@@ -84,16 +90,21 @@ class BCRBCMAC(MAC):
         out["q_values"] = out["q_values"].masked_fill(avail_actions == 0, -1e7)
         return out
 
-    def _rollout_latent_buffer(self, ep_batch: EpisodeBatch, end: int):
-        """Reconstruct the per-(slot, agent) latent buffer over window [0, end).
+    def _rollout_latent_buffer(self, ep_batch: EpisodeBatch, end: int, lo: int = 0):
+        """Reconstruct the per-(slot, agent) latent buffer over window [lo, end).
 
-        Returns the corrected/imputed latent buffer ``z_cur``
-        [B, end, n, num_token, latent_dim], the ``is_real`` mask [B, end, n] (1 where
-        a real obs occupies the slot), plus ``obs_aug``/``last_actions`` needed to run
-        the world model over the buffer. Shared by the eval forward and diagnostics.
+        ``lo`` is the absolute start of the context window (0 = full history). Slots
+        whose generation step falls before ``lo`` (slid out of the window) are dropped
+        and left for the world model to generate; this is what bounds eval cost on long
+        episodes. Returns the corrected/imputed latent buffer ``z_cur``
+        [B, end-lo, n, num_token, latent_dim], the ``is_real`` mask [B, end-lo, n] (1
+        where a real obs occupies the slot), plus ``obs_aug``/``last_actions`` (over the
+        same window) needed to run the world model over the buffer. Shared by the eval
+        forward and diagnostics.
         """
         device = self.device
-        win = slice(0, end)
+        win = slice(lo, end)
+        length = end - lo
         batch_size = ep_batch.batch_size
         num_agents = self.n_agents
         num_latent_tokens = self.agent.num_latent_tokens
@@ -103,71 +114,240 @@ class BCRBCMAC(MAC):
         obs_aug = obs_aug.to(device)
         last_actions = last_actions.to(device)
         z_delivered = self.agent.latent_encoder(obs_aug).reshape(
-            batch_size, end, num_agents, num_latent_tokens, latent_dim
+            batch_size, length, num_agents, num_latent_tokens, latent_dim
         )
 
-        gen_t = ep_batch["obs_gen_t"][:, win].to(device).long().squeeze(-1)   # [B, end, n]
+        gen_t = ep_batch["obs_gen_t"][:, win].to(device).long().squeeze(-1)   # [B, length, n]
 
-        # Scatter each delivered latent to its *generation* slot; mark which slots
-        # hold a real (received) latent. A delayed obs still provides a real
-        # observation for its generation slot, so every delivered packet counts
-        # regardless of freshness. Later arrivals overwrite earlier copies. An
-        # unarrived obs is flagged by gen_t < 0 (sentinel): it has no real latent
-        # anywhere and must be left for the world model to generate.
+        # Scatter each delivered latent to its *generation* slot (relative to the window
+        # start ``lo``); mark which slots hold a real (received) latent. A delayed obs
+        # still provides a real observation for its generation slot, so every delivered
+        # packet counts regardless of freshness. Later arrivals overwrite earlier copies.
+        # An obs is dropped from this window when ``gen_t < lo`` — either unarrived
+        # (sentinel gen_t = -1) or generated before the window slid past it; such slots
+        # have no real latent here and are left for the world model to generate.
         z_buf = torch.zeros_like(z_delivered)
-        is_real = torch.zeros(batch_size, end, num_agents, device=device)
-        arrived = gen_t >= 0                                       # [B, end, n]
-        local_gen = gen_t.clamp(min=0, max=end - 1)
-        idx = local_gen.view(batch_size, end, num_agents, 1, 1).expand(-1, -1, -1, num_latent_tokens, latent_dim)
-        # Only scatter latents/real-flags for arrived packets; unarrived query steps
-        # contribute nothing to any generation slot.
-        z_src = z_delivered * arrived.view(batch_size, end, num_agents, 1, 1).to(z_delivered.dtype)
+        is_real = torch.zeros(batch_size, length, num_agents, device=device)
+        arrived = gen_t >= lo                                      # [B, length, n]
+        local_gen = (gen_t - lo).clamp(min=0, max=length - 1)
+        idx = local_gen.view(batch_size, length, num_agents, 1, 1).expand(-1, -1, -1, num_latent_tokens, latent_dim)
+        # Only scatter latents/real-flags for in-window arrived packets; dropped query
+        # steps contribute nothing to any generation slot.
+        z_src = z_delivered * arrived.view(batch_size, length, num_agents, 1, 1).to(z_delivered.dtype)
         z_buf.scatter_(1, idx, z_src)
         is_real.scatter_(1, local_gen, arrived.to(is_real.dtype))
 
         # Fill generated slots left-to-right, re-rolling from the latest real history.
+        # Absolute time of local slot 0 is ``lo`` (start_t below), so the time embedding
+        # / banded attention see correct absolute positions.
+        #
+        # Incremental KV-cache pass: instead of re-running the transformer over the whole
+        # growing prefix [0, tau) for every generated slot (O(length^2) per build), we
+        # walk the window left-to-right ONCE, threading the per-time-layer KV cache. At
+        # each position we (a) finalize that slot's latent — keeping a real arrival or
+        # substituting a world-model sample drawn from the previous step's belief — then
+        # (b) forward just that one step against the cached past (append-only). This is
+        # provably identical to the full-prefix forward (the time layer attends each token
+        # to its own causal history; appending one step reproduces the dense result), and
+        # collapses the rollout to O(length).
         z_cur = z_buf.clone()
-        for tau in range(end):
-            if not (is_real[:, tau] < 1).any():
-                continue
-            if tau == 0:
-                # No history before slot 0: keep encoded value (or zero if absent).
-                continue
-            prefix = slice(0, tau)
+        cache = None
+        belief_prev = None  # belief at the previously finalized slot
+        for tau in range(length):
+            if tau > 0 and (is_real[:, tau] < 1).any():
+                gen_z = self.agent.flow_dynamics.sample(
+                    belief_prev, steps=self.args.bcrbc_flow_steps
+                )  # [B, n, num_token, latent_dim]
+                real_mask = is_real[:, tau].view(batch_size, num_agents, 1, 1)
+                z_cur[:, tau] = real_mask * z_cur[:, tau] + (1.0 - real_mask) * gen_z
             out = self.agent(
-                obs_aug[:, prefix], last_actions[:, prefix],
-                start_t=0, z_override=z_cur[:, prefix],
+                obs_aug[:, tau:tau + 1], last_actions[:, tau:tau + 1],
+                start_t=lo + tau, z_override=z_cur[:, tau:tau + 1],
+                kv_cache=cache, use_kv_cache=True,
             )
-            belief_prev = out["beliefs"][:, tau - 1]  # [B, n, belief_dim]
-            gen_z = self.agent.flow_dynamics.sample(
-                belief_prev, steps=self.args.bcrbc_flow_steps
-            )  # [B, n, num_token, latent_dim]
-            real_mask = is_real[:, tau].view(batch_size, num_agents, 1, 1)
-            z_cur[:, tau] = real_mask * z_cur[:, tau] + (1.0 - real_mask) * gen_z
+            cache = out["kv_cache"]
+            belief_prev = out["beliefs"][:, 0]  # [B, n, 1, belief_dim] -> belief at slot tau
 
         return z_cur, is_real, obs_aug, last_actions
 
     def _generative_forward(self, ep_batch: EpisodeBatch, t: slice):
-        """Eval-time autoregressive imputation + correction-on-arrival.
+        """Eval-time autoregressive imputation + correction-on-arrival (freeze-on-commit).
 
-        Reconstructs the per-(slot, agent) bottleneck-latent buffer over the
-        window [0 .. t.stop-1] from everything delivered so far, then returns the
-        belief / Q at the final step. Because the episode batch accumulates real
-        arrivals across per-step calls, correction-on-arrival is automatic: a late
-        packet simply means this step's reconstruction has a *real* latent where an
-        earlier step had a *generated* one, so the re-roll from that slot corrects
-        all later latents.
+        Stateful across env steps. A not-yet-arrived slot's latent is generated *once*
+        and then frozen: a generated obs becomes part of the trajectory and is never
+        re-sampled. It can only change if (a) the real obs arrives, or (b) an earlier slot
+        it was rolled from is itself corrected. Because a sampled delay never exceeds
+        ``max_delay`` (= D), an arrival at env step t lands at generation slot >= t - D, so
+        only the mutable tail ``[t-D, t]`` can change between steps; everything older is
+        committed (frozen z, and frozen time-layer K/V).
+
+        Two equivalent realizations, selected by ``self.use_kv_cache`` (both freeze):
+          * off  -> recompute beliefs over the whole window each step (reusing frozen z for
+                    committed slots); O(W) transformer work.
+          * on   -> persist the committed-prefix K/V and recompute only the tail
+                    ``[t-D, t]``; O(D) transformer work. Bit-identical to the off path.
         """
         end = t.stop
-        z_cur, is_real, obs_aug, last_actions = self._rollout_latent_buffer(ep_batch, end)
+        window = self.agent.context_window
+        W = window if (window and window > 0) else None
+        lo = max(0, end - W) if W is not None else 0
+        D = int(self.args.bcrbc_max_delay)
+        # Frozen committed prefix is [lo, commit_boundary); mutable tail is [commit_boundary, end).
+        commit_boundary = max(lo, end - 1 - D)
 
-        out = self.agent(obs_aug, last_actions, start_t=0, z_override=z_cur)
-        # Keep only the final step to match the per-step call contract.
-        final = {k: (v[:, -1:] if isinstance(v, torch.Tensor) and v.dim() >= 2 else v)
-                 for k, v in out.items()}
+        device = self.device
+        bs = ep_batch.batch_size
+        na = self.n_agents
+        nt = self.agent.num_latent_tokens
+        ld = self.agent.latent_dim
+
+        win = slice(lo, end)
+        length = end - lo
+        obs_aug, last_actions = self._build_inputs(ep_batch, win)
+        obs_aug = obs_aug.to(device)
+        last_actions = last_actions.to(device)
+        z_enc = self.agent.latent_encoder(obs_aug).reshape(bs, length, na, nt, ld)
+        gen_t = ep_batch["obs_gen_t"][:, win].to(device).long().squeeze(-1)  # [B, length, n]
+
+        # Real (arrived) latents scattered to their generation slot; is_real marks them.
+        z_real = torch.zeros_like(z_enc)
+        is_real = torch.zeros(bs, length, na, device=device)
+        arrived = gen_t >= lo
+        local_gen = (gen_t - lo).clamp(min=0, max=length - 1)
+        idx = local_gen.view(bs, length, na, 1, 1).expand(-1, -1, -1, nt, ld)
+        z_real.scatter_(1, idx, z_enc * arrived.view(bs, length, na, 1, 1).to(z_enc.dtype))
+        is_real.scatter_(1, local_gen, arrived.to(is_real.dtype))
+
+        # Seed z_cur: real slots use their encoded real latent; committed generated slots
+        # reuse the frozen value carried in state; mutable generated slots are (re)sampled
+        # below. Frozen reuse is what makes a committed generated obs part of the trajectory.
+        z_cur = z_real.clone()
+        st = self._eval_state
+        if st is not None and st["base"] <= lo:
+            prev_base = st["base"]
+            prev_z = st["z"]  # absolute slots [prev_base, prev_base + prev_z.size(1))
+            for a in range(lo, commit_boundary):
+                rel_prev = a - prev_base
+                if 0 <= rel_prev < prev_z.size(1):
+                    rel = a - lo
+                    real_a = is_real[:, rel].view(bs, na, 1, 1)
+                    z_cur[:, rel] = real_a * z_cur[:, rel] + (1.0 - real_a) * prev_z[:, rel_prev]
+
+        if self.use_kv_cache:
+            final_out = self._eval_rollout_cached(
+                ep_batch, obs_aug, last_actions, z_cur, is_real,
+                lo=lo, end=end, commit_boundary=commit_boundary)
+        else:
+            final_out = self._eval_rollout_full(
+                ep_batch, obs_aug, last_actions, z_cur, is_real,
+                lo=lo, end=end, commit_boundary=commit_boundary)
+
         avail_actions = cast(torch.Tensor, ep_batch["avail_actions"][:, t]).unsqueeze(-2)
-        final["q_values"] = final["q_values"].masked_fill(avail_actions == 0, -1e7)
-        return final
+        final_out["q_values"] = final_out["q_values"].masked_fill(avail_actions == 0, -1e7)
+        return final_out
+
+    def _eval_rollout_full(self, ep_batch, obs_aug, last_actions, z_cur, is_real,
+                           *, lo, end, commit_boundary):
+        """Freeze reference: recompute beliefs over the whole window each step.
+
+        Walks [lo, end) left-to-right with the within-build incremental KV cache. Committed
+        generated slots (< commit_boundary) keep their already-frozen z (seeded by caller);
+        only mutable generated slots (>= commit_boundary) are sampled. Stores the finalized
+        z buffer back into ``self._eval_state`` for the next step's freeze reuse.
+        """
+        bs, length, na = is_real.shape
+        cache = None
+        belief_prev = None
+        last_out = None
+        for rel in range(length):
+            a = lo + rel
+            if rel > 0 and a >= commit_boundary and (is_real[:, rel] < 1).any():
+                gen_z = self.agent.flow_dynamics.sample(belief_prev, steps=self.args.bcrbc_flow_steps)
+                m = is_real[:, rel].view(bs, na, 1, 1)
+                z_cur[:, rel] = m * z_cur[:, rel] + (1.0 - m) * gen_z
+            out = self.agent(
+                obs_aug[:, rel:rel + 1], last_actions[:, rel:rel + 1],
+                start_t=a, z_override=z_cur[:, rel:rel + 1],
+                kv_cache=cache, use_kv_cache=True, rope_offset=a,
+            )
+            cache = out["kv_cache"]
+            belief_prev = out["beliefs"][:, 0]
+            last_out = out
+        self._eval_state = {"base": lo, "z": z_cur.detach()}
+        return {k: v for k, v in last_out.items() if k != "kv_cache"}
+
+    def _eval_rollout_cached(self, ep_batch, obs_aug, last_actions, z_cur, is_real,
+                             *, lo, end, commit_boundary):
+        """Committed-prefix cache: persist frozen K/V, recompute only the tail [cb, end).
+
+        State carries the frozen committed K/V covering absolute [lo, kv_end), the frozen z
+        buffer, and the belief at the last committed slot (needed to seed tail sampling).
+        Each step: (1) evict cache entries older than ``lo``; (2) append any slots that have
+        newly committed (kv_end -> commit_boundary) to the frozen cache; (3) recompute the
+        mutable tail [commit_boundary, end) against the frozen cache to get the final belief.
+        """
+        bs, length, na = is_real.shape
+        st = self._eval_state
+        prev = st if (st is not None and "kv" in st) else None
+
+        # Frozen cache + bookkeeping carried across steps (absolute-indexed).
+        if prev is not None and prev["base"] <= lo:
+            kv = prev["kv"]
+            kv_base = prev["base"]
+            kv_end = prev["kv_end"]
+            belief_committed = prev["belief_committed"]
+            # Evict committed entries that slid out of the window (< lo).
+            drop = lo - kv_base
+            if drop > 0 and kv is not None:
+                kv = [(k[..., drop:, :], v[..., drop:, :]) for (k, v) in kv]
+            kv_base = max(kv_base, lo)
+        else:
+            kv = None
+            kv_base = lo
+            kv_end = lo
+            belief_committed = None
+
+        def rel(a):
+            return a - lo
+
+        # (2) Append newly committed slots [kv_end, commit_boundary) to the frozen cache.
+        for a in range(kv_end, commit_boundary):
+            out = self.agent(
+                obs_aug[:, rel(a):rel(a) + 1], last_actions[:, rel(a):rel(a) + 1],
+                start_t=a, z_override=z_cur[:, rel(a):rel(a) + 1],
+                kv_cache=kv, use_kv_cache=True, rope_offset=a,
+            )
+            kv = out["kv_cache"]
+            belief_committed = out["beliefs"][:, 0]
+        kv_end = max(kv_end, commit_boundary)
+
+        # (3) Recompute the mutable tail [commit_boundary, end) against the frozen cache.
+        tail_cache = kv
+        belief_prev = belief_committed
+        last_out = None
+        for a in range(commit_boundary, end):
+            r = rel(a)
+            if a > lo and (is_real[:, r] < 1).any():
+                # belief_prev is None only at the very first slot of the episode (a==lo==0).
+                gen_z = self.agent.flow_dynamics.sample(belief_prev, steps=self.args.bcrbc_flow_steps)
+                m = is_real[:, r].view(bs, na, 1, 1)
+                z_cur[:, r] = m * z_cur[:, r] + (1.0 - m) * gen_z
+            out = self.agent(
+                obs_aug[:, r:r + 1], last_actions[:, r:r + 1],
+                start_t=a, z_override=z_cur[:, r:r + 1],
+                kv_cache=tail_cache, use_kv_cache=True, rope_offset=a,
+            )
+            tail_cache = out["kv_cache"]
+            belief_prev = out["beliefs"][:, 0]
+            last_out = out
+
+        self._eval_state = {
+            "base": lo, "z": z_cur.detach(),
+            "kv": [(k.detach(), v.detach()) for (k, v) in kv] if kv is not None else None,
+            "kv_end": kv_end,
+            "belief_committed": belief_committed,
+        }
+        return {k: v for k, v in last_out.items() if k != "kv_cache"}
 
     @torch.no_grad()
     def belief_diagnostics(self, ep_batch: EpisodeBatch, full_obs: torch.Tensor) -> dict:
@@ -233,6 +413,8 @@ class BCRBCMAC(MAC):
 
     def init_hidden(self, batch_size):
         self.hidden_states = None
+        # New episode(s): drop the stateful generative-eval buffer (frozen z + committed KV).
+        self._eval_state = None
 
     def save_models(self, path):
         torch.save(self.agent.state_dict(), f"{path}/agent.th")
