@@ -23,18 +23,18 @@ set -euo pipefail
 
 # -------- Main experiment controls --------
 
-CONFIG="${CONFIG:-qmix}"  # code_qmix
-ENV_CONFIG="${ENV_CONFIG:-sc2}"
-MAP_NAME="${MAP_NAME:-MMM2}"  # 5m_vs_6m
+CONFIG="${CONFIG:-code_qmix}"
+ENV_CONFIG="${ENV_CONFIG:-sc2}"  # 这个是一代
+MAP_NAME="${MAP_NAME:-5m_vs_6m}"  # 5m_vs_6m
 
 # MODEL_NAME is resolved under results/models. MODEL_DIR may be used instead
 # when an absolute or custom model path is preferred.
-MODEL_NAME="${MODEL_NAME:-qmix_mmm2_baseline_seed2024_run1__MMM2__2026-06-16_00-02-02}"
+MODEL_NAME="${MODEL_NAME:-code_qmix_run1__5m_vs_6m__2026-06-04_22-25-48-td_=1.0-action_=0.01-continue_=0.01-aux_=0.01-entropy_=0.01}"
 MODEL_DIR="${MODEL_DIR:-}"
 
 # Space-separated numeric checkpoint steps. Set LOAD_STEPS="" to choose the
 # checkpoint closest to TARGET_LOAD_STEP.
-LOAD_STEPS="${LOAD_STEPS-2000218}"
+LOAD_STEPS="${LOAD_STEPS-}"
 
 TEST_NEPISODE="${TEST_NEPISODE:-16}"
 BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-4}"
@@ -64,10 +64,17 @@ NAME_PREFIX="${NAME_PREFIX:-eval_delay_grid}"
 SUMMARY_ROOT="${SUMMARY_ROOT:-eval_summaries}"
 SUMMARY_DIR="${SUMMARY_DIR:-}"
 SUMMARY_PATH="${SUMMARY_PATH:-}"
-RAW_SUMMARY_KEEP="${RAW_SUMMARY_KEEP:-False}"
-RAW_SUMMARY_KEEP_PATH="${RAW_SUMMARY_KEEP_PATH:-}"
 RAW_SUMMARY_PATH="$(mktemp /tmp/${NAME_PREFIX}_raw_XXXXXX.tsv)"
-trap 'rm -f "$RAW_SUMMARY_PATH"' EXIT
+
+cleanup_raw_summary() {
+  local status=$?
+  if [[ $status -eq 0 ]]; then
+    rm -f "$RAW_SUMMARY_PATH"
+  else
+    echo "Raw summary kept after failure: $RAW_SUMMARY_PATH" >&2
+  fi
+}
+trap cleanup_raw_summary EXIT
 
 # -------- Helpers --------
 
@@ -397,6 +404,7 @@ fi
 
 MODEL_SPECS=()
 OUTPUT_MODEL_DIR=""
+OUTPUT_MODEL_NAME=""
 MAP_NAME="$(normalise_map_name "$MAP_NAME")"
 if [[ -z "$SUMMARY_DIR" ]]; then
   SUMMARY_DIR="$SUMMARY_ROOT/$CONFIG/$MAP_NAME"
@@ -409,6 +417,7 @@ if [[ $# -gt 0 ]]; then
   shift
   [[ -d "$CLI_MODEL_DIR" ]] || die "model directory does not exist: $CLI_MODEL_DIR"
   OUTPUT_MODEL_DIR="$CLI_MODEL_DIR"
+  OUTPUT_MODEL_NAME="${MODEL_NAME:-$(basename "$CLI_MODEL_DIR")}"
   [[ -n "$MAP_NAME" ]] || die "MAP_NAME is required for single-model usage"
   if [[ $# -gt 0 ]]; then
     MODEL_SPECS+=("$MAP_NAME|$CLI_MODEL_DIR|$*")
@@ -419,14 +428,12 @@ else
   MODEL_DIR="$(resolve_model_dir "$MODEL_DIR" "$MODEL_NAME")" || die "MODEL_NAME or MODEL_DIR is required"
   [[ -d "$MODEL_DIR" ]] || die "model directory does not exist: $MODEL_DIR"
   OUTPUT_MODEL_DIR="$MODEL_DIR"
+  OUTPUT_MODEL_NAME="${MODEL_NAME:-$(basename "$MODEL_DIR")}"
   MODEL_SPECS+=("$MAP_NAME|$MODEL_DIR|$LOAD_STEPS")
 fi
 
 if [[ -z "$SUMMARY_PATH" ]]; then
-  SUMMARY_PATH="$SUMMARY_DIR/$(basename "$OUTPUT_MODEL_DIR")_matrix.tsv"
-fi
-if [[ -z "$RAW_SUMMARY_KEEP_PATH" ]]; then
-  RAW_SUMMARY_KEEP_PATH="${SUMMARY_PATH%.tsv}_raw.tsv"
+  SUMMARY_PATH="$SUMMARY_DIR/${OUTPUT_MODEL_NAME}_matrix.tsv"
 fi
 
 for spec in "${MODEL_SPECS[@]}"; do
@@ -480,10 +487,5 @@ print_delay_matrix | tee "$SUMMARY_PATH"
 
 echo "================================================================================"
 echo "Delay matrix saved to: $SUMMARY_PATH"
-case "$RAW_SUMMARY_KEEP" in
-  True|true|1|yes|Yes)
-    cp "$RAW_SUMMARY_PATH" "$RAW_SUMMARY_KEEP_PATH"
-    echo "Raw summary saved to: $RAW_SUMMARY_KEEP_PATH"
-    ;;
-esac
+rm -f "${SUMMARY_PATH%.tsv}_raw.tsv"
 echo "Done."

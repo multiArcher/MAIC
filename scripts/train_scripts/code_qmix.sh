@@ -6,7 +6,7 @@
 # Experiment parameters
 EXPERIMENT_NAME=code_qmix_5m_vs_6m_action0p1_seed2024  # Experiment name for logging.
 CONFIG=code_qmix  # Algorithm config name in src/config/alg
-ENV_CONFIG=sc2v2  # Environment config in src/config/envs
+ENV_CONFIG=sc2  # 有的地图用v2,5mv6m这样的用sc2
 MAP_NAME=5m_vs_6m  # Map name, e.g., 3m in StarCraftII.
 REPEAT_TIMES=1  # Times to run the experiment.
 BATCH_SIZE_RUN=4 # Batch size for each run, which is used to calculate the total batch size as BATCH_SIZE_RUN * REPEAT_TIMES.
