@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # Evaluate one checkpoint under communication and observation delay.
-# Only the final matrix TSV is kept; per-evaluation logs/artifacts are removed
-# after extracting metric/test_battle_won_mean.
+# The final matrix TSV and raw per-condition TSV are kept; per-evaluation
+# logs/artifacts are removed after extracting metric/test_battle_won_mean.
 #
 # Choose the algorithm, map, model, and checkpoint with variables below or
 # environment overrides:
@@ -37,7 +37,9 @@ MODEL_DIR="${MODEL_DIR:-}"
 LOAD_STEPS="${LOAD_STEPS-}"
 
 TEST_NEPISODE="${TEST_NEPISODE:-16}"
-BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-4}"
+# SC2/PySC2 is prone to launch-state races when many eval envs start at once.
+# Keep delay-grid evaluation serial by default; override when the machine is stable.
+BATCH_SIZE_RUN="${BATCH_SIZE_RUN:-1}"
 GROUP_SEEDS="${GROUP_SEEDS:-${SEEDS:-2024 2025 2026 2027 2028}}"
 
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
@@ -50,7 +52,7 @@ TARGET_LOAD_STEP="${TARGET_LOAD_STEP:-2000000}"
 
 # Delay grids use "mean:std" entries separated by spaces.
 COMM_DELAY_GRID="${COMM_DELAY_GRID:-0:0 1:1 2:1 2:2 3:1 3:2 5:2}"
-OBS_DELAY_GRID="${OBS_DELAY_GRID:-0:1 -1:1 0:0 1:1 2:1 2:2 3:1 3:2}"
+OBS_DELAY_GRID="${OBS_DELAY_GRID:-0:1 -1:1 0:0 1:1 2:1 2:2 }"  # 3:1 3:2
 OBS_DELAY_DISCRETIZATION="${OBS_DELAY_DISCRETIZATION:-round}"
 INCLUDE_ZERO_ZERO_BASELINE="${INCLUDE_ZERO_ZERO_BASELINE:-False}"
 MATRIX_VALUE_SCALE="${MATRIX_VALUE_SCALE:-percent}"
@@ -59,11 +61,16 @@ MATRIX_VALUE_SCALE="${MATRIX_VALUE_SCALE:-percent}"
 # additional eval-time values.
 EVAL_EXTRA_ARGS="${EVAL_EXTRA_ARGS:-}"
 CONFIG_HAS_COMM_DELAY=False
+CLEANUP_EVAL_ARTIFACTS="${CLEANUP_EVAL_ARTIFACTS:-False}"
+PYTHON_BIN="${PYTHON_BIN:-$HOME/miniconda3/envs/epymarl/bin/python}"
+RANDOMIZE_EVAL_SEED="${RANDOMIZE_EVAL_SEED:-True}"
 
 NAME_PREFIX="${NAME_PREFIX:-eval_delay_grid}"
 SUMMARY_ROOT="${SUMMARY_ROOT:-eval_summaries}"
 SUMMARY_DIR="${SUMMARY_DIR:-}"
 SUMMARY_PATH="${SUMMARY_PATH:-}"
+RAW_SUMMARY_DIR="${RAW_SUMMARY_DIR:-$SUMMARY_ROOT/raw_tsv}"
+RAW_SUMMARY_OUTPUT_PATH="${RAW_SUMMARY_OUTPUT_PATH:-}"
 RAW_SUMMARY_PATH="$(mktemp /tmp/${NAME_PREFIX}_raw_XXXXXX.tsv)"
 
 cleanup_raw_summary() {
@@ -125,6 +132,51 @@ delay_label() {
   local mean="$1"
   local std="$2"
   echo "N($mean,$std)"
+}
+
+random_seed() {
+  od -An -N4 -tu4 /dev/urandom | awk '{ print ($1 % 2147483646) + 1 }'
+}
+
+actual_config_value() {
+  local log_path="$1"
+  local key="$2"
+  local token
+  local config_path
+
+  [[ -n "$log_path" && "$log_path" != "NA" ]] || {
+    echo "NA"
+    return
+  }
+
+  token="$(basename "$log_path" .log)"
+  config_path="results/sacred/$token/1/config.json"
+  if [[ ! -f "$config_path" ]]; then
+    echo "NA"
+    return
+  fi
+
+  "$PYTHON_BIN" - "$config_path" "$key" <<'PY'
+import json
+import sys
+
+path, key = sys.argv[1], sys.argv[2]
+with open(path, "r", encoding="utf-8") as f:
+    value = json.load(f)
+
+for part in key.split("."):
+    if not isinstance(value, dict) or part not in value:
+        print("NA")
+        raise SystemExit
+    value = value[part]
+
+if isinstance(value, bool):
+    print("True" if value else "False")
+elif isinstance(value, (int, float)):
+    print(f"{value:g}")
+else:
+    print(value)
+PY
 }
 
 append_code_qmix_training_args() {
@@ -215,6 +267,12 @@ run_eval() {
   local comm_std="$6"
   local obs_mean="$7"
   local obs_std="$8"
+  local requested_seed="$seed"
+  case "$RANDOMIZE_EVAL_SEED" in
+    True|true|1|yes|Yes)
+      seed="$(random_seed)"
+      ;;
+  esac
 
   local comm_label_mean
   local comm_label_std
@@ -238,6 +296,7 @@ run_eval() {
   echo "MAP_NAME:       $map_name"
   echo "LOAD_STEP:      $step"
   echo "SEED:           $seed"
+  echo "SEED_REQUEST:   $requested_seed"
   echo "COMM_DELAY:     N($comm_mean, $comm_std)"
   echo "OBS_DELAY:      N($obs_mean, $obs_std), enabled=$obs_enabled"
   echo "RUN_NAME:       $run_name"
@@ -252,7 +311,7 @@ run_eval() {
   fi
 
   local eval_cmd=(
-    python src/main.py --config="$CONFIG" --env-config="$ENV_CONFIG" with
+    "$PYTHON_BIN" src/main.py --config="$CONFIG" --env-config="$ENV_CONFIG" with
     evaluate=True
     use_tensorboard=False
     use_wandb=False
@@ -274,16 +333,16 @@ run_eval() {
     obs_delay_discretization="$OBS_DELAY_DISCRETIZATION"
     name="$run_name"
   )
-  if [[ "$CONFIG_HAS_COMM_DELAY" == "True" ]]; then
+  if [[ "$CONFIG" == "code_qmix" ]]; then
+    append_code_qmix_training_args "$model_dir" eval_cmd
+  fi
+  eval_cmd+=("${extra_args[@]}")
+  if [[ "$CONFIG_HAS_COMM_DELAY" == "True" || "$CONFIG" == "code_qmix" ]]; then
     eval_cmd+=(
       comm_gaussian_delay_mean="$comm_mean"
       comm_gaussian_delay_std="$comm_std"
     )
   fi
-  if [[ "$CONFIG" == "code_qmix" ]]; then
-    append_code_qmix_training_args "$model_dir" eval_cmd
-  fi
-  eval_cmd+=("${extra_args[@]}")
 
   printf "EVAL_CMD:"
   printf " %q" "${eval_cmd[@]}"
@@ -294,23 +353,62 @@ run_eval() {
   local eval_status=$?
   set -e
   if [[ $eval_status -ne 0 ]]; then
-    cleanup_eval_artifacts "$run_name" "$map_name"
+    case "$CLEANUP_EVAL_ARTIFACTS" in
+      True|true|1|yes|Yes)
+        cleanup_eval_artifacts "$run_name" "$map_name"
+        ;;
+    esac
     return "$eval_status"
   fi
 
   local extracted
   local winrate
   local log_path
+  local actual_seed
+  local actual_comm_mean
+  local actual_comm_std
+  local actual_obs_enabled
+  local actual_obs_mean
+  local actual_obs_std
+  local config_status
   extracted="$(extract_latest_winrate "$run_name" "$map_name")"
   winrate="${extracted%%|*}"
   log_path="${extracted#*|}"
+  actual_seed="$(actual_config_value "$log_path" "seed")"
+  actual_comm_mean="$(actual_config_value "$log_path" "comm_gaussian_delay_mean")"
+  actual_comm_std="$(actual_config_value "$log_path" "comm_gaussian_delay_std")"
+  actual_obs_enabled="$(actual_config_value "$log_path" "obs_delay_enabled")"
+  actual_obs_mean="$(actual_config_value "$log_path" "obs_gaussian_delay_mean")"
+  actual_obs_std="$(actual_config_value "$log_path" "obs_gaussian_delay_std")"
 
-  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+  config_status="OK"
+  if [[ "$actual_comm_mean" != "NA" && ( "$actual_comm_mean" != "$comm_mean" || "$actual_comm_std" != "$comm_std" ) ]]; then
+    config_status="COMM_MISMATCH"
+  fi
+  if [[ "$actual_obs_mean" != "$obs_mean" || "$actual_obs_std" != "$obs_std" ]]; then
+    config_status="${config_status};OBS_MISMATCH"
+  fi
+
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
     "$map_name" "$(basename "$model_dir")" "$step" "$seed" \
     "$comm_mean" "$comm_std" "$obs_mean" "$obs_std" "$condition" "$winrate" "$log_path" \
+    "$requested_seed" "$actual_seed" "$actual_comm_mean" "$actual_comm_std" \
+    "$actual_obs_enabled" "$actual_obs_mean" "$actual_obs_std" "$config_status" \
     >> "$RAW_SUMMARY_PATH"
 
-  cleanup_eval_artifacts "$run_name" "$map_name"
+  if [[ "$config_status" != "OK" ]]; then
+    echo "ERROR: actual Sacred config does not match requested delay condition: $config_status" >&2
+    echo "       requested comm=N($comm_mean,$comm_std), actual comm=N($actual_comm_mean,$actual_comm_std)" >&2
+    echo "       requested obs=N($obs_mean,$obs_std), actual obs=N($actual_obs_mean,$actual_obs_std)" >&2
+    echo "       log_path=$log_path" >&2
+    return 1
+  fi
+
+  case "$CLEANUP_EVAL_ARTIFACTS" in
+    True|true|1|yes|Yes)
+      cleanup_eval_artifacts "$run_name" "$map_name"
+      ;;
+  esac
 
   echo "RESULT: map=$map_name step=$step seed=$seed condition=$condition metric/test_battle_won_mean=$winrate"
 }
@@ -410,7 +508,7 @@ if [[ -z "$SUMMARY_DIR" ]]; then
   SUMMARY_DIR="$SUMMARY_ROOT/$CONFIG/$MAP_NAME"
 fi
 mkdir -p "$SUMMARY_DIR"
-printf "map\tmodel\tstep\tseed\tcomm_mean\tcomm_std\tobs_mean\tobs_std\tcondition\ttest_battle_won_mean\tlog_path\n" > "$RAW_SUMMARY_PATH"
+printf "map\tmodel\tstep\tseed\tcomm_mean\tcomm_std\tobs_mean\tobs_std\tcondition\ttest_battle_won_mean\tlog_path\trequested_seed\tactual_seed\tactual_comm_mean\tactual_comm_std\tactual_obs_enabled\tactual_obs_mean\tactual_obs_std\tconfig_status\n" > "$RAW_SUMMARY_PATH"
 
 if [[ $# -gt 0 ]]; then
   CLI_MODEL_DIR="$1"
@@ -435,6 +533,10 @@ fi
 if [[ -z "$SUMMARY_PATH" ]]; then
   SUMMARY_PATH="$SUMMARY_DIR/${OUTPUT_MODEL_NAME}_matrix.tsv"
 fi
+if [[ -z "$RAW_SUMMARY_OUTPUT_PATH" ]]; then
+  RAW_SUMMARY_OUTPUT_PATH="$RAW_SUMMARY_DIR/${OUTPUT_MODEL_NAME}_raw.tsv"
+fi
+mkdir -p "$RAW_SUMMARY_DIR"
 
 for spec in "${MODEL_SPECS[@]}"; do
   IFS='|' read -r map_name model_dir step_text <<< "$spec"
@@ -484,8 +586,9 @@ done
 echo "================================================================================"
 echo "Delay matrix: metric/test_battle_won_mean mean±std across seeds ($TEST_NEPISODE episodes per seed)"
 print_delay_matrix | tee "$SUMMARY_PATH"
+cp "$RAW_SUMMARY_PATH" "$RAW_SUMMARY_OUTPUT_PATH"
 
 echo "================================================================================"
 echo "Delay matrix saved to: $SUMMARY_PATH"
-rm -f "${SUMMARY_PATH%.tsv}_raw.tsv"
+echo "Raw TSV saved to: $RAW_SUMMARY_OUTPUT_PATH"
 echo "Done."

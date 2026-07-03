@@ -78,11 +78,12 @@ def evaluate_sequential(args, runner):
     state_record_data = []
     obs_record_data = []
     available_actions_data = []
+    n_eval_runs = max(1, (args.test_nepisode + runner.batch_size - 1) // runner.batch_size)
     for runs in tqdm.trange(
-        args.test_nepisode,
+        n_eval_runs,
         mininterval=1,
-        unit="episode",
-        bar_format="{desc}{bar:12} | {n_fmt}/{total_fmt} episodes{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}]{postfix}",
+        unit="batch",
+        bar_format="{desc}{bar:12} | {n_fmt}/{total_fmt} batches{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}]{postfix}",
         desc=f"{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')} | EVALUATE | ",
     ):
         batch = runner.run(test_mode=True)
