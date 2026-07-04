@@ -8,6 +8,9 @@ __pycache__
 .ipynb_checkpoints
 *nohup.out
 /history_data
+/bian_docs
+/imported
+/eval_summaries
 /context
 /previous_works
 /memory

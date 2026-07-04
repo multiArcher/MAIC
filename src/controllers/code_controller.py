@@ -18,6 +18,7 @@ from utils.maker import AgentMaker, ActionSelectorMaker
 from components.action_selectors.action_selector import ActionSelector
 from modules.agents.code_agent import CodeAgent
 from components.communication_model import CommunicationModel
+from components.observation_delay_model import ObservationDelayModel
 from components.episode_buffer import EpisodeBatch
 
 
@@ -54,6 +55,7 @@ class CodeMAC(MAC):
             delay_mean=args.comm_gaussian_delay_mean, 
             delay_std=args.comm_gaussian_delay_std
             )
+        self.observation_delay_model = ObservationDelayModel(args)
 
         # Storage for agent hidden states across timesteps
         self.hidden_states: torch.Tensor
@@ -283,7 +285,9 @@ class CodeMAC(MAC):
             Tuple of (observations, last_actions, time_step_tensor, agent_id_tensor)
         """        
         # Extract observations and add sequence dimension for consistency
-        obs_data = batch["obs"][:, t].unsqueeze(-2)  # [B, T, N, 1, D]
+        obs_data = self.observation_delay_model.apply(
+            batch["obs"], t, training=self.training
+        ).unsqueeze(-2)  # [B, T, N, 1, D]
         batch_size, time_size, n_agents, _, _ = obs_data.shape
 
         # Get last actions with proper padding and one-hot encoding
