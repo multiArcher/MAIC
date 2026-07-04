@@ -7,6 +7,19 @@ from components.episode_buffer import EpisodeBatch
 from utils.maker import EnvMaker
 from runners.runner import Runner
 
+def get_obs_delay_data(env, n_agents, t):
+    if hasattr(env, "get_obs_delay"):
+        delay = np.asarray(env.get_obs_delay(), dtype=np.int64).reshape(n_agents, 1)
+    else:
+        delay = np.zeros((n_agents, 1), dtype=np.int64)
+    if hasattr(env, "get_obs_generation_time"):
+        gen_t = np.asarray(env.get_obs_generation_time(), dtype=np.int64).reshape(n_agents, 1)
+    else:
+        gen_t = np.full((n_agents, 1), t, dtype=np.int64)
+    # Unarrived slots (gen_t < 0) are never fresh; an arrived slot is fresh iff delay 0.
+    fresh = ((gen_t >= 0) & (delay == 0)).astype(np.float32)
+    return {"obs_delay": delay, "obs_gen_t": gen_t, "obs_fresh_mask": fresh}
+
 
 # Based (very) heavily on SubprocVecEnv from OpenAI Baselines
 # https://github.com/openai/baselines/blob/master/baselines/common/vec_env/subproc_vec_env.py
@@ -102,13 +115,16 @@ class ParallelRunner(Runner):
         for parent_conn in self.parent_conns:
             parent_conn.send(("reset", None))
 
-        pre_transition_data = {"state": [], "avail_actions": [], "obs": []}
+        pre_transition_data = {"state": [], "avail_actions": [], "obs": [], "obs_delay": [], "obs_gen_t": [], "obs_fresh_mask": []}
         # Get the obs, state and avail_actions back
         for parent_conn in self.parent_conns:
             data = parent_conn.recv()
             pre_transition_data["state"].append(data["state"])
             pre_transition_data["avail_actions"].append(data["avail_actions"])
             pre_transition_data["obs"].append(data["obs"])
+            pre_transition_data["obs_delay"].append(data["obs_delay"])
+            pre_transition_data["obs_gen_t"].append(data["obs_gen_t"])
+            pre_transition_data["obs_fresh_mask"].append(data["obs_fresh_mask"])
 
         self.batch.update(pre_transition_data, ts=0)
 
@@ -172,7 +188,7 @@ class ParallelRunner(Runner):
             # Post step data we will insert for the current timestep
             post_transition_data = {"reward": [], "terminated": []}
             # Data for the next step we will insert in order to select an action
-            pre_transition_data = {"state": [], "avail_actions": [], "obs": []}
+            pre_transition_data = {"state": [], "avail_actions": [], "obs": [], "obs_delay": [], "obs_gen_t": [], "obs_fresh_mask": []}
 
             # Receive data back for each unterminated env
             for idx, parent_conn in enumerate(self.parent_conns):
@@ -200,6 +216,9 @@ class ParallelRunner(Runner):
                     pre_transition_data["state"].append(data["state"])
                     pre_transition_data["avail_actions"].append(data["avail_actions"])
                     pre_transition_data["obs"].append(data["obs"])
+                    pre_transition_data["obs_delay"].append(data["obs_delay"])
+                    pre_transition_data["obs_gen_t"].append(data["obs_gen_t"])
+                    pre_transition_data["obs_fresh_mask"].append(data["obs_fresh_mask"])
 
             # Add post_transiton data into the batch
             self.batch.update(
@@ -295,36 +314,48 @@ class ParallelRunner(Runner):
 def env_worker(remote, env_fn):
     # Make environment
     env = env_fn.x()
+    env_info = env.get_env_info()
+    env_t = 0
     while True:
         cmd, data = remote.recv()
         if cmd == "step":
             actions = data
             # Take a step in the environment
-            _, reward, terminated, truncated, env_info = env.step(actions)
+            _, reward, terminated, truncated, step_info = env.step(actions)
+            env_t += 1
             terminated = terminated or truncated
             # Return the observations, avail_actions and state to make the next action
             state = env.get_state()
             avail_actions = env.get_avail_actions()
             obs = env.get_obs()
+            delay_data = get_obs_delay_data(env, env_info["n_agents"], env_t)
             remote.send(
                 {
                     # Data for the next timestep needed to pick an action
                     "state": state,
                     "avail_actions": avail_actions,
                     "obs": obs,
+                    "obs_delay": delay_data["obs_delay"],
+                    "obs_gen_t": delay_data["obs_gen_t"],
+                    "obs_fresh_mask": delay_data["obs_fresh_mask"],
                     # Rest of the data for the current timestep
                     "reward": reward,
                     "terminated": terminated,
-                    "info": env_info,
+                    "info": step_info,
                 }
             )
         elif cmd == "reset":
             env.reset()
+            env_t = 0
+            delay_data = get_obs_delay_data(env, env_info["n_agents"], env_t)
             remote.send(
                 {
                     "state": env.get_state(),
                     "avail_actions": env.get_avail_actions(),
                     "obs": env.get_obs(),
+                    "obs_delay": delay_data["obs_delay"],
+                    "obs_gen_t": delay_data["obs_gen_t"],
+                    "obs_fresh_mask": delay_data["obs_fresh_mask"],
                 }
             )
         elif cmd == "close":
@@ -341,7 +372,6 @@ def env_worker(remote, env_fn):
             env.save_replay()
         else:
             raise NotImplementedError
-
 
 class CloudpickleWrapper:
     """
@@ -360,3 +390,9 @@ class CloudpickleWrapper:
         import pickle
 
         self.x = pickle.loads(ob)
+
+
+
+
+
+

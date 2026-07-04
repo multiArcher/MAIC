@@ -260,8 +260,7 @@ def run_sequential(args, logger):
             for _ in range(n_test_runs):
                 runner.run(test_mode=True)
 
-        test_winrates = logger.stats.get("running/test_battle_won_mean", [])
-        new_winrate = test_winrates[-1][1] if test_winrates else max_winrate
+        new_winrate = logger.stats["running/test_battle_won_mean"][-1][1]
         best_model = (new_winrate > max_winrate) or (episode == 0)
         
         if best_model is True:
@@ -434,6 +433,9 @@ def parse_buffer_scheme(env_info: dict, common_reward: bool = True):
             "group": "agents",
             "dtype": torch.int,
         },
+        "obs_delay": {"vshape": (1,), "group": "agents", "dtype": torch.long},
+        "obs_gen_t": {"vshape": (1,), "group": "agents", "dtype": torch.long},
+        "obs_fresh_mask": {"vshape": (1,), "group": "agents", "dtype": torch.float32},
         "terminated": {"vshape": (1,), "dtype": torch.uint8},
     }
     # For individual rewards in gymmai reward is of shape (1, n_agents)
@@ -442,3 +444,5 @@ def parse_buffer_scheme(env_info: dict, common_reward: bool = True):
     else:
         scheme["reward"] = {"vshape": (env_info["n_agents"],)}
     return scheme
+
+
