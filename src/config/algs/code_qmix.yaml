@@ -44,6 +44,13 @@ comm_type: "broadcast"  # Communication type: "broadcast", "no_comm"
 comm_gaussian_delay_mean: 3.0 # Mean of the Gaussian delay for communication
 comm_gaussian_delay_std: 1.0  # Standard deviation of the Gaussian delay for communication
 
+obs_delay_enabled: False       # Whether to apply observation delay at the agent input boundary
+obs_delay_apply_train: False   # Apply observation delay during training forwards
+obs_delay_apply_test: False    # Apply observation delay during evaluation forwards
+obs_gaussian_delay_mean: 0.0   # Mean of the Gaussian delay for observations
+obs_gaussian_delay_std: 0.0    # Standard deviation of the Gaussian delay for observations
+obs_delay_discretization: round # Convert sampled observation delay to int: round, ceil, or floor
+
 # ------------------------------------------------------------------------------
 # --- Agent specific parameters ---
 # ------------------------------------------------------------------------------

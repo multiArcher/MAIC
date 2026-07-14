@@ -7,7 +7,8 @@ import torch
 from utils.custom_logging import PyMARLLogger
 
 
-# Structured message data for CoDe communication
+# Structured message data for CoDe communication，批次（并行的数量），时间步（时刻），有几个智能体，队友数量（来自哪个队友）。后面两列可以理解为一个矩阵
+# 在实现算法时不要忽略“1”，这样才符合矩阵乘法
 CoDeBatchedMessageData = namedtuple("CoDeAgentBroadcastData", [
     "sender_id",  # (bs, ts_slice, n_a, 1, n_agents): Agent ID (one-hot)
     "intents",    # (bs, ts_slice, n_a, 1, intent_dim): Intent vector
@@ -106,16 +107,16 @@ class CommunicationModel:
         self.cache_hidden_states[:, t, ...] = broadcasts.hiddens.detach()
         self.cache_sender_ids[:, t, ...] = broadcasts.sender_id
         # Calculate and store arrival times with Gaussian delay
-        arrival_times = self._calculate_arrival_times(broadcasts.sent_times, training=training)
-        self.cache_arrival_times[:, t, ...] = arrival_times.long()
-
+        arrival_times = self._calculate_arrival_times(broadcasts.sent_times, training=training)#应该到达的时间
+        self.cache_arrival_times[:, t, ...] = arrival_times.long()#缓存的信息到达时间
+        # 计算当前收到的消息本该什么时候发出
         relevant_history_slice = slice(0, time_stop)
         sliced_cache_arrival_times = self.cache_arrival_times[:, relevant_history_slice]
         sliced_cache_sent_times = self.cache_sent_times[:, relevant_history_slice]
         query_times_slice = self.query_times[:, time_start:time_stop]
 
-        has_arrived_mask = sliced_cache_arrival_times.unsqueeze(1) <= query_times_slice
-
+        has_arrived_mask = sliced_cache_arrival_times.unsqueeze(1) <= query_times_slice#标记之前发出的信息当前有没有到达
+        # 查询信息什么时候来的
         valid_sent_times = torch.where(
             has_arrived_mask,
             sliced_cache_sent_times.unsqueeze(1),
@@ -124,8 +125,8 @@ class CommunicationModel:
         time_idx, _ = valid_sent_times.max(dim=2)
         no_messages_mask = time_idx < 0  # Mask for no messages have arrived.
         safe_time_idx = time_idx.masked_fill(no_messages_mask, 0)  # Set 0 for no messages.
-
-        def gather_from_cache(
+        #通信矩阵+观测延迟=信息延迟
+        def gather_from_cache(#组成智能体当前应该拿到的通信矩阵
                 cache_tensor: torch.Tensor, 
                 safe_time_idx:torch.Tensor, 
                 no_messages_mask:torch.Tensor
@@ -142,7 +143,7 @@ class CommunicationModel:
             true_data = fake_data.masked_fill(no_messages_mask, 0)
 
             return true_data
-
+        # gather_from_cache是并行的高阶索引
         current_messages = CoDeBatchedMessageData(
             sender_id=gather_from_cache(self.cache_sender_ids, safe_time_idx, no_messages_mask),
             intents=gather_from_cache(self.cache_intents, safe_time_idx, no_messages_mask),
@@ -165,7 +166,7 @@ class CommunicationModel:
 
         return current_messages 
         
-    def _broadcast_communication(
+    def _broadcast_communication(#使用滞后矩阵，先滞后再广播（这里顺序存疑）
             self, 
             messages: CoDeBatchedMessageData, 
         ) -> CoDeBatchedMessageData:
@@ -179,7 +180,7 @@ class CommunicationModel:
         batch_indices = torch.arange(batch_size, device=self.device).reshape(batch_size, 1, 1, 1)        
         time_indices = torch.arange(time_len, device=self.device).reshape(1, time_len, 1, 1)
 
-        def broadcast_func(m):
+        def broadcast_func(m):  # 广播方法，给所有队友发送自己收到的信息
             """Apply broadcasting to message tensor"""
             m = m[batch_indices, time_indices, self.agent_indices, 0][comm_matrix]
             m = m.reshape(batch_size, time_len, n_agents, n_agents - 1, -1)
@@ -191,7 +192,7 @@ class CommunicationModel:
             hiddens=broadcast_func(messages.hiddens).detach(),
             sent_times=broadcast_func(messages.sent_times).detach()
         )
-
+    # 不交流的情况，用不上
     def _no_communication(self, messages: CoDeBatchedMessageData) -> CoDeBatchedMessageData:
         """No communication - return empty messages"""
         batch_size, time_len, n_agents, _, _ = messages.intents.shape
