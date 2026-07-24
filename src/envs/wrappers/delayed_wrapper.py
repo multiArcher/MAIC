@@ -30,7 +30,7 @@ class DelayedObservationWrapper(MultiAgentEnv):
         delay_std: float = 0.0,
         max_delay: int = 0,
         delay_per_agent: bool = True,
-        seed: int | None = None,
+        # seed: int | None = None,
         **_ignored,
     ):
         self.env = env
@@ -46,27 +46,38 @@ class DelayedObservationWrapper(MultiAgentEnv):
             delay_per_source=delay_per_agent,
         )
         self._max_t = self.episode_limit + 1
-        if seed is not None:
-            torch.manual_seed(seed)
 
-        self._time = 0
+        self._training = True
+        # self._time = 0  # Moved to property
         self._current_obs: list[np.ndarray] = []
         self._current_delays = np.zeros(self.n_agents, dtype=np.int64)
         self._current_generation_times = np.zeros(self.n_agents, dtype=np.int64)
 
+    @property
+    def episode_timestep(self):
+        return self.env.env._episode_steps
+
+    @property
+    def training(self) -> bool:
+        return self._training
+
+    @training.setter
+    def training(self, training: bool) -> None:
+        self._training = bool(training)
+
     def reset(self, seed=None, options=None):
         fresh_obs, info = self.env.reset(seed=seed, options=options)
-        if seed is not None:
-            torch.manual_seed(seed)
-        self._time = 0
+        # if seed is not None:
+            # torch.manual_seed(seed)
+        # self._time = 0
         self.delay_model.reset()
         self._push_and_refresh(fresh_obs)
         return self.get_obs(), info
 
     def step(self, actions):
-        _, reward, terminated, truncated, info = self.env.step(actions)
-        self._time += 1
-        self._push_and_refresh(self.env.get_obs())
+        obss, reward, terminated, truncated, info = self.env.step(actions)
+        # self._time += 1
+        self._push_and_refresh(obss)
         return self.get_obs(), reward, terminated, truncated, info
 
     def get_obs(self):
@@ -122,14 +133,20 @@ class DelayedObservationWrapper(MultiAgentEnv):
     def _push_and_refresh(self, fresh_obs):
         """Push this step's fresh obs into the delay model and pull the delivered obs.
 
-        Eval-time delay is always sampled (the wrapper exists to model delay); the
-        DelayModel's ``training`` flag is therefore False here. Shapes use the b=1
-        batch axis: payload [1, n_agents, obs_dim].
+        The runner sets ``self._training`` from its ``test_mode`` flag. DelayModel
+        maps training to zero delay and evaluation to the configured delay. Shapes
+        use the b=1 batch axis: payload [1, n_agents, obs_dim].
         """
-        obs_arr = np.asarray(fresh_obs, dtype=np.float32)            # [n_agents, obs_dim]
-        payload = torch.from_numpy(obs_arr).unsqueeze(0)             # [1, n, d]
-        self.delay_model.push_step(payload, self._time, training=False, max_t=self._max_t, feat_ndims=1)
-        delivered, gen_t, delay, _ = self.delay_model.query_step(self._time)
+        obs_arr = np.asarray(fresh_obs, dtype=np.float32)  # [n_agents, obs_dim]
+        payload = torch.from_numpy(obs_arr).unsqueeze(0)   # [1, n, d]
+        self.delay_model.push_step(
+            payload,
+            self.episode_timestep,
+            training=self._training,
+            max_t=self._max_t,
+            feat_ndims=1,  # Observation features are the last axis, everything else is batch-like.
+        )
+        delivered, gen_t, delay, _ = self.delay_model.query_step(self.episode_timestep)
         # Squeeze the b=1 axis back to per-agent numpy.
         self._current_obs = [delivered[0, a].numpy().copy() for a in range(self.n_agents)]
         self._current_generation_times = gen_t[0].numpy().astype(np.int64)   # [n], -1 == unarrived
