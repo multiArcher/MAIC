@@ -7,8 +7,22 @@ from utils.maker import EnvMaker
 from utils.custom_logging import PyMARLLogger
 from runners.runner import Runner
 
+def get_obs_delay_data(env, n_agents, t):
+    # Envs supports delayed observations by implementing get_obs_delay() and get_obs_generation_time() methods.
+    if hasattr(env, "get_obs_delay"):
+        delay = np.asarray(env.get_obs_delay(), dtype=np.int64).reshape(n_agents, 1)
+    else:
+        delay = np.zeros((n_agents, 1), dtype=np.int64)
+    if hasattr(env, "get_obs_generation_time"):
+        gen_t = np.asarray(env.get_obs_generation_time(), dtype=np.int64).reshape(n_agents, 1)
+    else:
+        gen_t = np.full((n_agents, 1), t, dtype=np.int64)
+    # Unarrived slots (gen_t < 0) are never fresh; an arrived slot is fresh iff delay 0.
+    fresh = ((gen_t >= 0) & (delay == 0)).astype(np.float32)
+    return {"obs_delay": delay, "obs_gen_t": gen_t, "obs_fresh_mask": fresh}
 
-class EpisodeRunner(Runner):
+
+class DelayedEpisodeRunner(Runner):
     def __init__(self, args, logger: PyMARLLogger):
 
         self.args = args
@@ -81,6 +95,8 @@ class EpisodeRunner(Runner):
         else:
             self.mac.train()
 
+        self.env.training = not test_mode
+
         self.batch = self.new_batch()
         self.env.reset()
         self.t = 0
@@ -101,6 +117,8 @@ class EpisodeRunner(Runner):
                 "avail_actions": [self.env.get_avail_actions()],
                 "obs": [self.env.get_obs()],
             }
+            delay_data = get_obs_delay_data(self.env, self.args.n_agents, self.t)
+            pre_transition_data.update({k: [v] for k, v in delay_data.items()})
             self.batch.update(pre_transition_data, ts=self.t)   # update one step state at time t to batch
 
             # Pass the entire batch of experiences up till now to the agents
@@ -133,6 +151,8 @@ class EpisodeRunner(Runner):
             "avail_actions": [self.env.get_avail_actions()],
             "obs": [self.env.get_obs()],
         }
+        delay_data = get_obs_delay_data(self.env, self.args.n_agents, self.t)
+        last_data.update({k: [v] for k, v in delay_data.items()})
         if test_mode and self.args.render:
             print(f"Episode return: {episode_return}")
         self.batch.update(last_data, ts=self.t)
@@ -205,3 +225,6 @@ class EpisodeRunner(Runner):
                     "running/" + prefix + k + "_mean", v / stats["n_episodes"], self.t_env
                 )
         stats.clear()
+
+
+

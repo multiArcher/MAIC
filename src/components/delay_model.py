@@ -47,7 +47,7 @@ class DelayModel(nn.Module):
             raise ValueError(f"Unknown delay_type: {delay_type}")
         self.delay_type = delay_type
         self.delay_mean = float(delay_mean)
-        self.delay_std = max(0.0, float(delay_std))
+        self.delay_std = float(delay_std)
         self.max_delay = int(max_delay)
         self.delay_per_source = bool(delay_per_source)
 
@@ -62,13 +62,9 @@ class DelayModel(nn.Module):
     # ------------------------------------------------------------------ sampling
     def _sample_delay(self, shape, device, training: bool) -> torch.Tensor:
         """Sample an integer delay per (sent step, source). training ⇒ 0."""
-        if training or (self.delay_mean == 0.0 and self.delay_std == 0.0 and self.delay_type == "gaussian"):
+        if training:
             return torch.zeros(shape, device=device, dtype=torch.long)
-        if not self.delay_per_source and len(shape) >= 3:
-            # One delay per (b, T), shared across all source axes, then broadcast.
-            reduced = (*shape[:2], *([1] * (len(shape) - 2)))
-            base = self._draw(reduced, device)
-            return base.expand(shape).contiguous()
+
         return self._draw(shape, device)
 
     def _draw(self, shape, device) -> torch.Tensor:
@@ -80,7 +76,7 @@ class DelayModel(nn.Module):
 
     # ------------------------------------------------------- freshest-arrived gather
     @staticmethod
-    def _freshest(
+    def _query_freshest_info(
         payload: torch.Tensor,      # [b, Ts, *src, *feat]
         arrival: torch.Tensor,      # [b, Ts, *src]  float
         sent: torch.Tensor,         # [b, Ts, *src]  long, -1 == empty
@@ -92,22 +88,22 @@ class DelayModel(nn.Module):
         Returns (gathered [b, Q, *src, *feat], gen_t [b,Q,*src], delay [b,Q,*src],
         fresh [b,Q,*src]); unarrived slots are zero-filled with gen_t = -1.
         """
-        b, Ts = payload.shape[0], payload.shape[1]
+        batch_size, time_size = payload.shape[0], payload.shape[1]
         src_shape = payload.shape[2: payload.ndim - feat_ndims]
         feat_shape = payload.shape[payload.ndim - feat_ndims:]
         n_src = len(src_shape)
         Q = query_steps.shape[0]
 
         src_ones = (1,) * n_src
-        arr_e = arrival.unsqueeze(1)                                   # [b,1,Ts,*src]
-        sent_e = sent.unsqueeze(1)                                     # [b,1,Ts,*src]
-        q_e = query_steps.view(1, Q, 1, *src_ones)                     # [1,Q,1,*1]
+        arrival_expanded = arrival.unsqueeze(1)                # [b, 1, t, *src]
+        sent_expanded = sent.unsqueeze(1)                  # [b, 1, t, *src]
+        query_expanded = query_steps.view(1, Q, 1, *src_ones)  # [1, Q, 1,  *1]
 
-        has_arrived = (arr_e <= q_e) & (sent_e >= 0)                   # [b,Q,Ts,*src]
+        has_arrived = (arrival_expanded <= query_expanded) & (sent_expanded >= 0)  # [b, Q, t, *src]
         # Freshest == largest sent_time among arrived; -1 where none.
-        valid_sent = torch.where(has_arrived, sent_e.expand(b, Q, Ts, *src_shape),
-                                 torch.full_like(sent_e.expand(b, Q, Ts, *src_shape), -1))
-        chosen_sent, _ = valid_sent.max(dim=2)                         # [b,Q,*src]
+        valid_sent = torch.where(has_arrived, sent_expanded, -1)
+        
+        chosen_sent, _ = valid_sent.max(dim=2)  # [b,Q,*src], chosen timestep information was sent.
         no_msg = chosen_sent < 0
 
         # Map the chosen absolute sent time back to its index along Ts. sent is the
@@ -118,21 +114,21 @@ class DelayModel(nn.Module):
         # match[b,Q,Ts,*src] = (sent_abs == chosen_sent)
         match = sent_abs.unsqueeze(1) == chosen_sent.unsqueeze(2)
         match = match & (sent_abs.unsqueeze(1) >= 0)
-        ts_index = match.float().argmax(dim=2)                         # [b,Q,*src] (0 where no_msg)
+        ts_index = match.float().argmax(dim=2)  # [b,Q,*src] (0 where no_msg, index in payload matrix.)
 
         # Gather payload along Ts using ts_index, broadcast over feat dims.
-        idx = ts_index.view(b, Q, *src_shape, *([1] * feat_ndims)).expand(b, Q, *src_shape, *feat_shape)
-        payload_q = payload.unsqueeze(1).expand(b, Q, Ts, *src_shape, *feat_shape)
+        idx = ts_index.view(batch_size, Q, *src_shape, *([1] * feat_ndims)).expand(batch_size, Q, *src_shape, *feat_shape)
+        payload_q = payload.unsqueeze(1).expand(batch_size, Q, time_size, *src_shape, *feat_shape)
         gathered = torch.gather(payload_q, 2, idx.unsqueeze(2)).squeeze(2)
 
-        no_msg_feat = no_msg.view(b, Q, *src_shape, *([1] * feat_ndims))
-        gathered = gathered.masked_fill(no_msg_feat, 0.0)
+        no_msg_feat = no_msg.view(batch_size, Q, *src_shape, *([1] * feat_ndims))
+        gathered = gathered.masked_fill(no_msg_feat, 0.0)   # Mask when no message, max return 0 index.
 
-        gen_t = torch.where(no_msg, torch.full_like(chosen_sent, -1), chosen_sent)
-        q_full = query_steps.view(1, Q, *src_ones).expand(b, Q, *src_shape)
-        delay = torch.where(no_msg, torch.zeros_like(chosen_sent), q_full - chosen_sent)
+        gen_t = torch.where(no_msg, -1, chosen_sent)
+        q_full = query_steps.view(1, Q, *src_ones).expand(batch_size, Q, *src_shape)
+        delay = torch.where(no_msg, -1, q_full - chosen_sent)
         fresh = (~no_msg) & (delay == 0)
-        return gathered, gen_t, delay, fresh.to(payload.dtype)
+        return gathered, gen_t, delay, fresh
 
     # --------------------------------------------------------------- batched window
     def forward(self, payload: torch.Tensor, start_t: int = 0, training: bool = True, feat_ndims: int = 1):
@@ -150,7 +146,7 @@ class DelayModel(nn.Module):
         delay = self._sample_delay((b, T, *src_meta_shape), device, training)
         sent = sent_steps.view(1, T, *([1] * len(src_meta_shape))).expand(b, T, *src_meta_shape).clone()
         arrival = (sent + delay).to(torch.float32)
-        return self._freshest(payload, arrival, sent, sent_steps, feat_ndims)
+        return self._query_freshest_info(payload, arrival, sent, sent_steps, feat_ndims)
 
     # ----------------------------------------------------------------- online (obs)
     def reset(self):
@@ -160,30 +156,35 @@ class DelayModel(nn.Module):
         self._cache_sent = None
         self._max_t = 0
 
-    def _ensure_cache(self, b, src_shape, feat_shape, max_t, device, dtype, feat_ndims):
-        self._feat_ndims = feat_ndims
-        self._max_t = max_t
-        self._cache_payload = torch.zeros(b, max_t, *src_shape, *feat_shape, device=device, dtype=dtype)
-        self._cache_arrival = torch.full((b, max_t, *src_shape), math.inf, device=device, dtype=torch.float32)
-        self._cache_sent = torch.full((b, max_t, *src_shape), -1, device=device, dtype=torch.long)
+    def _ensure_cache(self, batch_size, src_shape, feat_shape, max_t, device, dtype, feat_ndims):
+        if (self._cache_payload is None 
+            or self._cache_payload.shape[0] < batch_size 
+            or self._cache_payload.shape[1] < max_t
+        ):
+            self._feat_ndims = feat_ndims
+            self._max_t = max_t
+            self._cache_payload = torch.zeros(batch_size, max_t, *src_shape, *feat_shape, device=device, dtype=dtype)
+            self._cache_arrival = torch.full((batch_size, max_t, *src_shape), math.inf, device=device, dtype=torch.float32)
+            self._cache_sent = torch.full((batch_size, max_t, *src_shape), -1, device=device, dtype=torch.long)
 
-    def push_step(self, payload_t: torch.Tensor, t: int, training: bool, max_t: int, feat_ndims: int = 1, bs=slice(None)):
+    def push_step(self, payload_t: torch.Tensor, t: int, training: bool, max_t: int, feat_ndims: int = 1):
         """Store one step's payload [b_active, *src, *feat] produced at absolute step t.
 
         ``bs`` selects the absolute batch rows that are active this step (ragged
         rollouts); inactive rows keep their cached state.
         """
         device = payload_t.device
-        src_shape = payload_t.shape[1: payload_t.ndim - feat_ndims]
+        src_shape = payload_t.shape[1: payload_t.ndim - feat_ndims]  # Shape of axes other than batch and data
         feat_shape = payload_t.shape[payload_t.ndim - feat_ndims:]
-        if self._cache_payload is None:
-            b_full = payload_t.shape[0] if bs == slice(None) else self._infer_b(bs, payload_t.shape[0])
-            self._ensure_cache(b_full, src_shape, feat_shape, max_t, device, payload_t.dtype, feat_ndims)
-        delay = self._sample_delay((payload_t.shape[0], *src_shape), device, training)
+        batch_size = payload_t.shape[0]
+        
+        self._ensure_cache(batch_size, src_shape, feat_shape, max_t, device, payload_t.dtype, feat_ndims)
+        
+        delay = self._sample_delay((batch_size, *src_shape), device, training)
         arrival = (t + delay).to(torch.float32)
-        self._cache_payload[bs, t] = payload_t
-        self._cache_arrival[bs, t] = arrival
-        self._cache_sent[bs, t] = t
+        self._cache_payload[:, t] = payload_t
+        self._cache_arrival[:, t] = arrival
+        self._cache_sent[:, t] = t
 
     @staticmethod
     def _infer_b(bs, n_active):
@@ -202,5 +203,5 @@ class DelayModel(nn.Module):
         arrival = self._cache_arrival[bs, prefix]
         sent = self._cache_sent[bs, prefix]
         query_steps = torch.tensor([t], device=payload.device, dtype=torch.long)
-        gathered, gen_t, delay, fresh = self._freshest(payload, arrival, sent, query_steps, self._feat_ndims)
+        gathered, gen_t, delay, fresh = self._query_freshest_info(payload, arrival, sent, query_steps, self._feat_ndims)
         return gathered[:, 0], gen_t[:, 0], delay[:, 0], fresh[:, 0]

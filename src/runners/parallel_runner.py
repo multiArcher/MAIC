@@ -113,7 +113,7 @@ class ParallelRunner(Runner):
 
         # Reset the envs
         for parent_conn in self.parent_conns:
-            parent_conn.send(("reset", None))
+            parent_conn.send(("reset", not test_mode))
 
         pre_transition_data = {"state": [], "avail_actions": [], "obs": [], "obs_delay": [], "obs_gen_t": [], "obs_fresh_mask": []}
         # Get the obs, state and avail_actions back
@@ -345,6 +345,8 @@ def env_worker(remote, env_fn):
                 }
             )
         elif cmd == "reset":
+            if hasattr(env, "training"):
+                env.training = data
             env.reset()
             env_t = 0
             delay_data = get_obs_delay_data(env, env_info["n_agents"], env_t)
