@@ -29,8 +29,6 @@ class SoftClampAttention(nn.Module):
         self.heads = heads
         self.kv_heads = heads if kv_heads is None else kv_heads
         self.dim_head = dim_head
-        if self.heads % self.kv_heads != 0:
-            raise ValueError(f"Heads must be divisible by kv_heads.")
         self.groups = self.heads // self.kv_heads
 
         self.norm = nn.RMSNorm(dim_attn, device=device) if pre_rmsnorm else nn.Identity()

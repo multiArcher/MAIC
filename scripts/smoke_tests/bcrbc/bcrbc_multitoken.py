@@ -1,6 +1,6 @@
 """Phase 4 smoke: multi-token latent convention [b, t, n, num_token, d].
 
-Runs the full DCRBC stack with bcrbc_n_latent_tokens > 1 and asserts the token
+Runs the full DCRBC stack with bcrbc_num_z_tokens > 1 and asserts the token
 axis is carried natively end-to-end: encoder emits num_token latents per agent,
 forward returns z of shape [B, T, n, num_token, z_dim], a learner train step with
 flow loss completes, and the generative eval rollout runs. Also re-confirms
@@ -30,7 +30,7 @@ BATCH, TIME, NA, OBS, NACT, STATE = 2, 6, 3, 7, 4, 9
 Z_DIM = 8
 
 
-def build_batch_and_args(n_latent_tokens, generative_eval=False):
+def build_batch_and_args(num_z_tokens, generative_eval=False):
     scheme = {
         "state": {"vshape": STATE, "dtype": torch.float32},
         "obs": {"vshape": OBS, "group": "agents", "dtype": torch.float32},
@@ -65,7 +65,7 @@ def build_batch_and_args(n_latent_tokens, generative_eval=False):
     )
     args = make_bcrbc_args(
         n_agents=NA, n_actions=NACT, state_shape=STATE,
-        bcrbc_z_dim=Z_DIM, bcrbc_n_latent_tokens=n_latent_tokens,
+        bcrbc_z_dim=Z_DIM, bcrbc_num_z_tokens=num_z_tokens,
         env_info={"episode_limit": TIME - 1},
         rec_loss_weight=0.5, flow_loss_weight=0.5,
         bcrbc_generative_eval=generative_eval, bcrbc_flow_steps=4,
@@ -81,13 +81,13 @@ mac = BCRBCMAC(batch.scheme, groups, args)
 out = mac.forward(batch, slice(0, TIME))
 assert out["z"].shape == (BATCH, TIME, NA, NTOK, Z_DIM), f"z shape {out['z'].shape}"
 assert out["q_values"].shape == (BATCH, TIME, NA, 1, NACT), f"q shape {out['q_values'].shape}"
-assert out["recon_obs"].shape == (BATCH, TIME, NA, 1, OBS), f"recon_obs shape {out['recon_obs'].shape}"
+assert out["reconstructed_observations"].shape == (BATCH, TIME, NA, OBS)
 assert torch.isfinite(out["q_values"]).all()
 
 learner = BCRBCLearner(mac, batch.scheme, Logger(), args)
 learner.train(batch, 0, 0)
-assert mac.agent.flow_dynamics.net[0].weight.grad is not None, "flow head must get grad"
-assert mac.agent.flow_dynamics.token_query.grad is not None, "token_query must get grad with num_token>1"
+assert mac.agent.z_predictor.weight.grad is not None
+assert mac.agent.tokenizer.signal_projection.weight.grad is not None
 
 # generative eval rollout with the token axis
 torch.manual_seed(1)

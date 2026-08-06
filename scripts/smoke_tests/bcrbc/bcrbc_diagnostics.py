@@ -1,7 +1,7 @@
-"""Phase 5 smoke: belief-quality diagnostics.
+"""Generated-z diagnostics smoke test.
 
 Builds a delayed episode + the matching full (un-delayed) observations and checks
-that BCRBCMAC.belief_diagnostics returns finite, well-formed Tier-1 metrics:
+that BCRBCMAC.z_diagnostics returns finite, well-formed Tier-1 metrics:
 latent reconstruction error over generated slots, correction-after-arrival
 improvement, and (with comm on) delayed-message recovery error.
 """
@@ -75,14 +75,14 @@ batch.update(
 )
 
 mac = BCRBCMAC(batch.scheme, groups, args)
-diag = mac.belief_diagnostics(batch, full_obs)
+diag = mac.z_diagnostics(batch, full_obs)
 
-assert "diag/latent_recon_error" in diag
+assert "diag/z_reconstruction_error" in diag
 assert "diag/correction_improvement" in diag
 assert "diag/msg_recovery_error" in diag, "comm enabled -> message recovery metric expected"
 for k, v in diag.items():
     assert v == v and abs(v) < 1e6, f"{k} must be finite, got {v}"
-assert diag["diag/latent_recon_error"] >= 0.0, "recon error is a squared error, must be >= 0"
+assert diag["diag/z_reconstruction_error"] >= 0.0
 
 print("diag:", {k: round(v, 4) for k, v in diag.items()})
-print("bcrbc belief diagnostics ok")
+print("bcrbc z diagnostics ok")

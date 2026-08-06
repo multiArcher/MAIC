@@ -94,8 +94,8 @@ assert torch.equal(patched, expected), "retro patch moves arrivals to gen slots,
 with torch.no_grad():
     delayed_out = mac.forward(batch, slice(0, TIME_SIZE))
     retro = RetroReplay(max_replay_len=TIME_SIZE, use_comm=False, n_agents=N_AGENTS).compute(mac, batch, slice(0, TIME_SIZE), delayed_out)
-    assert retro["corrected_beliefs"].shape == delayed_out["beliefs"].shape
-    assert retro["target_beliefs"].shape == delayed_out["beliefs"].shape
+    assert retro["corrected_agent_outputs"].shape == delayed_out["agent_outputs"].shape
+    assert retro["target_agent_outputs"].shape == delayed_out["agent_outputs"].shape
     assert retro["retro_mask"].shape == (BATCH_SIZE, TIME_SIZE, N_AGENTS, 1)
     assert retro["retro_mask"].sum() > 0
 

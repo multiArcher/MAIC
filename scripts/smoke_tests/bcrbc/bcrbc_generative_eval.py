@@ -4,7 +4,7 @@ Replicates the worked example for one agent and asserts the headline behavior:
 - when an observation has not arrived, the latent buffer slot is *generated*
   (differs from the encoded real obs);
 - once the real observation arrives at a later step, that generation slot is
-  filled with the *real* encoded latent (correction), and the later belief
+  filled with the real encoded z (correction), and later agent outputs
   changes versus the all-generated rollout (re-roll propagates the correction).
 """
 
@@ -93,12 +93,12 @@ assert out_t1["q_values"].shape == (BATCH, 1, NA, 1, NACT)
 assert torch.isfinite(out_t1["q_values"]).all()
 
 # Encode the real obs to know what slot-1's true latent would be.
-obs_aug_full, _ = mac._build_inputs(batch, slice(0, TIME))
-z_real = mac.agent.latent_encoder(obs_aug_full)  # [1, TIME, NA, z]
+observations_full, _ = mac._build_inputs(batch, slice(0, TIME))
+z_real = mac.agent.encode_observations(observations_full)
 
 # Reproduce the internal buffer at t=1 (slot 1 generated) vs t=2 (slot 1 real).
 # We check via the public path: at t=2 the obs for gen-slot 1 has arrived.
-# Compare belief at step 1 computed within the t=2 window: it must now match the
+# Compare z at step 1 computed within the t=2 window: it must now match the
 # real-encoded latent path, not the generated one.
 
 # Build z buffers the way _generative_forward does, for assertions.
@@ -116,7 +116,7 @@ assert ir1[0, 1, 0].item() == 0.0, "at t1, generation-slot 1 should NOT be real 
 ir2 = reconstruct_is_real(3)
 assert ir2[0, 1, 0].item() == 1.0, "at t2, generation-slot 1 should be real (correction-on-arrival)"
 
-# Behavioral: the belief at the final step changes if we corrupt the real arrival,
+# Behavioral: Q at the final step changes if we corrupt the real arrival,
 # confirming the corrected real latent actually feeds the rollout.
 out_t2_real = mac.forward(batch, 2, test_mode=True)["q_values"].clone()
 batch2, _ = make_batch([0, 0, 0, 1, 3])  # pretend o1 still NOT arrived at t2 (latest gen 0)
@@ -129,5 +129,48 @@ batch_nodelay, _ = make_batch(list(range(TIME)))
 for t in range(TIME):
     o = mac.forward(batch_nodelay, t, test_mode=True)
     assert torch.isfinite(o["q_values"]).all()
+
+# At one query step, a real packet for one agent must not be replaced while
+# missing agents at the same generation slot are sampled.
+batch_mixed, real_obs_mixed = make_batch([0, 0, 1, 2, 3])
+batch_mixed["obs"][0, 1, 0] = real_obs_mixed[1, 0]
+batch_mixed["obs_gen_t"][0, 1, 0, 0] = 1
+batch_mixed["obs_delay"][0, 1, 0, 0] = 0
+batch_mixed["obs_fresh_mask"][0, 1, 0, 0] = 1
+mac_mixed = BCRBCMAC(batch_mixed.scheme, groups, args)
+mac_mixed.forward(batch_mixed, 1, test_mode=True)
+expected_real_z = mac_mixed.agent.encode_observations(
+    batch_mixed["obs"][:, 1:2]
+)[0, 0, 0]
+mixed_z = mac_mixed._eval_state["z"][0, 1]
+assert torch.allclose(mixed_z[0], expected_real_z, atol=1e-6)
+assert torch.count_nonzero(mixed_z[1:]) > 0
+
+# Persisting the committed-prefix cache must match recomputing the same frozen
+# trajectory when both paths receive the same sampling noise.
+cache_args = make_bcrbc_args(
+    n_agents=NA,
+    n_actions=NACT,
+    state_shape=STATE,
+    env_info={"episode_limit": TIME - 1},
+    bcrbc_generative_eval=True,
+    bcrbc_flow_steps=4,
+    bcrbc_max_delay=1,
+    bcrbc_context_window=4,
+    bcrbc_use_comm=False,
+    bcrbc_kv_cache=True,
+)
+full_args = make_bcrbc_args(**vars(cache_args))
+full_args.bcrbc_kv_cache = False
+cache_batch, _ = make_batch(delivered)
+full_mac = BCRBCMAC(cache_batch.scheme, groups, full_args)
+cached_mac = BCRBCMAC(cache_batch.scheme, groups, cache_args)
+cached_mac.load_state(full_mac)
+for step in range(TIME):
+    torch.manual_seed(100 + step)
+    full_output = full_mac.forward(cache_batch, step, test_mode=True)["q_values"]
+    torch.manual_seed(100 + step)
+    cached_output = cached_mac.forward(cache_batch, step, test_mode=True)["q_values"]
+    assert torch.allclose(full_output, cached_output, atol=1e-5)
 
 print("bcrbc generative eval ok")

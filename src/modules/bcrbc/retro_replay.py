@@ -2,18 +2,7 @@ import torch
 
 
 class RetroReplay:
-    """Batch-level retroactive belief compensation via a zero-delay teacher path.
-
-    The teacher recomputes beliefs from a *patched* history in which every
-    delayed observation (and, when communication is enabled, every delayed
-    message) is written back to its generation step. The corrected (delayed)
-    beliefs from the online pass are then aligned to these full-information
-    teacher beliefs.
-
-    Unarrived evidence (generation step outside the replay window) is left as a
-    zero-filled slot, matching the project rule that delay only appears at
-    evaluation and is never fed to the model as a token.
-    """
+    """Align delayed agent outputs with a patched zero-delay teacher pass."""
 
     def __init__(self, max_replay_len: int, use_comm: bool, n_agents: int):
         self.max_replay_len = max_replay_len
@@ -28,11 +17,11 @@ class RetroReplay:
         if self.max_replay_len > 0 and obs_delay.size(1) > self.max_replay_len:
             start = obs_delay.size(1) - self.max_replay_len
             obs_delay = obs_delay[:, start:]
-            corrected_beliefs = delayed_out["beliefs"][:, start:]
+            corrected_agent_outputs = delayed_out["agent_outputs"][:, start:]
             t = slice((t.start or 0) + start, t.stop)
             time_slice = slice(start, None)
         else:
-            corrected_beliefs = delayed_out["beliefs"]
+            corrected_agent_outputs = delayed_out["agent_outputs"]
             time_slice = slice(None)
 
         start_t = t.start or 0
@@ -50,10 +39,10 @@ class RetroReplay:
             clean_out = mac.forward(batch, t, obs_override=patched_obs, test_mode=False, **teacher_kwargs)
 
         in_window = obs_gen_t >= start_t
-        retro_mask = ((obs_delay > 0) & in_window).to(corrected_beliefs.dtype)
+        retro_mask = ((obs_delay > 0) & in_window).to(corrected_agent_outputs.dtype)
         return {
-            "corrected_beliefs": corrected_beliefs,
-            "target_beliefs": clean_out["beliefs"],
+            "corrected_agent_outputs": corrected_agent_outputs,
+            "target_agent_outputs": clean_out["agent_outputs"],
             "retro_mask": retro_mask,
             "time_slice": time_slice,
         }

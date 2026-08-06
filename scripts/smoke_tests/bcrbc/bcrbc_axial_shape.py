@@ -1,14 +1,12 @@
 """Smoke test for axial space-time transformer shape and output.
 
 Tests that the ported BlockCausalTransformer:
-  - accepts [B, T, S, D] shaped input
-  - produces [B, T, S, D] shaped output
+  - accepts [B, T, N, A, D] shaped input
+  - produces [B, T, N, A, D] shaped output
   - contains no NaN values
   - runs without errors
 
-Typical layout for S:
-  S = n_agents * 3 = 3 agents * 3 tokens (obs, action, query)
-  So S = 9 for 3 agents.
+N is the agent axis and A is the per-agent local-token axis.
 """
 
 import torch
@@ -16,7 +14,7 @@ import sys
 from pathlib import Path
 
 # Add src to path
-repo_root = Path(__file__).parent.parent.parent
+repo_root = Path(__file__).parents[3]
 sys.path.insert(0, str(repo_root / "src"))
 
 from modules.bcrbc.block_causal_transformer import BlockCausalTransformer
@@ -26,7 +24,8 @@ def test_bcrbc_axial_shape():
     """Test basic shape and output properties."""
     batch_size = 2
     time_steps = 5
-    space_size = 9  # 3 agents * 3 tokens per agent (obs, action, query)
+    n_agents = 3
+    local_tokens = 3  # obs, action, query
     d_model = 128
 
     print(f"Creating BlockCausalTransformer(model_hidden_dim={d_model}, num_transformer_layers=4, num_attention_heads=4)")
@@ -40,8 +39,8 @@ def test_bcrbc_axial_shape():
     print(f"  Model created successfully")
 
     # Create random input
-    print(f"Creating random input [{batch_size}, {time_steps}, {space_size}, {d_model}]")
-    tokens = torch.randn(batch_size, time_steps, space_size, d_model)
+    print(f"Creating random input [{batch_size}, {time_steps}, {n_agents}, {local_tokens}, {d_model}]")
+    tokens = torch.randn(batch_size, time_steps, n_agents, local_tokens, d_model)
     print(f"  Input shape: {tokens.shape}")
 
     # Forward pass

@@ -122,7 +122,6 @@ class BlockCasualTransformer(nn.Module):
         is_decoder = False,
         is_dynamics = False,
         agent_slice: Optional[slice] = None,
-        block_group_ids: Optional[Tensor] = None,
         context_window: Optional[int] = None,
         dropout = 0.0,
         device=None
@@ -141,15 +140,6 @@ class BlockCasualTransformer(nn.Module):
         # train consistent with the windowed eval rollout. None / 0 => unbounded (exact
         # legacy lower-triangular causal mask).
         self.context_window = context_window if (context_window and context_window > 0) else None
-        # Per-token agent-group id over the space axis (length S). When present in
-        # dynamics mode, the spatial mask is block-diagonal per agent (CTDE): an
-        # agent's tokens attend only within its own block, so cross-agent information
-        # flows solely through the message tokens placed inside each receiver block.
-        if block_group_ids is not None:
-            self.register_buffer("block_group_ids", block_group_ids.long(), persistent=False)
-        else:
-            self.block_group_ids = None
-
         self.layers = nn.ModuleList([])
         self.is_time_layer = []
 
@@ -209,33 +199,15 @@ class BlockCasualTransformer(nn.Module):
             # time step attend to each other fully (bidirectional).
             mask = torch.ones((dim, dim), device=device, dtype=torch.bool)
 
-            if self.block_group_ids is not None:
-                # CTDE: restrict the base attention to a block-diagonal pattern, so an
-                # agent's tokens attend only within its own per-agent block (own obs
-                # latents, own action, the messages it received, own query). Direct
-                # cross-agent observation access is removed; the only cross-agent
-                # channel is the message tokens (sender obs) sitting inside each
-                # receiver's block. With comm off (no message tokens) agents become
-                # fully independent, i.e. decentralizable.
-                g = self.block_group_ids.to(device)
-                mask = (g[:, None] == g[None, :])
-
             if self.agent_slice is not None:
                 # Follow the paper's section 3.3 rule to prevent causal confusion.
                 # Rule 1: no other modality may attend back to the agent (query)
                 # tokens (i.e. the columns at agent_slice are set to False).
                 mask[:, self.agent_slice] = False
 
-                # Rule 2: restore the agent (query) token ROWS. Without block ids this
-                # is full attention (legacy all-ones behaviour); with block ids the
-                # rows are restored to the block-diagonal pattern only, so a query
-                # attends its own block (own content + self) and NOT other agents.
-                if self.block_group_ids is not None:
-                    g = self.block_group_ids.to(device)
-                    block = (g[:, None] == g[None, :])
-                    mask[self.agent_slice] = block[self.agent_slice]
-                else:
-                    mask[self.agent_slice, :] = True
+                # Rule 2: query rows attend the entire local agent block. Other
+                # agents are separate batch-prefix entries, not positions in A.
+                mask[self.agent_slice, :] = True
 
             return mask
 
@@ -269,7 +241,7 @@ class BlockCasualTransformer(nn.Module):
         """Forward pass of the Block Casual Transformer.
 
         Args:
-            x: Input tensor of shape (..., time_steps, sequence_len, dim).
+            x: Input tensor of shape (..., time_steps, agents, local_tokens, dim).
             kv_cache: List of cached (k_cache, v_cache) tuples for time layers during inference.
             use_kv_cache: Whether to use and return KV caches for time layers.
             rope_offset: Absolute time position of the first token in ``x``. When None
@@ -280,14 +252,15 @@ class BlockCasualTransformer(nn.Module):
                 supplying the absolute offset is bit-identical to the dense forward.
         Returns:
             If use_kv_cache is False:
-                output: Tensor of shape (..., time_steps, sequence_len, dim).
+                output: Tensor of the same shape as x.
             If use_kv_cache is True:
-                output: Tensor of shape (..., time_steps, sequence_len, dim).
+                output: Tensor of the same shape as x.
                 next_kv_caches: List of updated (k_cache, v_cache) tuples for time layers.
         """
-        time_steps, sequence_len = x.shape[-3:-1]   # (..., T, S, D)
+        time_steps = x.shape[-4]
+        local_tokens = x.shape[-2]
 
-        space_mask = self._build_space_mask(sequence_len, device=x.device)  # (S, S) or None
+        space_mask = self._build_space_mask(local_tokens, device=x.device)
 
         if use_kv_cache:
             next_kv_caches = []
@@ -308,7 +281,9 @@ class BlockCasualTransformer(nn.Module):
                 if use_kv_cache:
                     layer_cache = next(cache_iter, None)  # Cache when inference frame by frame.
 
-                x = x.transpose(-2, -3)  # (..., S, T, D)
+                # [..., T, N, A, D] -> [..., N, A, T, D]. Attention always
+                # consumes the penultimate axis, so T becomes its sequence axis.
+                x = x.movedim(-4, -2)
 
                 # RoPE: position of the new query/key tokens. Prefer the explicit absolute
                 # offset (required once the cache is evicted/slid); fall back to cached-key
@@ -362,7 +337,7 @@ class BlockCasualTransformer(nn.Module):
 
             # 3. Transpose back to time-major if this was a time layer.
             if is_time_layer:
-                x = x.transpose(-2, -3)  # (..., T, S, D)
+                x = x.movedim(-2, -4)
 
         x = self.final_norm(x)
 
