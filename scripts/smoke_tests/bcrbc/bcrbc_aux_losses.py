@@ -2,7 +2,7 @@
 
 Enables the auxiliary loss weights (rec, dyn, retro, msg_rec) together with the
 communication pathway, runs one BCRBCLearner.train step, and asserts the model
-outputs (recon_msg) have the right shape and every loss term stays finite.
+outputs have the right shape and every loss term stays finite.
 """
 
 import sys
@@ -80,7 +80,7 @@ args = make_bcrbc_args(
     env_info={"episode_limit": TIME_SIZE - 1},
     # auxiliary losses ON
     rec_loss_weight=0.5,
-    dyn_loss_weight=0.5,
+    flow_loss_weight=0.5,
     retro_loss_weight=0.1,
     bcrbc_retro_max_replay_len=TIME_SIZE,
     msg_rec_loss_weight=0.5,
@@ -91,27 +91,36 @@ torch.manual_seed(7)
 batch = make_batch()
 mac = BCRBCMAC(batch.scheme, groups, args)
 
-# model outputs recon_msg with the vector-axis shape [...,n,1,d]
+# Model outputs reconstructed messages with the vector-axis shape [...,n,1,d].
 out = mac.forward(batch, slice(0, TIME_SIZE))
-assert out["recon_msg"].shape == (BATCH_SIZE, TIME_SIZE, N_AGENTS, 1, OBS_DIM), \
-    f"recon_msg shape {out['recon_msg'].shape}"
+assert out["reconstructed_messages"].shape == (
+    BATCH_SIZE,
+    TIME_SIZE,
+    N_AGENTS,
+    1,
+    OBS_DIM,
+)
 
 # standalone loss-function sanity (finite, non-negative). Vector-axis convention:
-# recon_msg [b,t,n,1,d], teacher messages [b,t,n,n-1,d], mask [b,t,n,1,1].
+# Reconstructed messages [b,t,n,1,d], targets [b,t,n,n-1,d].
 mask = torch.ones(BATCH_SIZE, TIME_SIZE, N_AGENTS, 1, 1)
 teacher_msgs = mac.comm_delay(batch["obs"][:, slice(0, TIME_SIZE)], start_t=0, training=True)
-mrl = message_reconstruction_loss(out["recon_msg"], teacher_msgs, mask)
+mrl = message_reconstruction_loss(out["reconstructed_messages"], teacher_msgs, mask)
 assert torch.isfinite(mrl) and mrl.item() >= 0.0
 
 # single-agent message rec must be zero (no senders)
 zero_msg = torch.zeros(BATCH_SIZE, TIME_SIZE, 1, 0, OBS_DIM)
-zr = message_reconstruction_loss(out["recon_msg"][:, :, :1], zero_msg, mask[:, :, :1])
+zr = message_reconstruction_loss(
+    out["reconstructed_messages"][:, :, :1],
+    zero_msg,
+    mask[:, :, :1],
+)
 assert zr.item() == 0.0, "message rec with no senders must be exactly zero"
 
 # full learner train step with every aux loss enabled; all params should get grad
 learner = BCRBCLearner(mac, batch.scheme, Logger(), args)
 learner.train(batch, 0, 0)
-assert mac.agent.msg_decoder[1].weight.grad is not None, "msg_decoder should receive gradient"
-assert torch.isfinite(mac.agent.msg_decoder[1].weight.grad).all()
+assert mac.agent.message_decoder[1].weight.grad is not None
+assert torch.isfinite(mac.agent.message_decoder[1].weight.grad).all()
 
 print("bcrbc aux losses ok")

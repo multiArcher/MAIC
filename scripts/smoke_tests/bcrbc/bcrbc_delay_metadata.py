@@ -87,7 +87,9 @@ mac.eval()
 with torch.no_grad():
     # Plain forward path (test_mode False -> no generative rollout); only the obs
     # delay metadata differs between the two batches.
+    torch.manual_seed(11)
     q_no_delay = mac.forward(make_batch(0), slice(0, TIME_SIZE))["q_values"]
+    torch.manual_seed(11)
     q_delayed = mac.forward(make_batch(3), slice(0, TIME_SIZE))["q_values"]
 
 assert torch.allclose(q_no_delay, q_delayed), \

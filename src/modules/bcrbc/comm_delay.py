@@ -24,7 +24,7 @@ class CommDelay(nn.Module):
     """Builds delayed inter-agent messages via the unified arrival-time model.
 
     Returns the message payload tensor ``[B, T, n_agents, n_agents - 1, obs_dim]``
-    expected by :class:`DelayTokenizer`. Staleness is encoded in the content only;
+    expected by :class:`DynamicsTokenizer`. Staleness is encoded in the content only;
     no per-message delay metadata is produced.
     """
 

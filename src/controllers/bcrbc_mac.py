@@ -7,7 +7,7 @@ from torch.nn.functional import one_hot
 from .mac import MAC
 from components.action_selectors.action_selector import ActionSelector
 from components.episode_buffer import EpisodeBatch
-from modules.bcrbc.dynamics_core import BCRBCDynamicsCore
+from modules.bcrbc.bcrbc_model import BCRBCModel
 from modules.bcrbc.comm_delay import CommDelay
 from modules.bcrbc.retro_replay import RetroReplay
 from utils.maker import ActionSelectorMaker
@@ -24,9 +24,8 @@ class BCRBCMAC(MAC):
         self.n_actions = args.n_actions
         self.agent_output_type = args.agent_output_type
         self.obs_shape = scheme["obs"]["vshape"]
-        self.input_shape = self._get_input_shape(scheme)
         self.action_selector: ActionSelector = ActionSelectorMaker.make(args.action_selector, args)
-        self.agent = BCRBCDynamicsCore(self.input_shape, self.n_actions, self.n_agents, args, dynamic_obs_dim=self.obs_shape)
+        self.agent = BCRBCModel(self.obs_shape, self.n_actions, self.n_agents, args)
         self.use_comm = args.bcrbc_use_comm
         if self.use_comm:
             self.comm_delay = CommDelay(
@@ -45,8 +44,11 @@ class BCRBCMAC(MAC):
         # Persistent across-step eval cache (freeze-on-commit). 0/False => recompute the
         # whole window each step (still freezes committed latents); True => also persist
         # the committed-prefix KV so only the mutable tail [t-D, t] is recomputed.
-        self.use_kv_cache = bool(getattr(args, "bcrbc_kv_cache", False))
+        self.use_kv_cache = args.bcrbc_kv_cache
         self.hidden_states = None
+        # Episode-local transformer history for ordinary one-step action sampling.
+        # Independent from the correction-aware generative-eval state below.
+        self._online_kv_cache = None
         # Stateful generative-eval buffer, rebuilt lazily and reset in init_hidden.
         self._eval_state = None
 
@@ -59,17 +61,25 @@ class BCRBCMAC(MAC):
         test_mode: bool = False,
     ) -> Any:
         avail_actions = ep_batch["avail_actions"][:, t_ep]
-        mac_out = self.forward(ep_batch, t_ep, test_mode=test_mode)
-        q_values = mac_out["q_values"].squeeze(1).squeeze(-2)
+        mac_out = self.forward(
+            ep_batch, t_ep, test_mode=test_mode, incremental=True
+        )
+        q_values = mac_out["q_values"].squeeze(1).squeeze(-2)  # [b, n, a]
         return self.action_selector.select_action(q_values[bs], avail_actions[bs], t_env, test_mode=test_mode)
 
-    def forward(self, ep_batch: EpisodeBatch, t: int | slice, test_mode=False, **kwargs):
+    def forward(
+        self,
+        ep_batch: EpisodeBatch,
+        t: int | slice,
+        test_mode=False,
+        incremental=False,
+        **kwargs,
+    ):
         if isinstance(t, int):
             t = slice(t, t + 1)
 
-        # Algorithm-design polymorphism: at eval (test_mode) the generative path
-        # imputes/corrects not-yet-arrived observations. An explicit obs/z override
-        # (used by retro replay and diagnostics) bypasses it and runs the plain pass.
+        # At evaluation, the generative path fills not-yet-arrived observations.
+        # An explicit obs/z override (used by retro replay and diagnostics) bypasses it and runs the plain pass.
         if (
             self.use_generative_eval
             and test_mode
@@ -77,15 +87,73 @@ class BCRBCMAC(MAC):
             and "z_override" not in kwargs
         ):
             return self._generative_forward(ep_batch, t)
+
+        # This override is used to evaluate reconstruction accuracy during evaluation.
+        # The delayed obs will be replaced with original obs, and the latent will be compared with the latent generated from original obs.
         obs_override = kwargs.pop("obs_override", None)
         obs, last_actions = self._build_inputs(ep_batch, t, obs_override=obs_override)
-        # Build delayed messages (sender observations) for the comm pathway unless a
-        # caller already supplied them. Delay lives in the message content only.
+
+        # Build delayed messages unless a caller already supplied them.
+        # Delay lives in the message content only.
         messages = kwargs.pop("messages", None)
         if self.comm_delay is not None and messages is None:
             raw_obs = cast(torch.Tensor, ep_batch["obs"][:, t]).to(self.device)
             messages = self.comm_delay(raw_obs, start_t=t.start or 0, training=not test_mode)
-        out = self.agent(obs, last_actions, start_t=t.start or 0, messages=messages, **kwargs)
+
+        if incremental:
+            # One-step incremental KV cache for ordinary action sampling.
+            # The caller is responsible for persisting the cache across env steps.
+            out = self.agent(
+                obs,
+                last_actions,
+                start_t=t.start or 0,
+                messages=messages,
+                kv_cache=self._online_kv_cache,
+                use_kv_cache=True,
+                rope_offset=t.start or 0,
+                **kwargs,
+            )
+
+            context_window = self.agent.context_window
+            online_kv_cache = out["kv_cache"]
+
+            if context_window:
+                online_kv_cache = [
+                    (
+                        key[..., -context_window:, :],
+                        value[..., -context_window:, :],
+                    )
+                    for key, value in online_kv_cache
+                ]
+            self._online_kv_cache = [
+                (key.detach(), value.detach())
+                for key, value in online_kv_cache
+            ]
+
+        else:   # batched training forward
+            if (
+                not test_mode
+                and "z_override" not in kwargs
+                and "noisy_z" not in kwargs
+            ):
+                z = self.agent.encode_observations(obs)
+                signal_levels = torch.rand(
+                    *z.shape[:3], 1, 1, device=z.device
+                )
+                noise = torch.randn_like(z)
+                kwargs["z_override"] = z    # Can avoid recomputing z in the agent if already computed here.
+                kwargs["noisy_z"] = (
+                    (1.0 - signal_levels) * noise
+                    + signal_levels * z
+                )
+                kwargs["signal_levels"] = signal_levels
+            out = self.agent(
+                obs,
+                last_actions,
+                start_t=t.start or 0,
+                messages=messages,
+                **kwargs,
+            )
         avail_actions = cast(torch.Tensor, ep_batch["avail_actions"][:, t]).unsqueeze(-2)
         out["q_values"] = out["q_values"].masked_fill(avail_actions == 0, -1e7)
         return out
@@ -97,8 +165,8 @@ class BCRBCMAC(MAC):
         whose generation step falls before ``lo`` (slid out of the window) are dropped
         and left for the world model to generate; this is what bounds eval cost on long
         episodes. Returns the corrected/imputed latent buffer ``z_cur``
-        [B, end-lo, n, num_token, latent_dim], the ``is_real`` mask [B, end-lo, n] (1
-        where a real obs occupies the slot), plus ``obs_aug``/``last_actions`` (over the
+        [B, end-lo, n, num_z_tokens, z_dim], the ``is_real`` mask [B, end-lo, n] (1
+        where a real observation occupies the slot), plus observations/actions (over the
         same window) needed to run the world model over the buffer. Shared by the eval
         forward and diagnostics.
         """
@@ -107,15 +175,20 @@ class BCRBCMAC(MAC):
         length = end - lo
         batch_size = ep_batch.batch_size
         num_agents = self.n_agents
-        num_latent_tokens = self.agent.num_latent_tokens
-        latent_dim = self.agent.latent_dim
+        num_z_tokens = self.agent.num_z_tokens
+        z_dim = self.agent.z_dim
 
-        obs_aug, last_actions = self._build_inputs(ep_batch, win)
-        obs_aug = obs_aug.to(device)
+        observations, last_actions = self._build_inputs(ep_batch, win)
+        observations = observations.to(device)
         last_actions = last_actions.to(device)
-        z_delivered = self.agent.latent_encoder(obs_aug).reshape(
-            batch_size, length, num_agents, num_latent_tokens, latent_dim
-        )
+        z_delivered = self.agent.encode_observations(observations)
+        messages = None
+        if self.comm_delay is not None:
+            messages = self.comm_delay(
+                cast(torch.Tensor, ep_batch["obs"][:, win]).to(device),
+                start_t=lo,
+                training=False,
+            )
 
         gen_t = ep_batch["obs_gen_t"][:, win].to(device).long().squeeze(-1)   # [B, length, n]
 
@@ -130,7 +203,9 @@ class BCRBCMAC(MAC):
         is_real = torch.zeros(batch_size, length, num_agents, device=device)
         arrived = gen_t >= lo                                      # [B, length, n]
         local_gen = (gen_t - lo).clamp(min=0, max=length - 1)
-        idx = local_gen.view(batch_size, length, num_agents, 1, 1).expand(-1, -1, -1, num_latent_tokens, latent_dim)
+        idx = local_gen.view(batch_size, length, num_agents, 1, 1).expand(
+            -1, -1, -1, num_z_tokens, z_dim
+        )
         # Only scatter latents/real-flags for in-window arrived packets; dropped query
         # steps contribute nothing to any generation slot.
         z_src = z_delivered * arrived.view(batch_size, length, num_agents, 1, 1).to(z_delivered.dtype)
@@ -145,30 +220,37 @@ class BCRBCMAC(MAC):
         # growing prefix [0, tau) for every generated slot (O(length^2) per build), we
         # walk the window left-to-right ONCE, threading the per-time-layer KV cache. At
         # each position we (a) finalize that slot's latent — keeping a real arrival or
-        # substituting a world-model sample drawn from the previous step's belief — then
+        # substituting a world-model sample drawn from causal history — then
         # (b) forward just that one step against the cached past (append-only). This is
         # provably identical to the full-prefix forward (the time layer attends each token
         # to its own causal history; appending one step reproduces the dense result), and
         # collapses the rollout to O(length).
         z_cur = z_buf.clone()
         cache = None
-        belief_prev = None  # belief at the previously finalized slot
         for tau in range(length):
             if tau > 0 and (is_real[:, tau] < 1).any():
-                gen_z = self.agent.flow_dynamics.sample(
-                    belief_prev, steps=self.args.bcrbc_flow_steps
-                )  # [B, n, num_token, latent_dim]
+                step_messages = None if messages is None else messages[:, tau:tau + 1]
+                gen_z = self.agent.sample_z(
+                    last_actions[:, tau:tau + 1],
+                    step_messages,
+                    steps=self.args.bcrbc_flow_steps,
+                    start_t=lo + tau,
+                    kv_cache=cache,
+                    rope_offset=lo + tau,
+                )[:, 0]
                 real_mask = is_real[:, tau].view(batch_size, num_agents, 1, 1)
                 z_cur[:, tau] = real_mask * z_cur[:, tau] + (1.0 - real_mask) * gen_z
+            step_messages = None if messages is None else messages[:, tau:tau + 1]
             out = self.agent(
-                obs_aug[:, tau:tau + 1], last_actions[:, tau:tau + 1],
+                observations[:, tau:tau + 1], last_actions[:, tau:tau + 1],
                 start_t=lo + tau, z_override=z_cur[:, tau:tau + 1],
+                messages=step_messages,
                 kv_cache=cache, use_kv_cache=True,
+                rope_offset=lo + tau,
             )
             cache = out["kv_cache"]
-            belief_prev = out["beliefs"][:, 0]  # [B, n, 1, belief_dim] -> belief at slot tau
 
-        return z_cur, is_real, obs_aug, last_actions
+        return z_cur, is_real, observations, last_actions
 
     def _generative_forward(self, ep_batch: EpisodeBatch, t: slice):
         """Eval-time autoregressive imputation + correction-on-arrival (freeze-on-commit).
@@ -182,7 +264,7 @@ class BCRBCMAC(MAC):
         committed (frozen z, and frozen time-layer K/V).
 
         Two equivalent realizations, selected by ``self.use_kv_cache`` (both freeze):
-          * off  -> recompute beliefs over the whole window each step (reusing frozen z for
+          * off  -> recompute agent outputs over the whole window each step (reusing frozen z for
                     committed slots); O(W) transformer work.
           * on   -> persist the committed-prefix K/V and recompute only the tail
                     ``[t-D, t]``; O(D) transformer work. Bit-identical to the off path.
@@ -198,15 +280,22 @@ class BCRBCMAC(MAC):
         device = self.device
         bs = ep_batch.batch_size
         na = self.n_agents
-        nt = self.agent.num_latent_tokens
-        ld = self.agent.latent_dim
+        nt = self.agent.num_z_tokens
+        ld = self.agent.z_dim
 
         win = slice(lo, end)
         length = end - lo
-        obs_aug, last_actions = self._build_inputs(ep_batch, win)
-        obs_aug = obs_aug.to(device)
+        observations, last_actions = self._build_inputs(ep_batch, win)
+        observations = observations.to(device)
         last_actions = last_actions.to(device)
-        z_enc = self.agent.latent_encoder(obs_aug).reshape(bs, length, na, nt, ld)
+        z_enc = self.agent.encode_observations(observations)
+        messages = None
+        if self.comm_delay is not None:
+            messages = self.comm_delay(
+                cast(torch.Tensor, ep_batch["obs"][:, win]).to(device),
+                start_t=lo,
+                training=False,
+            )
         gen_t = ep_batch["obs_gen_t"][:, win].to(device).long().squeeze(-1)  # [B, length, n]
 
         # Real (arrived) latents scattered to their generation slot; is_real marks them.
@@ -235,20 +324,20 @@ class BCRBCMAC(MAC):
 
         if self.use_kv_cache:
             final_out = self._eval_rollout_cached(
-                ep_batch, obs_aug, last_actions, z_cur, is_real,
+                ep_batch, observations, last_actions, messages, z_cur, is_real,
                 lo=lo, end=end, commit_boundary=commit_boundary)
         else:
             final_out = self._eval_rollout_full(
-                ep_batch, obs_aug, last_actions, z_cur, is_real,
+                ep_batch, observations, last_actions, messages, z_cur, is_real,
                 lo=lo, end=end, commit_boundary=commit_boundary)
 
         avail_actions = cast(torch.Tensor, ep_batch["avail_actions"][:, t]).unsqueeze(-2)
         final_out["q_values"] = final_out["q_values"].masked_fill(avail_actions == 0, -1e7)
         return final_out
 
-    def _eval_rollout_full(self, ep_batch, obs_aug, last_actions, z_cur, is_real,
+    def _eval_rollout_full(self, ep_batch, observations, last_actions, messages, z_cur, is_real,
                            *, lo, end, commit_boundary):
-        """Freeze reference: recompute beliefs over the whole window each step.
+        """Freeze reference: recompute agent outputs over the whole window each step.
 
         Walks [lo, end) left-to-right with the within-build incremental KV cache. Committed
         generated slots (< commit_boundary) keep their already-frozen z (seeded by caller);
@@ -257,34 +346,42 @@ class BCRBCMAC(MAC):
         """
         bs, length, na = is_real.shape
         cache = None
-        belief_prev = None
         last_out = None
         for rel in range(length):
             a = lo + rel
             if rel > 0 and a >= commit_boundary and (is_real[:, rel] < 1).any():
-                gen_z = self.agent.flow_dynamics.sample(belief_prev, steps=self.args.bcrbc_flow_steps)
+                step_messages = None if messages is None else messages[:, rel:rel + 1]
+                gen_z = self.agent.sample_z(
+                    last_actions[:, rel:rel + 1],
+                    step_messages,
+                    steps=self.args.bcrbc_flow_steps,
+                    start_t=a,
+                    kv_cache=cache,
+                    rope_offset=a,
+                )[:, 0]
                 m = is_real[:, rel].view(bs, na, 1, 1)
                 z_cur[:, rel] = m * z_cur[:, rel] + (1.0 - m) * gen_z
+            step_messages = None if messages is None else messages[:, rel:rel + 1]
             out = self.agent(
-                obs_aug[:, rel:rel + 1], last_actions[:, rel:rel + 1],
+                observations[:, rel:rel + 1], last_actions[:, rel:rel + 1],
                 start_t=a, z_override=z_cur[:, rel:rel + 1],
+                messages=step_messages,
                 kv_cache=cache, use_kv_cache=True, rope_offset=a,
             )
             cache = out["kv_cache"]
-            belief_prev = out["beliefs"][:, 0]
             last_out = out
         self._eval_state = {"base": lo, "z": z_cur.detach()}
         return {k: v for k, v in last_out.items() if k != "kv_cache"}
 
-    def _eval_rollout_cached(self, ep_batch, obs_aug, last_actions, z_cur, is_real,
+    def _eval_rollout_cached(self, ep_batch, observations, last_actions, messages, z_cur, is_real,
                              *, lo, end, commit_boundary):
         """Committed-prefix cache: persist frozen K/V, recompute only the tail [cb, end).
 
         State carries the frozen committed K/V covering absolute [lo, kv_end), the frozen z
-        buffer, and the belief at the last committed slot (needed to seed tail sampling).
+        buffer, and the agent output at the last committed slot.
         Each step: (1) evict cache entries older than ``lo``; (2) append any slots that have
         newly committed (kv_end -> commit_boundary) to the frozen cache; (3) recompute the
-        mutable tail [commit_boundary, end) against the frozen cache to get the final belief.
+        mutable tail [commit_boundary, end) against the frozen cache.
         """
         bs, length, na = is_real.shape
         st = self._eval_state
@@ -295,7 +392,7 @@ class BCRBCMAC(MAC):
             kv = prev["kv"]
             kv_base = prev["base"]
             kv_end = prev["kv_end"]
-            belief_committed = prev["belief_committed"]
+            agent_outputs_committed = prev["agent_outputs_committed"]
             # Evict committed entries that slid out of the window (< lo).
             drop = lo - kv_base
             if drop > 0 and kv is not None:
@@ -305,94 +402,135 @@ class BCRBCMAC(MAC):
             kv = None
             kv_base = lo
             kv_end = lo
-            belief_committed = None
+            agent_outputs_committed = None
 
         def rel(a):
             return a - lo
 
         # (2) Append newly committed slots [kv_end, commit_boundary) to the frozen cache.
         for a in range(kv_end, commit_boundary):
+            step_messages = None if messages is None else messages[:, rel(a):rel(a) + 1]
             out = self.agent(
-                obs_aug[:, rel(a):rel(a) + 1], last_actions[:, rel(a):rel(a) + 1],
+                observations[:, rel(a):rel(a) + 1], last_actions[:, rel(a):rel(a) + 1],
                 start_t=a, z_override=z_cur[:, rel(a):rel(a) + 1],
+                messages=step_messages,
                 kv_cache=kv, use_kv_cache=True, rope_offset=a,
             )
             kv = out["kv_cache"]
-            belief_committed = out["beliefs"][:, 0]
+            agent_outputs_committed = out["agent_outputs"][:, 0]
         kv_end = max(kv_end, commit_boundary)
 
         # (3) Recompute the mutable tail [commit_boundary, end) against the frozen cache.
         tail_cache = kv
-        belief_prev = belief_committed
         last_out = None
         for a in range(commit_boundary, end):
             r = rel(a)
             if a > lo and (is_real[:, r] < 1).any():
-                # belief_prev is None only at the very first slot of the episode (a==lo==0).
-                gen_z = self.agent.flow_dynamics.sample(belief_prev, steps=self.args.bcrbc_flow_steps)
+                step_messages = None if messages is None else messages[:, r:r + 1]
+                gen_z = self.agent.sample_z(
+                    last_actions[:, r:r + 1],
+                    step_messages,
+                    steps=self.args.bcrbc_flow_steps,
+                    start_t=a,
+                    kv_cache=tail_cache,
+                    rope_offset=a,
+                )[:, 0]
                 m = is_real[:, r].view(bs, na, 1, 1)
                 z_cur[:, r] = m * z_cur[:, r] + (1.0 - m) * gen_z
+            step_messages = None if messages is None else messages[:, r:r + 1]
             out = self.agent(
-                obs_aug[:, r:r + 1], last_actions[:, r:r + 1],
+                observations[:, r:r + 1], last_actions[:, r:r + 1],
                 start_t=a, z_override=z_cur[:, r:r + 1],
+                messages=step_messages,
                 kv_cache=tail_cache, use_kv_cache=True, rope_offset=a,
             )
             tail_cache = out["kv_cache"]
-            belief_prev = out["beliefs"][:, 0]
             last_out = out
 
         self._eval_state = {
             "base": lo, "z": z_cur.detach(),
             "kv": [(k.detach(), v.detach()) for (k, v) in kv] if kv is not None else None,
             "kv_end": kv_end,
-            "belief_committed": belief_committed,
+            "agent_outputs_committed": agent_outputs_committed,
         }
         return {k: v for k, v in last_out.items() if k != "kv_cache"}
 
     @torch.no_grad()
-    def belief_diagnostics(self, ep_batch: EpisodeBatch, full_obs: torch.Tensor) -> dict:
-        """Belief-quality diagnostics (paper Tier-1 metrics).
+    def z_diagnostics(self, ep_batch: EpisodeBatch, full_obs: torch.Tensor) -> dict:
+        """Generated-z diagnostics against full-information observations.
 
         Measures whether generative imputation + correction-on-arrival actually
-        rebuilds the timely belief, by comparing against full-information latents
+        rebuilds timely z by comparing against full-information z
         encoded from the un-delayed observations ``full_obs`` (available only for
         analysis / in simulation, never used for control).
 
         Returns dict of scalars:
-            - diag/latent_recon_error: mean ||z_imputed - z_full||^2 over generated
+            - diag/z_reconstruction_error: mean ||z_imputed - z_full||^2 over generated
               (not-yet-arrived) slots — how well the WM completes missing latents.
             - diag/correction_improvement: on slots later corrected by a delayed
               arrival, how much closer the corrected latent is to the full-info
               latent than the pure-generated estimate (positive = correction helps).
-            - diag/msg_recovery_error: ||recon_msg - teacher_msg||^2 (if comm on).
+            - diag/msg_recovery_error: message reconstruction error.
         """
         device = self.device
         time_steps = full_obs.size(1)
         num_agents = self.n_agents
         batch_size = ep_batch.batch_size
-        num_latent_tokens = self.agent.num_latent_tokens
-        latent_dim = self.agent.latent_dim
-
-        obs_aug_full, last_actions = self._build_inputs(ep_batch, slice(0, time_steps), obs_override=full_obs.to(device))
-        obs_aug_full = obs_aug_full.to(device)
-        last_actions = last_actions.to(device)
-        z_full = self.agent.latent_encoder(obs_aug_full).reshape(
-            batch_size, time_steps, num_agents, num_latent_tokens, latent_dim
+        observations_full, last_actions = self._build_inputs(
+            ep_batch,
+            slice(0, time_steps),
+            obs_override=full_obs.to(device),
         )
+        observations_full = observations_full.to(device)
+        last_actions = last_actions.to(device)
+        z_full = self.agent.encode_observations(observations_full)
 
         z_corr, is_real, _, _ = self._rollout_latent_buffer(ep_batch, time_steps)
 
         # masks carry the token axis (broadcast over it): [B, T, n, 1, 1].
         gen_mask = (is_real < 1).view(batch_size, time_steps, num_agents, 1, 1).float()
         denom = gen_mask.sum().clamp_min(1.0)
-        latent_recon_error = (((z_corr - z_full) ** 2).mean(-1, keepdim=True) * gen_mask).sum() / denom
+        z_reconstruction_error = (
+            ((z_corr - z_full) ** 2).mean(-1, keepdim=True) * gen_mask
+        ).sum() / denom
 
-        out = self.agent(obs_aug_full, last_actions, start_t=0, z_override=z_corr)
-        beliefs = out["beliefs"]
+        messages = None
+        if self.comm_delay is not None:
+            messages = self.comm_delay(
+                full_obs.to(device),
+                start_t=0,
+                training=True,
+            )
+        out = self.agent(
+            observations_full,
+            last_actions,
+            start_t=0,
+            z_override=z_corr,
+            messages=messages,
+        )
         gen_est = z_corr.clone()
-        if time_steps > 1:
-            gen_est[:, 1:] = self.agent.flow_dynamics.sample(
-                beliefs[:, :-1], steps=self.args.bcrbc_flow_steps
+        cache = None
+        for step in range(time_steps - 1):
+            step_messages = None if messages is None else messages[:, step:step + 1]
+            history_output = self.agent(
+                observations_full[:, step:step + 1],
+                last_actions[:, step:step + 1],
+                start_t=step,
+                z_override=z_corr[:, step:step + 1],
+                messages=step_messages,
+                kv_cache=cache,
+                use_kv_cache=True,
+                rope_offset=step,
+            )
+            cache = history_output["kv_cache"]
+            next_messages = None if messages is None else messages[:, step + 1:step + 2]
+            gen_est[:, step + 1:step + 2] = self.agent.sample_z(
+                last_actions[:, step + 1:step + 2],
+                next_messages,
+                steps=self.args.bcrbc_flow_steps,
+                start_t=step + 1,
+                kv_cache=cache,
+                rope_offset=step + 1,
             )
         delay = ep_batch["obs_delay"][:, :time_steps].to(device).squeeze(-1)
         delayed_real = ((is_real > 0).float() * (delay > 0).float()).view(batch_size, time_steps, num_agents, 1, 1)
@@ -402,17 +540,20 @@ class BCRBCMAC(MAC):
         correction_improvement = err_gen - err_corr
 
         diag = {
-            "diag/latent_recon_error": latent_recon_error.item(),
+            "diag/z_reconstruction_error": z_reconstruction_error.item(),
             "diag/correction_improvement": correction_improvement.item(),
         }
         if self.comm_delay is not None:
             teacher = self.comm_delay(full_obs.to(device), start_t=0, training=True)
-            tgt = teacher.mean(dim=3, keepdim=True)  # [B,T,n,1,d] to match recon_msg's vector axis
-            diag["diag/msg_recovery_error"] = ((out["recon_msg"] - tgt) ** 2).mean().item()
+            target_messages = teacher.mean(dim=3, keepdim=True)
+            diag["diag/msg_recovery_error"] = (
+                (out["reconstructed_messages"] - target_messages) ** 2
+            ).mean().item()
         return diag
 
     def init_hidden(self, batch_size):
         self.hidden_states = None
+        self._online_kv_cache = None
         # New episode(s): drop the stateful generative-eval buffer (frozen z + committed KV).
         self._eval_state = None
 
@@ -426,7 +567,12 @@ class BCRBCMAC(MAC):
         self.agent.load_state_dict(other_mac.agent.state_dict())
 
     def _build_agents(self, input_shape):
-        self.agent = BCRBCDynamicsCore(input_shape, self.n_actions, self.n_agents, self.args, dynamic_obs_dim=self.obs_shape)
+        self.agent = BCRBCModel(
+            self.obs_shape,
+            self.n_actions,
+            self.n_agents,
+            self.args,
+        )
 
     def _get_last_actions(self, batch, t: slice, batch_size: int, n_agents: int):
         if t.start == 0:
@@ -438,26 +584,10 @@ class BCRBCMAC(MAC):
         return one_hot(last_actions.long(), num_classes=self.n_actions).float()
 
     def _get_input_shape(self, scheme):
-        input_shape = scheme["obs"]["vshape"]
-        if self.args.obs_agent_id:
-            input_shape += self.n_agents
-        if self.args.obs_last_action:
-            input_shape += scheme["actions_onehot"]["vshape"][0]
-        return input_shape
+        return scheme["obs"]["vshape"]
 
     def _build_inputs(self, batch, t: slice, obs_override: torch.Tensor | None = None):
         obs_source = batch["obs"][:, t] if obs_override is None else obs_override
-        obs_data = obs_source.unsqueeze(-2)
-        batch_size, time_size, n_agents, _, _ = obs_data.shape
+        batch_size, _, n_agents = obs_source.shape[:3]
         last_actions = self._get_last_actions(batch, t, batch_size, n_agents)
-
-        agent_id = torch.arange(self.n_agents, dtype=torch.long, device=batch.device)
-        agent_id_one_hot = one_hot(agent_id, num_classes=self.n_agents).reshape(
-            1, 1, self.n_agents, 1, self.n_agents
-        ).repeat(batch_size, time_size, 1, 1, 1)
-
-        if self.args.obs_agent_id:
-            obs_data = torch.cat([obs_data, agent_id_one_hot], dim=-1)
-        if self.args.obs_last_action:
-            obs_data = torch.cat([obs_data, last_actions], dim=-1)
-        return obs_data.squeeze(-2).float(), last_actions.squeeze(-2).float()   # TODO: remove squeeze
+        return obs_source.float(), last_actions.squeeze(-2).float()

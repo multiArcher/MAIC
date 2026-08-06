@@ -9,7 +9,12 @@ from components.episode_buffer import EpisodeBatch
 from components.standarize_stream import RunningMeanStd
 from controllers.bcrbc_mac import BCRBCMAC
 from learners.learner import Learner
-from modules.bcrbc.losses import dynamics_loss, flow_matching_loss, message_reconstruction_loss, reconstruction_loss, retro_consistency_loss
+from modules.bcrbc.losses import (
+    flow_matching_loss,
+    message_reconstruction_loss,
+    reconstruction_loss,
+    retro_consistency_loss,
+)
 from modules.bcrbc.retro_replay import RetroReplay
 from utils.custom_logging import PyMARLLogger
 from utils.maker import MixerMaker
@@ -138,7 +143,6 @@ class BCRBCLearner(Learner):
         td_loss = (masked_td_error**2).sum() / mixer_mask.sum().clamp_min(1.0)
 
         rec_weight = self.args.rec_loss_weight
-        dyn_weight = self.args.dyn_loss_weight
         flow_weight = self.args.flow_loss_weight
         msg_rec_weight = self.args.msg_rec_loss_weight
 
@@ -150,23 +154,17 @@ class BCRBCLearner(Learner):
             agent_mask = None
 
         if rec_weight > 0:
-            # recon_obs is [b, t, n, 1, obs]; lift the obs target to match.
             rec_loss = reconstruction_loss(
-                mac_out["recon_obs"][:, :-1], batch["obs"][:, :-1].unsqueeze(-2), agent_mask
+                mac_out["reconstructed_observations"][:, :-1],
+                batch["obs"][:, :-1],
+                agent_mask.squeeze(-2),
             )
         else:
             rec_loss = td_loss.new_zeros(())
-        if dyn_weight > 0:
-            latent_mask = mask.expand(-1, -1, mac_out["latents"].size(2))
-            dyn_loss = dynamics_loss(mac_out["pred_latents"], mac_out["latents"], latent_mask)
-        else:
-            dyn_loss = td_loss.new_zeros(())
         if flow_weight > 0:
-            # World model: belief summary at t (context) -> next bottleneck latent z_{t+1}.
             flow_loss = flow_matching_loss(
-                self.mac.agent.flow_dynamics,
-                mac_out["beliefs"][:, :-1],
-                mac_out["z"][:, 1:],
+                mac_out["predicted_z"][:, :-1],
+                mac_out["z"][:, :-1],
                 agent_mask,
             )
         else:
@@ -177,7 +175,9 @@ class BCRBCLearner(Learner):
                     batch["obs"][:, t_slice].to(self.device), start_t=0, training=True
                 )
             msg_rec_loss = message_reconstruction_loss(
-                mac_out["recon_msg"][:, :-1], teacher_msgs[:, :-1], agent_mask
+                mac_out["reconstructed_messages"][:, :-1],
+                teacher_msgs[:, :-1],
+                agent_mask,
             )
         else:
             msg_rec_loss = td_loss.new_zeros(())
@@ -186,12 +186,10 @@ class BCRBCLearner(Learner):
             retro = self.retro_replay.compute(self.mac, batch, t_slice, mac_out)
             retro_time_mask = mask[:, retro["time_slice"]]
             loss_steps = min(retro_time_mask.size(1), retro["retro_mask"].size(1))
-            # corrected/target beliefs carry the vector axis [b,t,n,1,bd]; build the
-            # mask to match [b,t,n,1,1] (retro_mask [b,t,n,1] * time [b,t,1,1] -> [b,t,n,1], +axis).
             retro_mask = (retro["retro_mask"][:, :loss_steps] * retro_time_mask[:, :loss_steps].unsqueeze(2)).unsqueeze(-1)
             retro_loss = retro_consistency_loss(
-                retro["corrected_beliefs"][:, :loss_steps],
-                retro["target_beliefs"][:, :loss_steps],
+                retro["corrected_agent_outputs"][:, :loss_steps],
+                retro["target_agent_outputs"][:, :loss_steps],
                 retro_mask,
             )
         else:
@@ -200,7 +198,6 @@ class BCRBCLearner(Learner):
         total_loss = (
             self.args.td_loss_weight * td_loss
             + rec_weight * rec_loss
-            + dyn_weight * dyn_loss
             + retro_weight * retro_loss
             + msg_rec_weight * msg_rec_loss
             + flow_weight * flow_loss
@@ -226,7 +223,6 @@ class BCRBCLearner(Learner):
                 mask_elems = mixer_mask.sum().item()
                 self.logger.log_stat("loss/td_loss", td_loss.item(), t_env)
                 self.logger.log_stat("loss/rec_loss", rec_loss.item(), t_env)
-                self.logger.log_stat("loss/dyn_loss", dyn_loss.item(), t_env)
                 self.logger.log_stat("loss/retro_loss", retro_loss.item(), t_env)
                 self.logger.log_stat("loss/msg_rec_loss", msg_rec_loss.item(), t_env)
                 self.logger.log_stat("loss/flow_loss", flow_loss.item(), t_env)

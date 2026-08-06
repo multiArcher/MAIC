@@ -44,13 +44,10 @@ evaluation_epsilon: 0.0
 # Every key below is read directly (args.X) with NO code-side default. A missing
 # or mistyped key raises at construction instead of silently using a fallback.
 # ------------------------------------------------------------------------------
-obs_agent_id: True
-obs_last_action: True
-
 bcrbc_d_model: 128
-bcrbc_belief_dim: 128
+bcrbc_agent_output_dim: 128
 bcrbc_z_dim: 64
-bcrbc_n_latent_tokens: 2
+bcrbc_num_z_tokens: 2
 bcrbc_depth: 4
 bcrbc_heads: 4
 bcrbc_dropout: 0.0
@@ -66,7 +63,7 @@ bcrbc_use_comm: True
 comm_gaussian_delay_mean: 1.0
 comm_gaussian_delay_std: 1.0
 bcrbc_max_delay: 16
-# Context window: cap how many recent steps the belief/world-model rollout attends
+# Context window: cap how many recent steps the dynamics rollout attends
 # (temporal attention is banded to the previous W steps; the eval generative rollout
 # is rebuilt over the last W steps). Bounds eval cost from O(T^3) to O(T*W^2) and keeps
 # memory constant on long episodes. Speed<->imputation-quality knob, NOT a hard floor:
@@ -88,34 +85,20 @@ bcrbc_kv_cache: True
 # generates from history, and late arrivals re-roll the latent buffer. Delay is
 # never an input to the network: it is resolved entirely in controller code.
 bcrbc_generative_eval: True
-# NOTE (not yet implemented): a `belief_scheduled_sampling_ratio` ablation knob is
-# planned — fraction of training steps that feed the Q-head a self-generated
-# latent instead of the real belief, to measure the train/eval distribution shift.
-# The learner does not read it yet; add the flag here only when it is wired.
-
 # Loss weights. The generative method is ACTIVE by default:
-#  - flow_loss: the world-model objective (next-latent flow matching). REQUIRED
-#    for the generative eval rollout to produce meaningful latents.
-#  - rec_loss: reconstruct obs from the bottleneck z. LOAD-BEARING here (not just
-#    scaffolding) — z is a bottleneck and obs_decoder is its anchor; at 0 the
-#    latent is unconstrained. Keep > 0 whenever flow_loss > 0.
-#  - dyn_loss: legacy MLP next-latent loss, SUPERSEDED by flow_loss; keep 0.
+#  - flow_loss: dynamics transformer x-prediction of clean z from noisy z.
+#  - rec_loss: reconstruct observations from the tokenizer bottleneck z.
 #  - retro_loss: stage-1 batch patch-and-replay consistency; the generative
 #    rollout is the inference-time mechanism, so keep 0 unless ablating.
-#  - msg_rec: reconstruct each agent's incoming messages from its belief (comm).
+#  - msg_rec: reconstruct each agent's incoming messages from its agent output.
 # For the plain no-delay QMIX baseline, set flow/rec to 0 and bcrbc_generative_eval False.
 td_loss_weight: 1.0
 rec_loss_weight: 1.0
-dyn_loss_weight: 0.0
 retro_loss_weight: 0.0
 msg_rec_loss_weight: 0.0
-# Flow-matching world model (next-latent generator). flow_steps = Euler steps
-# used when sampling at eval. flow_hidden_dim = width of the flow head MLP.
+# Flow-matching world model. flow_steps = Euler steps used when sampling at eval.
 flow_loss_weight: 1.0
 bcrbc_flow_steps: 8
-bcrbc_flow_hidden_dim: 128
-bcrbc_flow_tau_embed_dim: 32
-bcrbc_flow_tau_buckets: 64
 
 # ------------------------------------------------------------------------------
 # --- Learner specific parameters ---
