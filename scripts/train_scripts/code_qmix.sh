@@ -4,23 +4,24 @@
 # ! Should check every time before running.
 # ! ============================================================================
 # Experiment parameters
-EXPERIMENT_NAME=code_qmix  # Experiment name for logging.
+EXPERIMENT_NAME=code_qmix_5m_vs_6m_action0p1_seed2024  # Experiment name for logging.
 CONFIG=code_qmix  # Algorithm config name in src/config/alg
-ENV_CONFIG=sc2  # Environment config in src/config/envs
+ENV_CONFIG=sc2  # 有的地图用v2,5mv6m这样的用sc2
 MAP_NAME=5m_vs_6m  # Map name, e.g., 3m in StarCraftII.
 REPEAT_TIMES=1  # Times to run the experiment.
-
+BATCH_SIZE_RUN=4 # Batch size for each run, which is used to calculate the total batch size as BATCH_SIZE_RUN * REPEAT_TIMES.
 COMM_GAUSSIAN_DELAY_MEAN=0  # delay mean of communication.
 COMM_GAUSSIAN_DELAY_STD=0   # delay std of communication.
 
 TD_LOSS_WEIGHT=1.0        # Weight for TD loss
-ACTION_LOSS_WEIGHT=0    # Weight for inference loss (future action prediction)
-CONTINUE_LOSS_WEIGHT=0    # Weight for continuity loss (intent stability)
-AUX_LOSS_WEIGHT=0     # Weight for KL divergence loss (intent regularization)
-ENTROPY_LOSS_WEIGHT=0  # Weight for attention entropy regularization
+ACTION_LOSS_WEIGHT=0.1    # Weight for inference loss (future action prediction)
+CONTINUE_LOSS_WEIGHT=0.01    # Weight for continuity loss (intent stability)
+AUX_LOSS_WEIGHT=0.01     # Weight for KL divergence loss (intent regularization)
+ENTROPY_LOSS_WEIGHT=0.01  # Weight for attention entropy regularization
 
 PREDICT_K_FUTURE_ACTIONS=5   # K for future action prediction (L_inf)
 TEMPORAL_DISCOUNT_GAMMA_T=0.9  # Used by agent for timeliness alignment
+SEED=2024  # Fixed seed for comparing this small hyperparameter sweep.
 
 # arguments in different runs.
 function update_hyperparams() {
@@ -33,6 +34,7 @@ function update_hyperparams() {
 
     # arguments after "with"
     arg_dict["name"]="name=${EXPERIMENT_NAME}_run$((iter))"  # name in tensorboard, sacred, and wandb
+    arg_dict["seed"]="seed=$SEED"
     arg_dict["comm_gaussian_delay_mean"]="comm_gaussian_delay_mean=$COMM_GAUSSIAN_DELAY_MEAN"
     arg_dict["comm_gaussian_delay_std"]="comm_gaussian_delay_std=$COMM_GAUSSIAN_DELAY_STD"
     arg_dict["batch_size_run"]="batch_size_run=$BATCH_SIZE_RUN"
@@ -52,23 +54,83 @@ function update_hyperparams() {
 # ? Should check before running experiments in a new environment.
 # ? ============================================================================
 # Set environment variable
-CONDA_ENV_NAME="marl_latest"                        # Conda environment name
+CONDA_ENV_NAME="epymarl"                        # Conda environment name
 
 if [ -z "$SC2PATH" ]; then
     export SC2PATH="$HOME/.local/share/StarCraftII"  # Path to StarCraft II game.
 fi
 
+export NO_PROXY="${NO_PROXY:+$NO_PROXY,}127.0.0.1,localhost"
+export no_proxy="${no_proxy:+$no_proxy,}127.0.0.1,localhost"
+
 # Set CUDA devices
 CUDA_DEVICES=0  # Set visible devices for scripts.
 
 # Paths
-WORK_DIR="$HOME/workspace/epymarl_based"    # Path to work dir
+if [[ -d "$HOME/autodl-tmp/epymarl_based" ]]; then
+    WORK_DIR="$HOME/autodl-tmp/epymarl_based"
+else
+    WORK_DIR="$HOME/workspace/epymarl_based"
+fi
 LOG_DIR="$WORK_DIR/log"     # Log directory for logging terminal outputs.
 PYTHON_SCRIPT="src/main.py"     # Path to python script in work dir. Can be absolute or relative to work dir.
 
+SCRIPT_PATH="$(readlink -f "$0")"
+SCREEN_SESSION="${SCREEN_SESSION:-${EXPERIMENT_NAME}}"
+
+if [[ "${IN_TRAIN_SCREEN:-0}" != "1" ]]; then
+    if ! command -v screen >/dev/null 2>&1; then
+        echo "screen not found. Install screen first, then rerun this script." >&2
+        exit 1
+    fi
+    BASE_SCREEN_SESSION="$SCREEN_SESSION"
+    screen_session_idx=1
+    while screen -list | grep -q "\\.${SCREEN_SESSION}[[:space:]]"; do
+        screen_session_idx=$((screen_session_idx + 1))
+        SCREEN_SESSION="${BASE_SCREEN_SESSION}_${screen_session_idx}"
+    done
+
+    screen -dmS "$SCREEN_SESSION" bash -lc "
+        source \"\$HOME/miniconda3/etc/profile.d/conda.sh\" &&
+        conda activate \"$CONDA_ENV_NAME\" &&
+        cd \"$WORK_DIR\" &&
+        IN_TRAIN_SCREEN=1 exec bash \"$SCRIPT_PATH\"
+    "
+
+    echo "Started training in detached screen session: $SCREEN_SESSION"
+    echo "Attach with: screen -r $SCREEN_SESSION"
+    echo "Detach after attaching: Ctrl-a d"
+    echo "List sessions: screen -ls"
+    exit 0
+fi
+
+SMACV2_MAP_PATH="$SC2PATH/Maps/SMAC_Maps/32x32_flat.SC2Map"
+if [[ ! -f "$SMACV2_MAP_PATH" ]]; then
+    echo "$(date +"%Y-%m-%d_%H-%M-%S") | FATAL    | bash         | SMACv2 map not found: $SMACV2_MAP_PATH" >&2
+    echo "Install SMACv2 maps with:" >&2
+    echo "  SC2PATH=\"$SC2PATH\" bash scripts/other_scripts/install_smacv2_maps.sh" >&2
+    exit 1
+fi
+
 # Environment parameters passed to the Python script.
-BUFFER_CPU_ONLY=False
-DEVICE=cuda
+BUFFER_CPU_ONLY="${BUFFER_CPU_ONLY:-False}"
+REQUESTED_DEVICE="${DEVICE:-cuda}"
+if [[ "$REQUESTED_DEVICE" == "cuda" ]]; then
+    if conda run -n "$CONDA_ENV_NAME" --no-capture-output python - <<'PY' >/dev/null 2>&1
+import sys
+import torch
+sys.exit(0 if torch.cuda.is_available() else 1)
+PY
+    then
+        DEVICE=cuda
+    else
+        echo "$(date +"%Y-%m-%d_%H-%M-%S") | WARNING  | bash         | CUDA requested but unavailable; falling back to CPU."
+        DEVICE=cpu
+        BUFFER_CPU_ONLY=True
+    fi
+else
+    DEVICE="$REQUESTED_DEVICE"
+fi
 
 # arguments for different environments.
 function update_env_params() {
@@ -104,6 +166,7 @@ fi
 
 if ! [[ -e $PYTHON_SCRIPT_PATH ]]; then
     echo "$(timestamp) | FATAL    | bash         | Run Failed, $PYTHON_SCRIPT_PATH not found." | tee -a "$LOGFILE"
+    exit 1
 fi
 
 # Create log directory if it doesn't exist
@@ -135,11 +198,11 @@ run_experiment() {
     # Construct command arguments
     local pre_args=""
     local post_args=""
-    
+
     # Iterate over args to construct the command
     for key in "${!args[@]}"; do
         # Skip 'script_path' key
-        if [ "$key" != "script_path" ]; then    
+        if [ "$key" != "script_path" ]; then
             # Append pre_args or post_args based on key
             if [[ "${args[$key]}" == --* ]]; then
                 pre_args+="${args[$key]} "
@@ -153,7 +216,7 @@ run_experiment() {
     echo "$(timestamp) | INFO     | bash         | Command: $cmd" | tee -a "$std_log_path"
     echo "$(timestamp) | INFO     | bash         | $SEPERATOR" | tee -a "$std_log_path"
     echo "$(timestamp) | INFO     | bash         | Starting train process."
-    
+
     # Run the Python script
     if ! eval "$cmd" 1>> "$std_log_path" 2>> "$err_log_path"; then
         echo "$(timestamp) | FATAL    | bash         | Run Failed, see $err_log_path for more information." | tee -a "$std_log_path" "$err_log_path"

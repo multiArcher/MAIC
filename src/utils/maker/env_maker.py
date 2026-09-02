@@ -40,6 +40,24 @@ class EnvMaker(Maker):
         return SMACWrapper(*args, **kwargs)
 
     @staticmethod
+    def make_delayed_sc2(*args, **kwargs) -> MultiAgentEnv:
+        from envs.smac_wrapper import SMACWrapper
+        from envs.wrappers import DelayedObservationWrapper
+
+        kwargs = EnvMaker._check_and_prepare_smac_kwargs(kwargs)
+        delay_kwargs = {
+            "delay_type": kwargs.pop("delay_type", "gaussian"),
+            "delay_mean": kwargs.pop("delay_mean", 0.0),
+            "delay_std": kwargs.pop("delay_std", 0.0),
+            "max_delay": kwargs.pop("max_delay", 0),
+            "delay_per_agent": kwargs.pop("delay_per_agent", True),
+        }
+        # "delay" (the legacy fixed-delay scalar) is dropped: a fixed delay d is N(d, 0).
+        kwargs.pop("delay", None)
+        env = SMACWrapper(*args, **kwargs)
+        return DelayedObservationWrapper(env, **delay_kwargs)
+
+    @staticmethod
     def make_sc2v2(*args, **kwargs) -> MultiAgentEnv:
         if len(args) != 0:
             PyMARLLogger(
@@ -59,3 +77,5 @@ class EnvMaker(Maker):
         from envs.emulate_sc2v2 import EmulateSMACv2
         kwargs = EnvMaker._check_and_prepare_smac_kwargs(kwargs)
         return EmulateSMACv2(*args, **kwargs)
+
+

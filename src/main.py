@@ -78,6 +78,7 @@ def _get_config(params, arg_name, subfolder):
                 "{}.yaml".format(config_name),
             ),
             "r",
+            encoding="utf-8",
         ) as f:
             try:
                 config_dict = yaml.load(f, Loader=yaml.FullLoader)
@@ -102,6 +103,29 @@ def config_copy(config):
         return [config_copy(v) for v in config]
     else:
         return deepcopy(config)
+
+
+def _parse_cli_scalar(value):
+    value = value.strip()
+    if value in {"True", "true"}:
+        return True
+    if value in {"False", "false"}:
+        return False
+    try:
+        if any(ch in value for ch in (".", "e", "E")):
+            return float(value)
+        return int(value)
+    except ValueError:
+        return value.strip("\"'")
+
+
+def _apply_flat_cli_overrides(config, params, keys):
+    for param in params:
+        if "=" not in param:
+            continue
+        key, value = param.split("=", 1)
+        if key in keys:
+            config[key] = _parse_cli_scalar(value)
 
 
 if __name__ == "__main__":
@@ -147,8 +171,29 @@ if __name__ == "__main__":
         elif param.startswith("name"):
             experiment_name = param.split("=")[1]
 
+    loss_weight_keys = [
+        "td_loss_weight",
+        "action_loss_weight",
+        "continue_loss_weight",
+        "aux_loss_weight",
+        "entropy_loss_weight",
+    ]
+    _apply_flat_cli_overrides(config_dict, params, loss_weight_keys)
+    loss_weight_suffix_names = {
+        "td_loss_weight": "td_",
+        "action_loss_weight": "action_",
+        "continue_loss_weight": "continue_",
+        "aux_loss_weight": "aux_",
+        "entropy_loss_weight": "entropy_",
+    }
+    loss_weight_suffix = "".join(
+        f"-{loss_weight_suffix_names[key]}={config_dict[key]}"
+        for key in loss_weight_keys
+        if key in config_dict
+    )
     unique_token = (
         f"{experiment_name}__{map_name}__{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+        f"{loss_weight_suffix}"
     )
 
     config_dict.update({"unique_token": unique_token})

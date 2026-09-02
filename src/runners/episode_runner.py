@@ -80,7 +80,7 @@ class EpisodeRunner(Runner):
             self.mac.eval()
         else:
             self.mac.train()
-            
+
         self.batch = self.new_batch()
         self.env.reset()
         self.t = 0
@@ -101,7 +101,6 @@ class EpisodeRunner(Runner):
                 "avail_actions": [self.env.get_avail_actions()],
                 "obs": [self.env.get_obs()],
             }
-
             self.batch.update(pre_transition_data, ts=self.t)   # update one step state at time t to batch
 
             # Pass the entire batch of experiences up till now to the agents

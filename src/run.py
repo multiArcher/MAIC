@@ -78,11 +78,12 @@ def evaluate_sequential(args, runner):
     state_record_data = []
     obs_record_data = []
     available_actions_data = []
+    n_eval_runs = max(1, (args.test_nepisode + runner.batch_size - 1) // runner.batch_size)
     for runs in tqdm.trange(
-        args.test_nepisode,
+        n_eval_runs,
         mininterval=1,
-        unit="episode",
-        bar_format="{desc}{bar:12} | {n_fmt}/{total_fmt} episodes{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}]{postfix}",
+        unit="batch",
+        bar_format="{desc}{bar:12} | {n_fmt}/{total_fmt} batches{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}]{postfix}",
         desc=f"{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')} | EVALUATE | ",
     ):
         batch = runner.run(test_mode=True)
@@ -205,15 +206,23 @@ def run_sequential(args, logger):
     logger.console_logger.info("-" * 30 + "TRAINING_START" + "-" * 30)
 
     # Delay init tqdm bar
-    tqdm_output = open("/dev/tty", "w") if sys.platform.startswith('linux') else sys.stdout
+    tqdm_output = sys.stdout
+    if sys.platform.startswith("linux"):
+        try:
+            tqdm_output = open("/dev/tty", "w")
+        except OSError:
+            tqdm_output = sys.stdout
     logger.info("Train process started")
     progress_bar = tqdm.tqdm(
         total=(args.t_max),
-        mininterval=1,
+        mininterval=2,
         unit="step",
-        bar_format="{desc}{bar:12} | {n_fmt}/{total_fmt} steps{percentage:3.0f}% [{elapsed}<{remaining} {rate_fmt}]{postfix}",
-        desc=f"{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')} | TRAINING | ",
-        postfix={"episode": 0.0},
+        ncols=120,
+        dynamic_ncols=False,
+        leave=False,
+        bar_format="{desc}{bar:18} {n_fmt}/{total_fmt} {percentage:3.0f}% [{elapsed}<{remaining}, {rate_fmt}] {postfix}",
+        desc="TRAINING",
+        postfix={"ep": 0},
         file=tqdm_output,
     )
     max_winrate = 0
@@ -251,7 +260,7 @@ def run_sequential(args, logger):
             for _ in range(n_test_runs):
                 runner.run(test_mode=True)
 
-        new_winrate = logger.stats["metric/test_battle_won_mean"][-1][1]
+        new_winrate = logger.stats["running/test_battle_won_mean"][-1][1]
         best_model = (new_winrate > max_winrate) or (episode == 0)
         
         if best_model is True:
@@ -338,8 +347,8 @@ def run_sequential(args, logger):
         free_memory = memory_info.free / 1024 ** 3  # free memory in GB
         used_memory = memory_info.used / 1024 ** 3  # used memory in GB
         progress_bar_postfix = {
-            "episode": episode,
-            "memory": f"{used_memory:2.1f}/{free_memory:2.1f}/{total_memory:2.1f} GB"
+            "ep": episode,
+            "mem": f"{used_memory:2.1f}G"
         }
 
         # Watch GPU usage.
@@ -351,14 +360,12 @@ def run_sequential(args, logger):
             gpu_memory_reserved = torch.cuda.memory_reserved() / 1024 ** 3
             progress_bar_postfix.update(
                 {
-                    "gpu": f"{gpu_memory_allocated:2.1f}/{gpu_memory_reserved:2.1f}/{gpu_available_memory:2.1f}/{gpu_total_memory:2.1f} GB"
+                    "gpu": f"{gpu_memory_allocated:2.1f}/{gpu_total_memory:2.1f}G"
                 }
             )
         progress_bar.set_postfix(progress_bar_postfix)
 
-        progress_bar.set_description_str(
-            f"{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')} | TRAINING | "
-        )
+        progress_bar.set_description_str("TRAINING")
         update_steps = runner.t_env - progress_bar.n
         progress_bar.update(min(update_steps, args.t_max - progress_bar.n))
         sys.stdout.flush()
@@ -426,6 +433,9 @@ def parse_buffer_scheme(env_info: dict, common_reward: bool = True):
             "group": "agents",
             "dtype": torch.int,
         },
+        "obs_delay": {"vshape": (1,), "group": "agents", "dtype": torch.long},
+        "obs_gen_t": {"vshape": (1,), "group": "agents", "dtype": torch.long},
+        "obs_fresh_mask": {"vshape": (1,), "group": "agents", "dtype": torch.float32},
         "terminated": {"vshape": (1,), "dtype": torch.uint8},
     }
     # For individual rewards in gymmai reward is of shape (1, n_agents)
@@ -434,3 +444,5 @@ def parse_buffer_scheme(env_info: dict, common_reward: bool = True):
     else:
         scheme["reward"] = {"vshape": (env_info["n_agents"],)}
     return scheme
+
+

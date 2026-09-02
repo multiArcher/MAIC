@@ -75,3 +75,8 @@ class MACMaker(Maker):
         from controllers.kernel_controller import KernelMAC
         return KernelMAC(*args, **kwargs)
     
+    @staticmethod
+    def make_bcrbc_mac(*args, **kwargs) -> MAC:
+        """BC-RBC joint block-causal MAC."""
+        from controllers.bcrbc_mac import BCRBCMAC
+        return BCRBCMAC(*args, **kwargs)

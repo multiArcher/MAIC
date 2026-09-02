@@ -20,9 +20,16 @@ def clip_by_tensor(t, t_min, t_max):
 
 
 def get_parameters_num(param_list):
-    return str(sum(p.numel() for p in param_list) / 1000) + 'K'
-
-
+    numel = sum(p.numel() for p in param_list)
+    
+    if numel < 1e6:
+        return str(round(numel / 1e3, 2)) + 'K'
+    elif numel < 1e9:
+        return str(round(numel / 1e6, 2)) + 'M'
+    else:
+        return str(round(numel / 1e9, 2)) + 'B'
+    
+    
 def init(module, weight_init, bias_init, gain=1):
     weight_init(module.weight.data, gain=gain)
     bias_init(module.bias.data)
