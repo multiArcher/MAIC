@@ -45,7 +45,7 @@ signal_levels = torch.rand(BATCH, TIME, N_AGENTS, 1, 1)
 noise = torch.randn_like(z)
 noisy_z = (1.0 - signal_levels) * noise + signal_levels * z
 
-output = model.predict_z(
+output = model.estimate_clean_z(
     noisy_z,
     previous_actions,
     messages,
@@ -65,13 +65,19 @@ assert "latents" not in output
 assert "pred_latents" not in output
 
 mask = torch.ones(BATCH, TIME, N_AGENTS, 1, 1)
-mask[:, 0] = 0
+mask[:, -1] = 0
 loss = flow_matching_loss(output["predicted_z"], z.detach(), mask)
 assert torch.isfinite(loss)
 changed_first_step = output["predicted_z"].detach().clone()
 changed_first_step[:, 0] += 1000.0
-assert torch.equal(
+assert not torch.equal(
     flow_matching_loss(changed_first_step, z.detach(), mask),
+    flow_matching_loss(output["predicted_z"].detach(), z.detach(), mask),
+)
+changed_masked_step = output["predicted_z"].detach().clone()
+changed_masked_step[:, -1] += 1000.0
+assert torch.equal(
+    flow_matching_loss(changed_masked_step, z.detach(), mask),
     flow_matching_loss(output["predicted_z"].detach(), z.detach(), mask),
 )
 loss.backward()
@@ -81,13 +87,18 @@ assert model.transformer.transformer.layers[0].attention.to_q.weight.grad is not
 with torch.no_grad():
     changed_actions = previous_actions.clone()
     changed_actions[:, 1] = changed_actions[:, 1].roll(1, dims=-1)
-    changed = model.predict_z(noisy_z, changed_actions, messages, signal_levels)
+    changed = model.estimate_clean_z(
+        noisy_z,
+        changed_actions,
+        messages,
+        signal_levels,
+    )
 assert not torch.allclose(output["predicted_z"][:, 1], changed["predicted_z"][:, 1])
 
 with torch.no_grad():
     changed_future_actions = previous_actions.clone()
     changed_future_actions[:, 3:] = changed_future_actions[:, 3:].roll(1, dims=-1)
-    changed_future = model.predict_z(
+    changed_future = model.estimate_clean_z(
         noisy_z,
         changed_future_actions,
         messages,

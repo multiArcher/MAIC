@@ -28,7 +28,13 @@ class CommDelay(nn.Module):
     no per-message delay metadata is produced.
     """
 
-    def __init__(self, n_agents: int, delay_mean: float = 1.0, delay_std: float = 1.0, max_delay: int = 16):
+    def __init__(
+        self,
+        n_agents: int,
+        delay_mean: float = 1.0,
+        delay_std: float = 1.0,
+        max_delay: int = 16,
+    ):
         super().__init__()
         self.n_agents = n_agents
         self.num_senders = max(n_agents - 1, 0)
@@ -46,6 +52,43 @@ class CommDelay(nn.Module):
             delay_per_source=True,
         )
 
+    def _build_payload(self, obs: torch.Tensor) -> torch.Tensor:
+        """Arrange sender observations for every receiver."""
+        return obs[..., self.sender_idx, :]
+
+    def reset(self) -> None:
+        """Start a new online communication episode."""
+        self.delay_model.reset()
+
+    def push_and_query(
+        self,
+        obs: torch.Tensor,
+        t: int,
+        training: bool,
+        max_t: int,
+    ) -> torch.Tensor:
+        """Send one packet per receiver-sender pair and query step ``t``.
+
+        Args:
+            obs: Current sender observations [B, n_agents, obs_dim].
+            t: Absolute environment step.
+            training: Training packets have zero delay.
+            max_t: Episode cache length.
+
+        Returns:
+            Freshest arrived messages [B, n_agents, n_agents - 1, obs_dim].
+        """
+        payload = self._build_payload(obs)
+        self.delay_model.push_step(
+            payload,
+            t,
+            training=training,
+            max_t=max_t,
+            feat_ndims=1,
+        )
+        messages, _, _, _ = self.delay_model.query_step(t)
+        return messages
+
     def forward(self, obs: torch.Tensor, start_t: int = 0, training: bool = True) -> torch.Tensor:
         """Build delayed messages from an observation window.
 
@@ -62,16 +105,13 @@ class CommDelay(nn.Module):
         if self.num_senders == 0:
             return obs.new_zeros(batch_size, time_steps, num_agents, 0, obs_dim)
 
-        # Per-(receiver, sender) message payload at each sent step: the sender's obs.
-        # sender_idx selects, for every receiver, its n-1 senders along the agent axis.
-        sender_j = self.sender_idx.to(obs.device).view(1, 1, num_agents, self.num_senders)
-        sender_j = sender_j.expand(batch_size, time_steps, num_agents, self.num_senders)
-        payload = torch.gather(
-            obs.unsqueeze(2).expand(batch_size, time_steps, num_agents, num_agents, obs_dim),
-            3,
-            sender_j.unsqueeze(-1).expand(batch_size, time_steps, num_agents, self.num_senders, obs_dim),
-        )  # [B, T, n, n-1, obs_dim]
+        payload = self._build_payload(obs)
 
         # Arrival-time delay over source dims (receiver, sender); feat = obs_dim.
-        messages, _, _, _ = self.delay_model(payload, start_t=start_t, training=training, feat_ndims=1)
+        messages, _, _, _ = self.delay_model(
+            payload,
+            start_t=start_t,
+            training=training,
+            feat_ndims=1,
+        )
         return messages

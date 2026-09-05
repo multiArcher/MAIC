@@ -49,6 +49,9 @@ class BCRBCMAC(MAC):
         # Episode-local transformer history for ordinary one-step action sampling.
         # Independent from the correction-aware generative-eval state below.
         self._online_kv_cache = None
+        # Messages delivered by the stateful online communication channel.
+        self._online_message_history = None
+        self._online_message_t = -1
         # Stateful generative-eval buffer, rebuilt lazily and reset in init_hidden.
         self._eval_state = None
 
@@ -65,7 +68,12 @@ class BCRBCMAC(MAC):
             ep_batch, t_ep, test_mode=test_mode, incremental=True
         )
         q_values = mac_out["q_values"].squeeze(1).squeeze(-2)  # [b, n, a]
-        return self.action_selector.select_action(q_values[bs], avail_actions[bs], t_env, test_mode=test_mode)
+        return self.action_selector.select_action(
+            q_values[bs],
+            avail_actions[bs],
+            t_env,
+            test_mode=test_mode,
+        )
 
     def forward(
         self,
@@ -78,24 +86,38 @@ class BCRBCMAC(MAC):
         if isinstance(t, int):
             t = slice(t, t + 1)
 
-        # At evaluation, the generative path fills not-yet-arrived observations.
-        # An explicit obs/z override (used by retro replay and diagnostics) bypasses it and runs the plain pass.
-        if (
+        messages = kwargs.pop("messages", None)
+        generative_eval = (
             self.use_generative_eval
             and test_mode
             and "obs_override" not in kwargs
             and "z_override" not in kwargs
-        ):
+        )
+
+        # Online communication samples every packet delay once and preserves its
+        # arrival across later environment steps. Batched learner forwards keep the
+        # stateless zero-delay path below.
+        if self.comm_delay is not None and (incremental or generative_eval):
+            messages = self._update_online_messages(
+                ep_batch,
+                t,
+                test_mode,
+                messages,
+            )
+
+        # At evaluation, the generative path fills not-yet-arrived observations.
+        # An explicit obs/z override (used by retro replay and diagnostics)
+        # bypasses it and runs the plain pass.
+        if generative_eval:
             return self._generative_forward(ep_batch, t)
 
-        # This override is used to evaluate reconstruction accuracy during evaluation.
-        # The delayed obs will be replaced with original obs, and the latent will be compared with the latent generated from original obs.
+        # This override evaluates reconstruction against the original observation
+        # while the delayed trajectory remains unchanged.
         obs_override = kwargs.pop("obs_override", None)
         obs, last_actions = self._build_inputs(ep_batch, t, obs_override=obs_override)
 
         # Build delayed messages unless a caller already supplied them.
         # Delay lives in the message content only.
-        messages = kwargs.pop("messages", None)
         if self.comm_delay is not None and messages is None:
             raw_obs = cast(torch.Tensor, ep_batch["obs"][:, t]).to(self.device)
             messages = self.comm_delay(raw_obs, start_t=t.start or 0, training=not test_mode)
@@ -141,7 +163,8 @@ class BCRBCMAC(MAC):
                     *z.shape[:3], 1, 1, device=z.device
                 )
                 noise = torch.randn_like(z)
-                kwargs["z_override"] = z    # Can avoid recomputing z in the agent if already computed here.
+                # Reuse the clean encoding already computed for flow matching.
+                kwargs["z_override"] = z
                 kwargs["noisy_z"] = (
                     (1.0 - signal_levels) * noise
                     + signal_levels * z
@@ -208,7 +231,10 @@ class BCRBCMAC(MAC):
         )
         # Only scatter latents/real-flags for in-window arrived packets; dropped query
         # steps contribute nothing to any generation slot.
-        z_src = z_delivered * arrived.view(batch_size, length, num_agents, 1, 1).to(z_delivered.dtype)
+        real_mask = arrived.view(batch_size, length, num_agents, 1, 1).to(
+            z_delivered.dtype
+        )
+        z_src = z_delivered * real_mask
         z_buf.scatter_(1, idx, z_src)
         is_real.scatter_(1, local_gen, arrived.to(is_real.dtype))
 
@@ -228,7 +254,7 @@ class BCRBCMAC(MAC):
         z_cur = z_buf.clone()
         cache = None
         for tau in range(length):
-            if tau > 0 and (is_real[:, tau] < 1).any():
+            if (is_real[:, tau] < 1).any():
                 step_messages = None if messages is None else messages[:, tau:tau + 1]
                 gen_z = self.agent.sample_z(
                     last_actions[:, tau:tau + 1],
@@ -291,11 +317,7 @@ class BCRBCMAC(MAC):
         z_enc = self.agent.encode_observations(observations)
         messages = None
         if self.comm_delay is not None:
-            messages = self.comm_delay(
-                cast(torch.Tensor, ep_batch["obs"][:, win]).to(device),
-                start_t=lo,
-                training=False,
-            )
+            messages = self._online_message_history[:, lo:end]
         gen_t = ep_batch["obs_gen_t"][:, win].to(device).long().squeeze(-1)  # [B, length, n]
 
         # Real (arrived) latents scattered to their generation slot; is_real marks them.
@@ -349,7 +371,7 @@ class BCRBCMAC(MAC):
         last_out = None
         for rel in range(length):
             a = lo + rel
-            if rel > 0 and a >= commit_boundary and (is_real[:, rel] < 1).any():
+            if a >= commit_boundary and (is_real[:, rel] < 1).any():
                 step_messages = None if messages is None else messages[:, rel:rel + 1]
                 gen_z = self.agent.sample_z(
                     last_actions[:, rel:rel + 1],
@@ -425,7 +447,7 @@ class BCRBCMAC(MAC):
         last_out = None
         for a in range(commit_boundary, end):
             r = rel(a)
-            if a > lo and (is_real[:, r] < 1).any():
+            if (is_real[:, r] < 1).any():
                 step_messages = None if messages is None else messages[:, r:r + 1]
                 gen_z = self.agent.sample_z(
                     last_actions[:, r:r + 1],
@@ -533,7 +555,13 @@ class BCRBCMAC(MAC):
                 rope_offset=step + 1,
             )
         delay = ep_batch["obs_delay"][:, :time_steps].to(device).squeeze(-1)
-        delayed_real = ((is_real > 0).float() * (delay > 0).float()).view(batch_size, time_steps, num_agents, 1, 1)
+        delayed_real = ((is_real > 0).float() * (delay > 0).float()).view(
+            batch_size,
+            time_steps,
+            num_agents,
+            1,
+            1,
+        )
         d_denom = delayed_real.sum().clamp_min(1.0)
         err_gen = (((gen_est - z_full) ** 2).mean(-1, keepdim=True) * delayed_real).sum() / d_denom
         err_corr = (((z_corr - z_full) ** 2).mean(-1, keepdim=True) * delayed_real).sum() / d_denom
@@ -554,14 +582,59 @@ class BCRBCMAC(MAC):
     def init_hidden(self, batch_size):
         self.hidden_states = None
         self._online_kv_cache = None
+        self._online_message_history = None
+        self._online_message_t = -1
+        if self.comm_delay is not None:
+            self.comm_delay.reset()
         # New episode(s): drop the stateful generative-eval buffer (frozen z + committed KV).
         self._eval_state = None
+
+    def _update_online_messages(
+        self,
+        ep_batch: EpisodeBatch,
+        t: slice,
+        test_mode: bool,
+        messages: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Advance the online communication channel through the requested step."""
+        start_t = t.start or 0
+        end_t = (t.stop or start_t + 1) - 1
+        if self._online_message_history is None:
+            obs = cast(torch.Tensor, ep_batch["obs"][:, start_t]).to(self.device)
+            self._online_message_history = obs.new_zeros(
+                ep_batch.batch_size,
+                self.args.env_info["episode_limit"] + 1,
+                self.n_agents,
+                self.n_agents - 1,
+                obs.shape[-1],
+            )
+
+        for step in range(self._online_message_t + 1, end_t + 1):
+            obs = cast(torch.Tensor, ep_batch["obs"][:, step]).to(self.device)
+            delivered_messages = self.comm_delay.push_and_query(
+                obs,
+                step,
+                training=not test_mode,
+                max_t=self.args.env_info["episode_limit"] + 1,
+            )
+            self._online_message_history[:, step] = delivered_messages
+
+        if messages is not None:
+            stop_t = start_t + messages.shape[1]
+            self._online_message_history[:, start_t:stop_t] = messages
+
+        self._online_message_t = max(self._online_message_t, end_t)
+        return self._online_message_history[:, start_t:end_t + 1]
 
     def save_models(self, path):
         torch.save(self.agent.state_dict(), f"{path}/agent.th")
 
     def load_models(self, path):
-        self.agent.load_state_dict(torch.load(f"{path}/agent.th", map_location=lambda storage, loc: storage))
+        state = torch.load(
+            f"{path}/agent.th",
+            map_location=lambda storage, loc: storage,
+        )
+        self.agent.load_state_dict(state)
 
     def load_state(self, other_mac):
         self.agent.load_state_dict(other_mac.agent.state_dict())

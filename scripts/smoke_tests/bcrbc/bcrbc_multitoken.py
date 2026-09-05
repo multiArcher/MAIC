@@ -87,7 +87,7 @@ assert torch.isfinite(out["q_values"]).all()
 learner = BCRBCLearner(mac, batch.scheme, Logger(), args)
 learner.train(batch, 0, 0)
 assert mac.agent.z_predictor.weight.grad is not None
-assert mac.agent.tokenizer.signal_projection.weight.grad is not None
+assert mac.agent.dynamics_tokenizer.signal_projection.weight.grad is not None
 
 # generative eval rollout with the token axis
 torch.manual_seed(1)

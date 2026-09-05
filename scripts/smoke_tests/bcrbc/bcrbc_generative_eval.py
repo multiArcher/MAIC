@@ -117,18 +117,75 @@ ir2 = reconstruct_is_real(3)
 assert ir2[0, 1, 0].item() == 1.0, "at t2, generation-slot 1 should be real (correction-on-arrival)"
 
 # Behavioral: Q at the final step changes if we corrupt the real arrival,
-# confirming the corrected real latent actually feeds the rollout.
-out_t2_real = mac.forward(batch, 2, test_mode=True)["q_values"].clone()
+# confirming the corrected real latent actually feeds the rollout. Separate
+# episode state and matched sampling noise isolate the arrival correction.
 batch2, _ = make_batch([0, 0, 0, 1, 3])  # pretend o1 still NOT arrived at t2 (latest gen 0)
-out_t2_nocorr = mac.forward(batch2, 2, test_mode=True)["q_values"]
+mac_t2_real = BCRBCMAC(batch.scheme, groups, args)
+mac_t2_nocorr = BCRBCMAC(batch2.scheme, groups, args)
+mac_t2_real.load_state(mac)
+mac_t2_nocorr.load_state(mac)
+torch.manual_seed(7)
+out_t2_real = mac_t2_real.forward(batch, 2, test_mode=True)["q_values"]
+torch.manual_seed(7)
+out_t2_nocorr = mac_t2_nocorr.forward(batch2, 2, test_mode=True)["q_values"]
 assert not torch.allclose(out_t2_real, out_t2_nocorr, atol=1e-5), \
     "correction-on-arrival (real o1 present) must change Q vs still-missing o1"
 
 # Sanity: full no-delay delivery (every obs fresh) runs and is finite.
 batch_nodelay, _ = make_batch(list(range(TIME)))
+mac_nodelay = BCRBCMAC(batch_nodelay.scheme, groups, args)
 for t in range(TIME):
-    o = mac.forward(batch_nodelay, t, test_mode=True)
+    o = mac_nodelay.forward(batch_nodelay, t, test_mode=True)
     assert torch.isfinite(o["q_values"]).all()
+
+# The initial observation can also be delayed. Missing z_0 must be sampled from
+# noise using the start action and empty causal history, not left as cache zeros.
+batch_initial_missing, _ = make_batch(list(range(TIME)))
+batch_initial_missing["obs"][0, 0] = 0.0
+batch_initial_missing["obs_gen_t"][0, 0] = -1
+batch_initial_missing["obs_delay"][0, 0] = -1
+batch_initial_missing["obs_fresh_mask"][0, 0] = 0.0
+mac_initial_missing = BCRBCMAC(batch_initial_missing.scheme, groups, args)
+torch.manual_seed(11)
+mac_initial_missing.forward(batch_initial_missing, 0, test_mode=True)
+initial_z = mac_initial_missing._eval_state["z"][:, 0]
+assert torch.isfinite(initial_z).all()
+assert torch.count_nonzero(initial_z) > 0
+
+cached_initial_args = make_bcrbc_args(**vars(args))
+cached_initial_args.bcrbc_kv_cache = True
+mac_cached_initial = BCRBCMAC(
+    batch_initial_missing.scheme,
+    groups,
+    cached_initial_args,
+)
+torch.manual_seed(11)
+mac_cached_initial.forward(batch_initial_missing, 0, test_mode=True)
+cached_initial_z = mac_cached_initial._eval_state["z"][:, 0]
+assert torch.isfinite(cached_initial_z).all()
+assert torch.count_nonzero(cached_initial_z) > 0
+
+mac_diagnostic = BCRBCMAC(batch_initial_missing.scheme, groups, args)
+torch.manual_seed(11)
+diagnostic_z, _, _, _ = mac_diagnostic._rollout_latent_buffer(
+    batch_initial_missing,
+    1,
+)
+assert torch.isfinite(diagnostic_z[:, 0]).all()
+assert torch.count_nonzero(diagnostic_z[:, 0]) > 0
+
+# Explicit messages are a valid generative-evaluation input and must be used
+# directly instead of reading an uninitialized online-message history.
+explicit_messages = torch.zeros(BATCH, 1, NA, NA - 1, OBS)
+mac_explicit_messages = BCRBCMAC(batch_initial_missing.scheme, groups, args)
+for step in range(3):
+    explicit_output = mac_explicit_messages.forward(
+        batch_initial_missing,
+        step,
+        test_mode=True,
+        messages=explicit_messages,
+    )
+    assert torch.isfinite(explicit_output["q_values"]).all()
 
 # At one query step, a real packet for one agent must not be replaced while
 # missing agents at the same generation slot are sampled.
@@ -155,6 +212,7 @@ cache_args = make_bcrbc_args(
     env_info={"episode_limit": TIME - 1},
     bcrbc_generative_eval=True,
     bcrbc_flow_steps=4,
+    bcrbc_depth=4,
     bcrbc_max_delay=1,
     bcrbc_context_window=4,
     bcrbc_use_comm=False,

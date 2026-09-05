@@ -9,7 +9,6 @@ repo_root = Path(__file__).parents[3]
 sys.path.insert(0, str(repo_root / "src"))
 
 from modules.bcrbc.agent_readout import AgentReadout
-from modules.bcrbc.block_builder import BlockBuilder
 from modules.bcrbc.block_causal_transformer import BlockCausalTransformer
 from modules.bcrbc.dynamics_tokenizer import DynamicsTokenizer
 
@@ -29,8 +28,6 @@ tokenizer = DynamicsTokenizer(
     message_dim=16,
     num_z_tokens=num_z_tokens,
 )
-block_builder = BlockBuilder(tokenizer)
-
 expected_type_ids = torch.tensor(
     [
         tokenizer.ACTION_TOKEN,
@@ -43,8 +40,8 @@ expected_type_ids = torch.tensor(
     ]
 )
 assert torch.equal(tokenizer.token_type_ids.cpu(), expected_type_ids)
-assert block_builder.z_slice == slice(2, 4)
-assert block_builder.query_slice == slice(6, 7)
+assert tokenizer.z_slice == slice(2, 4)
+assert tokenizer.query_slice == slice(6, 7)
 
 noisy_z = torch.randn(
     batch_size,
@@ -60,7 +57,7 @@ previous_actions = torch.nn.functional.one_hot(
 signal_levels = torch.rand(batch_size, time_steps, n_agents, 1, 1)
 messages = torch.randn(batch_size, time_steps, n_agents, n_agents - 1, 16)
 
-tokens = block_builder(
+tokens = tokenizer(
     noisy_z,
     previous_actions,
     signal_levels,
@@ -80,13 +77,13 @@ transformer = BlockCausalTransformer(
     num_transformer_layers=2,
     num_attention_heads=4,
     dropout=0.0,
-    agent_slice=block_builder.query_slice,
+    agent_slice=tokenizer.query_slice,
 )
 readout = AgentReadout(model_hidden_dim, agent_output_dim)
 
 with torch.no_grad():
     transformer_outputs = transformer(tokens)
-    agent_outputs = readout(transformer_outputs, block_builder.query_slice)
+    agent_outputs = readout(transformer_outputs, tokenizer.query_slice)
 
 assert transformer_outputs.shape == tokens.shape
 assert agent_outputs.shape == (
@@ -105,10 +102,10 @@ with torch.no_grad():
 assert torch.equal(unchanged_outputs[:, :, 0], changed_outputs[:, :, 0])
 
 changed_agent_token = tokens.clone()
-changed_agent_token[..., block_builder.query_slice, :] += 10.0
+changed_agent_token[..., tokenizer.query_slice, :] += 10.0
 with torch.no_grad():
-    original_z_outputs = transformer(tokens)[..., block_builder.z_slice, :]
-    changed_z_outputs = transformer(changed_agent_token)[..., block_builder.z_slice, :]
+    original_z_outputs = transformer(tokens)[..., tokenizer.z_slice, :]
+    changed_z_outputs = transformer(changed_agent_token)[..., tokenizer.z_slice, :]
 assert torch.equal(original_z_outputs, changed_z_outputs)
 
 print("bcrbc token schema ok")
