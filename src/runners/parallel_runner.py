@@ -67,6 +67,7 @@ class ParallelRunner(Runner):
         self.test_stats = {}
 
         self.log_train_stats_t = -100000
+        self.diagnostics = None
 
     def setup(self, scheme, groups, preprocess, mac):
         self.new_batch = partial(
@@ -132,6 +133,7 @@ class ParallelRunner(Runner):
                 np.zeros(self.args.n_agents) for _ in range(self.batch_size)
             ]
         episode_lengths = [0 for _ in range(self.batch_size)]
+        episode_wins = [False for _ in range(self.batch_size)]
         self.mac.init_hidden(batch_size=self.batch_size)
         terminated = [False for _ in range(self.batch_size)]
         envs_not_terminated = [
@@ -150,6 +152,10 @@ class ParallelRunner(Runner):
                 test_mode=test_mode,
             )
             cpu_actions = actions.to("cpu").numpy()
+
+            if self.diagnostics is not None:
+                active = [i for i in envs_not_terminated if not terminated[i]]
+                self.diagnostics.record(self, active)
 
             # Update the actions taken
             actions_chosen = {"actions": actions.unsqueeze(1)}
@@ -195,6 +201,7 @@ class ParallelRunner(Runner):
                     env_terminated = False
                     if data["terminated"]:
                         final_env_infos.append(data["info"])
+                        episode_wins[idx] = bool(data["info"].get("battle_won", False))
                     if data["terminated"] and not data["info"].get(
                         "episode_limit", False
                     ):
@@ -252,6 +259,9 @@ class ParallelRunner(Runner):
         cur_stats["ep_length"] = sum(episode_lengths) + cur_stats.get("ep_length", 0)
 
         cur_returns.extend(episode_returns)
+
+        if self.diagnostics is not None:
+            self.diagnostics.finish(episode_returns, episode_lengths, episode_wins)
 
         n_test_runs = (
             max(1, self.args.test_nepisode // self.batch_size) * self.batch_size
@@ -361,6 +371,9 @@ def env_worker(remote, env_fn, seed):
             remote.send(env.get_env_info())
         elif cmd == "get_stats":
             remote.send(env.get_stats())
+        elif cmd == "get_fresh_obs":
+            # Oracle observations leave the worker only for offline scoring.
+            remote.send(env.env.get_obs())
         elif cmd == "render":
             env.render()
         elif cmd == "save_replay":

@@ -67,6 +67,8 @@ class BCRBCMAC(MAC):
         mac_out = self.forward(
             ep_batch, t_ep, test_mode=test_mode, incremental=True
         )
+        # Snapshot the latent actually used for this decision, before late arrivals.
+        self.decision_z = mac_out["z"].detach()
         q_values = mac_out["q_values"].squeeze(1).squeeze(-2)  # [b, n, a]
         return self.action_selector.select_action(
             q_values[bs],
