@@ -17,6 +17,9 @@ class Logger:
     def info(self, *args, **kwargs):
         pass
 
+    def log_stat(self, key, value, step):
+        pass
+
 
 BATCH_SIZE = 2
 TIME_SIZE = 6

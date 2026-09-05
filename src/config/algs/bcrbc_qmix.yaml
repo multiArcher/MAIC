@@ -3,9 +3,8 @@
 # ------------------------------------------------------------------------------
 name: "bcrbc_qmix"
 
-# Keep the validated episode rollout until delayed parallel execution is audited.
-runner: "delayed_episode"
-batch_size_run: 1
+runner: "delayed_parallel"
+batch_size_run: 8
 
 entity_scheme: False
 

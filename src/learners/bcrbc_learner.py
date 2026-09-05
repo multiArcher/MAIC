@@ -16,7 +16,6 @@ from modules.bcrbc.losses import (
     retro_consistency_loss,
 )
 from modules.bcrbc.retro_replay import RetroReplay
-from utils.custom_logging import PyMARLLogger
 from utils.maker import MixerMaker
 from utils.rl_utils import new_build_td_lambda_targets
 from utils.th_utils import get_parameters_num
@@ -26,7 +25,7 @@ class BCRBCLearner(Learner):
     """QMIX learner for no-delay BC-RBC with optional auxiliary losses."""
 
     def __init__(self, mac: BCRBCMAC, scheme, logger, args):
-        self.logger = PyMARLLogger("main").get_child_logger("BCRBCLearner")
+        self.logger = logger
         super().__init__()
         self.args = args
         self.device = args.device
@@ -88,11 +87,13 @@ class BCRBCLearner(Learner):
         actions = cast(torch.Tensor, batch["actions"][:, :-1])
         terminated = cast(torch.Tensor, batch["terminated"][:, :-1]).float()
         mask = cast(torch.Tensor, batch["filled"][:, :-1]).float()
+        # A transition needs both states; the final bootstrap state has no reward.
+        mask *= batch["filled"][:, 1:]
         mask[:, 1:] = mask[:, 1:] * (1 - terminated[:, :-1])
         avail_actions = cast(torch.Tensor, batch["avail_actions"])
 
         if self.args.standardise_rewards:
-            self.rew_ms.update(rewards)
+            self.rew_ms.update(rewards[mask.squeeze(-1).bool()])
             rewards = (rewards - self.rew_ms.mean) / torch.sqrt(self.rew_ms.var)
 
         self.mac.agent.train()

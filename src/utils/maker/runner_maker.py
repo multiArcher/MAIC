@@ -20,3 +20,8 @@ class RunnerMaker(Maker):
     def make_parallel(args, logger) -> Runner:
         from runners.parallel_runner import ParallelRunner
         return ParallelRunner(args, logger)
+
+    @staticmethod
+    def make_delayed_parallel(args, logger) -> Runner:
+        from runners.delayed_parallel_runner import DelayedParallelRunner
+        return DelayedParallelRunner(args, logger)

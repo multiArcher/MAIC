@@ -25,6 +25,9 @@ class Logger:
     def info(self, *args, **kwargs):
         pass
 
+    def log_stat(self, key, value, step):
+        pass
+
 
 BATCH, TIME, NA, OBS, NACT, STATE = 2, 6, 3, 7, 4, 9
 Z_DIM = 8

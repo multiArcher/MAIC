@@ -2,23 +2,12 @@ from functools import partial
 from multiprocessing import Pipe, Process
 
 import numpy as np
+import torch
 
 from components.episode_buffer import EpisodeBatch
 from utils.maker import EnvMaker
 from runners.runner import Runner
-
-def get_obs_delay_data(env, n_agents, t):
-    if hasattr(env, "get_obs_delay"):
-        delay = np.asarray(env.get_obs_delay(), dtype=np.int64).reshape(n_agents, 1)
-    else:
-        delay = np.zeros((n_agents, 1), dtype=np.int64)
-    if hasattr(env, "get_obs_generation_time"):
-        gen_t = np.asarray(env.get_obs_generation_time(), dtype=np.int64).reshape(n_agents, 1)
-    else:
-        gen_t = np.full((n_agents, 1), t, dtype=np.int64)
-    # Unarrived slots (gen_t < 0) are never fresh; an arrived slot is fresh iff delay 0.
-    fresh = ((gen_t >= 0) & (delay == 0)).astype(np.float32)
-    return {"obs_delay": delay, "obs_gen_t": gen_t, "obs_fresh_mask": fresh}
+from runners.delayed_episode_runner import get_obs_delay_data
 
 
 # Based (very) heavily on SubprocVecEnv from OpenAI Baselines
@@ -50,10 +39,11 @@ class ParallelRunner(Runner):
             env_args[i]["seed"] += i
             env_args[i]["common_reward"] = self.args.common_reward
             env_args[i]["reward_scalarisation"] = self.args.reward_scalarisation
+            env_args[i]["args"] = self.args
         self.ps = [
             Process(
                 target=env_worker,
-                args=(worker_conn, CloudpickleWrapper(partial(env_fn, **env_arg))),
+                args=(worker_conn, CloudpickleWrapper(partial(env_fn, **env_arg)), env_arg["seed"]),
             )
             for env_arg, worker_conn in zip(env_args, self.worker_conns)
         ]
@@ -306,12 +296,15 @@ class ParallelRunner(Runner):
         for k, v in stats.items():
             if k != "n_episodes":
                 self.logger.log_stat(
-                    "metric/" + prefix + k + "_mean", v / stats["n_episodes"], self.t_env
+                    "running/" + prefix + k + "_mean", v / stats["n_episodes"], self.t_env
                 )
         stats.clear()
 
 
-def env_worker(remote, env_fn):
+def env_worker(remote, env_fn, seed):
+    # DelayModel samples with torch; each worker needs its own reproducible stream.
+    np.random.seed(seed)
+    torch.manual_seed(seed)
     # Make environment
     env = env_fn.x()
     env_info = env.get_env_info()

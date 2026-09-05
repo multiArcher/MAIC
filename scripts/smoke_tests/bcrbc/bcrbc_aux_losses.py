@@ -21,8 +21,14 @@ from scripts.smoke_tests.bcrbc._bcrbc_args import make_bcrbc_args, delay_scheme
 
 
 class Logger:
+    def __init__(self):
+        self.stats = {}
+
     def info(self, *args, **kwargs):
         pass
+
+    def log_stat(self, key, value, step):
+        self.stats[key] = value
 
 
 BATCH_SIZE = 2
@@ -118,8 +124,12 @@ zr = message_reconstruction_loss(
 assert zr.item() == 0.0, "message rec with no senders must be exactly zero"
 
 # full learner train step with every aux loss enabled; all params should get grad
-learner = BCRBCLearner(mac, batch.scheme, Logger(), args)
+logger = Logger()
+learner = BCRBCLearner(mac, batch.scheme, logger, args)
 learner.train(batch, 0, 0)
+assert learner.logger is logger
+for loss_name in ("td_loss", "rec_loss", "flow_loss", "msg_rec_loss", "retro_loss", "total_loss"):
+    assert torch.isfinite(torch.tensor(logger.stats[f"loss/{loss_name}"]))
 assert mac.agent.message_decoder[1].weight.grad is not None
 assert torch.isfinite(mac.agent.message_decoder[1].weight.grad).all()
 
