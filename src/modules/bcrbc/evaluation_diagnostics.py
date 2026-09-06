@@ -11,6 +11,7 @@ class EvaluationDiagnostics:
         self.output_path = output_path
         self.batch_size = batch_size
         self.episode_index = 0
+        self.totals = {}
         self.sums = [dict() for _ in range(batch_size)]
         self.encoder_caches = [None] * batch_size
         self.true_decoder_caches = [None] * batch_size
@@ -19,9 +20,7 @@ class EvaluationDiagnostics:
     def record(self, runner, active):
         if not active:
             return
-        for index in active:
-            runner.parent_conns[index].send(("get_fresh_obs", None))
-        fresh = [runner.parent_conns[index].recv() for index in active]
+        fresh = runner.get_fresh_obs(active)
         mac = runner.mac
         observations = torch.as_tensor(
             np.asarray(fresh), device=mac.device, dtype=torch.float32
@@ -73,18 +72,41 @@ class EvaluationDiagnostics:
 
     def finish(self, returns, lengths, wins):
         # Keep raw sums/counts: aggregation must not average per-episode MSEs.
-        with self.output_path.open("a", encoding="utf-8") as stream:
-            for index, totals in enumerate(self.sums):
-                row = {
-                    "episode": self.episode_index,
-                    "environment": index,
-                    "return": float(returns[index]),
-                    "length": lengths[index],
-                    "won": wins[index],
-                    **totals,
-                }
-                stream.write(json.dumps(row) + "\n")
-                self.episode_index += 1
+        for totals in self.sums:
+            for key, value in totals.items():
+                self.totals[key] = self.totals.get(key, 0) + value
+        # Standalone evaluation keeps episode records; training only logs scalars.
+        if self.output_path is not None:
+            with self.output_path.open("a", encoding="utf-8") as stream:
+                for index, totals in enumerate(self.sums):
+                    row = {
+                        "episode": self.episode_index,
+                        "environment": index,
+                        "return": float(returns[index]),
+                        "length": lengths[index],
+                        "won": wins[index],
+                        **totals,
+                    }
+                    stream.write(json.dumps(row) + "\n")
+                    self.episode_index += 1
         self.sums = [dict() for _ in range(self.batch_size)]
         self.encoder_caches = [None] * self.batch_size
         self.true_decoder_caches = [None] * self.batch_size
+
+    def log(self, logger, t_env):
+        """Log sample-weighted errors over all batches in this test interval."""
+        for key, value in self.totals.items():
+            if key.endswith("_sum"):
+                # Group names also contain underscores (e.g. never_arrived).
+                for group in ("missing", "never_arrived", "stale_arrived"):
+                    if key.startswith(group + "_"):
+                        count = self.totals[f"{group}_count"]
+                        break
+                if count == 0:
+                    continue
+                name = key[:-4]
+                value /= count
+            else:
+                name = key
+            logger.log_stat(f"test_completion/{name}", value, t_env)
+        self.totals.clear()

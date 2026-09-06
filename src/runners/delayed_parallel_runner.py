@@ -80,12 +80,20 @@ class DelayedParallelRunner(Runner):
             device=self.args.device,
         )
         self.mac = mac
+        self.diagnostics = getattr(mac, "evaluation_diagnostics", None)
         self.scheme = scheme
         self.groups = groups
         self.preprocess = preprocess
 
     def get_env_info(self):
         return self.env_info
+
+    def get_fresh_obs(self, active):
+        # Oracle observations are used only by the diagnostic scorer.
+        for index in active:
+            self.parent_conns[index].send(("get_fresh_obs", None))
+        observations = [self.parent_conns[index].recv() for index in active]
+        return observations
 
     def save_replay(self):
         self.parent_conns[0].send(("save_replay", None))
@@ -153,7 +161,7 @@ class DelayedParallelRunner(Runner):
             )
             cpu_actions = actions.to("cpu").numpy()
 
-            if self.diagnostics is not None:
+            if test_mode and self.diagnostics is not None:
                 active = [i for i in envs_not_terminated if not terminated[i]]
                 self.diagnostics.record(self, active)
 
@@ -260,7 +268,7 @@ class DelayedParallelRunner(Runner):
 
         cur_returns.extend(episode_returns)
 
-        if self.diagnostics is not None:
+        if test_mode and self.diagnostics is not None:
             self.diagnostics.finish(episode_returns, episode_lengths, episode_wins)
 
         n_test_runs = (
@@ -268,6 +276,8 @@ class DelayedParallelRunner(Runner):
         )
         if test_mode and (len(self.test_returns) == n_test_runs):
             self._log(cur_returns, cur_stats, log_prefix)
+            if self.diagnostics is not None:
+                self.diagnostics.log(self.logger, self.t_env)
         elif self.t_env - self.log_train_stats_t >= self.args.runner_log_interval:
             self._log(cur_returns, cur_stats, log_prefix)
             if hasattr(self.mac.action_selector, "epsilon"):
@@ -372,7 +382,7 @@ def env_worker(remote, env_fn, seed):
         elif cmd == "get_stats":
             remote.send(env.get_stats())
         elif cmd == "get_fresh_obs":
-            # Oracle observations leave the worker only for offline scoring.
+            # Oracle observations leave the worker only for diagnostic scoring.
             remote.send(env.env.get_obs())
         elif cmd == "render":
             env.render()
