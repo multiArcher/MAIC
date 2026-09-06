@@ -1,4 +1,4 @@
-"""Aggregate raw evaluation sums and draw non-interpolated delay heatmaps."""
+"""Aggregate completed on/off grid results and draw delay heatmaps."""
 
 import argparse
 import json
@@ -43,8 +43,9 @@ def main():
         aggregates.append(row)
     table = pd.DataFrame(aggregates)
     table.to_csv(options.output / "aggregate.csv", index=False)
-    means = [i / 5 for i in range(-5, 6)]
     grid = table.dropna(subset=["obs_mean", "comm_mean"])
+    means = sorted(set(grid["obs_mean"]) | set(grid["comm_mean"]))
+    modes = sorted(grid["completion"].unique())
     plt.rcParams.update({"font.size": 9, "axes.titlesize": 10})
     figures = options.output / "figures"
     figures.mkdir(exist_ok=True)
@@ -53,7 +54,7 @@ def main():
                "missing_stale_obs_mse", "missing_completion_gain"]
     for metric in metrics:
         matrices = []
-        for completion in (False, True):
+        for completion in modes:
             subset = grid[grid["completion"] == completion]
             matrix = subset.pivot(index="obs_mean", columns="comm_mean", values=metric)
             matrices.append(matrix.reindex(index=means, columns=means).to_numpy())
@@ -61,23 +62,32 @@ def main():
         if not finite.size:
             continue
         low, high = (0, 1) if metric == "win_rate" else (finite.min(), finite.max())
-        fig, axes = plt.subplots(1, 3, figsize=(15, 4.6), layout="constrained")
-        for axis, matrix, title in zip(axes[:2], matrices, ["Completion off", "Completion on"]):
+        panels = 3 if len(modes) == 2 else 1
+        fig, axes = plt.subplots(
+            1, panels, figsize=(5 * panels, 4.6), layout="constrained",
+            squeeze=False,
+        )
+        axes = axes[0]
+        titles = ["Completion on" if mode else "Completion off" for mode in modes]
+        for axis, matrix, title in zip(axes, matrices, titles):
             picture = axis.imshow(matrix, origin="lower", interpolation="none",
                                   cmap="cividis", vmin=low, vmax=high)
             axis.set_title(title)
             fig.colorbar(picture, ax=axis)
-        difference = matrices[1] - matrices[0]
-        bound = np.nanmax(np.abs(difference))
-        if not np.isfinite(bound) or bound == 0:
-            bound = 1.0
-        picture = axes[2].imshow(difference, origin="lower", interpolation="none",
-                                 cmap="PuOr", vmin=-bound, vmax=bound)
-        axes[2].set_title("On minus off")
-        fig.colorbar(picture, ax=axes[2])
+        if len(modes) == 2:
+            difference = matrices[1] - matrices[0]
+            bound = np.nanmax(np.abs(difference))
+            if not np.isfinite(bound) or bound == 0:
+                bound = 1.0
+            picture = axes[2].imshow(
+                difference, origin="lower", interpolation="none",
+                cmap="PuOr", vmin=-bound, vmax=bound,
+            )
+            axes[2].set_title("On minus off")
+            fig.colorbar(picture, ax=axes[2])
         for axis in axes:
-            axis.set_xticks(range(11), [f"{mu:g}" for mu in means], rotation=45)
-            axis.set_yticks(range(11), [f"{mu:g}" for mu in means])
+            axis.set_xticks(range(len(means)), [f"{mu:g}" for mu in means], rotation=45)
+            axis.set_yticks(range(len(means)), [f"{mu:g}" for mu in means])
             axis.set_xlabel("Communication Gaussian mean")
             axis.set_ylabel("Observation Gaussian mean")
         fig.suptitle(metric + " | sigma=1; blank cells are unavailable")

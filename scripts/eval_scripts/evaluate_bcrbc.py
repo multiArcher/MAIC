@@ -1,18 +1,13 @@
 """Fixed-checkpoint delay sweep; sequential jobs with parallel SC2 episodes."""
 
-import argparse
-import csv
-import itertools
 import json
-import os
 from pathlib import Path
 import random
-import subprocess
 import sys
 from types import SimpleNamespace
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class EvaluationLogger:
@@ -98,66 +93,6 @@ def evaluate_job(job_path):
     (job_path.parent / "result.json").write_text(json.dumps(result, indent=2))
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=Path)
-    parser.add_argument("--checkpoint", type=Path)
-    parser.add_argument("--output", type=Path)
-    parser.add_argument("--parallel", type=int, default=4)
-    parser.add_argument("--episodes", type=int, default=32)
-    parser.add_argument("--seeds", type=int, nargs="+", default=[101, 102, 103])
-    parser.add_argument("--pilot", action="store_true")
-    parser.add_argument("--job", type=Path)
-    options = parser.parse_args()
-    if options.job:
-        evaluate_job(options.job)
-        return
-    output = options.output.resolve()
-    output.mkdir(parents=True, exist_ok=True)
-    means = [tick / 5 for tick in range(-5, 6)]
-    conditions = list(itertools.product(means, means))
-    conditions += [(mu, None) for mu in means]
-    conditions += [(None, mu) for mu in means] + [(None, None)]
-    if options.pilot:
-        conditions = [(None, None), (-0.4, -0.4)]
-    jobs = []
-    for index, ((obs_mean, comm_mean), completion, seed) in enumerate(
-        itertools.product(conditions, (False, True), options.seeds)
-    ):
-        job = {
-            "config": str(options.config.resolve()),
-            "checkpoint": str(options.checkpoint.resolve()),
-            "obs_mean": obs_mean, "comm_mean": comm_mean,
-            "completion": completion, "seed": seed,
-            "parallel": options.parallel, "episodes": options.episodes,
-        }
-        directory = output / f"job_{index:04d}"
-        directory.mkdir(exist_ok=True)
-        path = directory / "job.json"
-        path.write_text(json.dumps(job, indent=2))
-        jobs.append(path)
-    (output / "manifest.json").write_text(json.dumps(
-        [json.loads(path.read_text()) for path in jobs], indent=2
-    ))
-    environment = dict(os.environ, OMP_NUM_THREADS="1", MKL_NUM_THREADS="1")
-    for index, path in enumerate(jobs):
-        result_path = path.parent / "result.json"
-        if not result_path.exists():
-            print(f"Running {index + 1}/{len(jobs)}: {path.parent.name}", flush=True)
-            with (path.parent / "run.log").open("w") as log:
-                subprocess.run(
-                    [sys.executable, str(Path(__file__).resolve()), "--job", str(path)],
-                    cwd=ROOT, env=environment, stdout=log,
-                    stderr=subprocess.STDOUT, check=True,
-                )
-        results = [json.loads(p.read_text()) for p in output.glob("job_*/result.json")]
-        fields = sorted(set().union(*(row.keys() for row in results)))
-        with (output / "results.csv").open("w", newline="") as stream:
-            writer = csv.DictWriter(stream, fieldnames=fields)
-            writer.writeheader()
-            writer.writerows(results)
-    print("Evaluation grid completed", flush=True)
-
 
 if __name__ == "__main__":
-    main()
+    evaluate_job(Path(sys.argv[1]))
