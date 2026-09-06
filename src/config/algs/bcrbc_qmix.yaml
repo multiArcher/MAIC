@@ -51,6 +51,8 @@ bcrbc_num_z_tokens: 2
 bcrbc_depth: 4
 bcrbc_heads: 4
 bcrbc_dropout: 0.0
+# Sample p uniformly, then mask each observation block independently with p.
+bcrbc_mask_probability_max: 0.9
 bcrbc_q_hidden_dim: 128
 bcrbc_retro_max_replay_len: 0
 
@@ -78,7 +80,7 @@ bcrbc_context_window: 48
 # Persistent across-step KV cache for the eval generative rollout: cache the frozen
 # committed prefix [lo, t - max_delay) between env steps so each step is an O(W) append
 # plus an O(max_delay^2) tail recompute, instead of re-walking the whole window O(W^2).
-# Provably bit-identical to the uncached rollout (asserted in smokes). 0/False = off.
+# Cache regression compares against uncached rollout numerically. False = off.
 bcrbc_kv_cache: True
 
 # --- DCRBC v2 generative world model (the method) ---

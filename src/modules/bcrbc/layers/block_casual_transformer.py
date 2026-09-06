@@ -165,6 +165,45 @@ class BlockCasualTransformer(nn.Module):
 
         self.final_norm = nn.RMSNorm(dim, device=device)
 
+    def forward_conditioned(self, queries, history, rope_offset=0):
+        """Denoise each query against strictly past conditioning blocks.
+
+        History never reads queries. Query k reads history < k and its own
+        block only, so clean targets in other queries cannot leak into k.
+        This is the batched equivalent of querying then committing history.
+        """
+        time_steps = queries.shape[-4]
+        positions = torch.arange(time_steps, device=queries.device)
+        distance = positions[:, None] - positions[None, :]
+        causal = distance >= 0
+        past = distance > 0
+        if self.context_window is not None:
+            causal = causal & (distance < self.context_window)
+            past = past & (distance < self.context_window)
+        query_mask = torch.cat([past, distance == 0], dim=-1)
+        space_mask = self._build_space_mask(queries.shape[-2], queries.device)
+        frequencies = self.rotary(time_steps, offset=rope_offset)
+
+        for layer, is_time in zip(self.layers, self.is_time_layer):
+            if is_time:
+                queries = queries.movedim(-4, -2)
+                history = history.movedim(-4, -2)
+                history, history_cache = layer(
+                    history, mask=causal, rotary_pos_emb=frequencies,
+                    return_cache=True,
+                )
+                queries = layer(
+                    queries, mask=query_mask, rotary_pos_emb=frequencies,
+                    kv_cache=history_cache,
+                )
+                queries = queries.movedim(-2, -4)
+                history = history.movedim(-2, -4)
+            else:
+                queries = layer(queries, mask=space_mask)
+                history = layer(history, mask=space_mask)
+        transformer_outputs = self.final_norm(queries)
+        return transformer_outputs
+
     def _build_space_mask(self, dim: int, device=None) -> Optional[Tensor]:
         """Build the spatial attention mask considering special tokens and dynamics logic.
 
@@ -303,7 +342,7 @@ class BlockCasualTransformer(nn.Module):
                         time_mask = time_mask & torch.ones(
                             (time_steps, time_steps), device=x.device, dtype=torch.bool
                         ).triu(diagonal=-(self.context_window - 1))
-                elif use_kv_cache and self.context_window is not None:
+                elif use_kv_cache:
                     # Cached path with a sliding window: keys are [cached.. , new..] and the
                     # query tokens sit at absolute positions [offset, offset+time_steps).
                     # The cache may retain MORE than W entries (so a corrected tail slot can
@@ -316,7 +355,9 @@ class BlockCasualTransformer(nn.Module):
                     # absolute position of each key: cached keys end just before the new ones.
                     k_abs = torch.arange(offset - n_cached, offset + time_steps, device=x.device).view(1, total_kv)
                     rel = q_abs - k_abs
-                    time_mask = (rel >= 0) & (rel < self.context_window)
+                    time_mask = rel >= 0
+                    if self.context_window is not None:
+                        time_mask = time_mask & (rel < self.context_window)
 
             # 2. Block Computation
             # Transformer accross dim -2 (Time or Space).

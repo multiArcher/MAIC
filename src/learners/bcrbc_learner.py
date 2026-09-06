@@ -160,12 +160,18 @@ class BCRBCLearner(Learner):
                 batch["obs"][:, :-1],
                 agent_mask.squeeze(-2),
             )
+            masked_rec_loss = reconstruction_loss(
+                mac_out["masked_reconstructed_observations"][:, :-1],
+                batch["obs"][:, :-1],
+                agent_mask.squeeze(-2),
+            )
+            rec_loss = 0.5 * (rec_loss + masked_rec_loss)
         else:
             rec_loss = td_loss.new_zeros(())
         if flow_weight > 0:
             flow_loss = flow_matching_loss(
                 mac_out["predicted_z"][:, :-1],
-                mac_out["z"][:, :-1],
+                mac_out["target_z"][:, :-1],
                 agent_mask,
             )
         else:

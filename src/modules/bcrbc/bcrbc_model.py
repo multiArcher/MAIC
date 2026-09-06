@@ -31,6 +31,7 @@ class BCRBCModel(nn.Module):
             num_z_tokens,
             transformer_depth,
             attention_heads,
+            context_window=self.context_window,
         )
         self.observation_decoder = ObservationDecoder(
             observation_dim,
@@ -39,6 +40,7 @@ class BCRBCModel(nn.Module):
             num_z_tokens,
             transformer_depth,
             attention_heads,
+            context_window=self.context_window,
         )
 
         max_time_steps = args.env_info["episode_limit"] + 2
@@ -71,11 +73,11 @@ class BCRBCModel(nn.Module):
             nn.Linear(agent_output_dim, observation_dim),
         )
 
-    def encode_observations(self, observations):
-        return self.observation_encoder(observations)
+    def encode_observations(self, observations, **kwargs):
+        return self.observation_encoder(observations, **kwargs)
 
-    def decode_observations(self, z):
-        return self.observation_decoder(z)
+    def decode_observations(self, z, **kwargs):
+        return self.observation_decoder(z, **kwargs)
 
     def estimate_clean_z(
         self,
@@ -87,6 +89,7 @@ class BCRBCModel(nn.Module):
         kv_cache=None,
         use_kv_cache=False,
         rope_offset=None,
+        history_z=None,
     ):
         tokens = self.dynamics_tokenizer(
             noisy_z,
@@ -95,7 +98,16 @@ class BCRBCModel(nn.Module):
             start_t=start_t,
             messages=messages,
         )
-        if use_kv_cache:
+        if history_z is not None:
+            history_tokens = self.dynamics_tokenizer(
+                history_z, previous_actions, torch.ones_like(signal_levels),
+                start_t=start_t, messages=messages,
+            )
+            transformer_outputs = self.transformer.forward_conditioned(
+                tokens, history_tokens, start_t=start_t
+            )
+            new_kv_cache = None
+        elif use_kv_cache:
             transformer_outputs, new_kv_cache = self.transformer(
                 tokens,
                 kv_cache=kv_cache,
@@ -107,7 +119,8 @@ class BCRBCModel(nn.Module):
             new_kv_cache = None
 
         z_outputs = transformer_outputs[..., self.dynamics_tokenizer.z_slice, :]
-        predicted_z = self.z_predictor(self.z_output_norm(z_outputs))   # Estimated pure z.
+        normalized_z_outputs = self.z_output_norm(z_outputs)
+        predicted_z = self.z_predictor(normalized_z_outputs)
         agent_outputs = self.agent_readout(
             transformer_outputs,
             self.dynamics_tokenizer.query_slice,
@@ -118,6 +131,33 @@ class BCRBCModel(nn.Module):
             "q_values": self.q_head(agent_outputs),
             "kv_cache": new_kv_cache,
         }
+
+    def forward_training(self, observations, previous_actions, messages,
+                         missing_mask, start_t=0):
+        """Full-information targets, independently masked history conditions."""
+        z = self.encode_observations(observations, rope_offset=start_t)
+        history_z = self.encode_observations(
+            observations, missing_mask=missing_mask, rope_offset=start_t
+        )
+        target_z = z.detach()
+        signal_levels = torch.rand(*z.shape[:3], 1, 1, device=z.device)
+        noise = torch.randn_like(z)
+        noisy_z = (1.0 - signal_levels) * noise + signal_levels * target_z
+        output = self.estimate_clean_z(
+            noisy_z, previous_actions, messages, signal_levels,
+            start_t=start_t, history_z=history_z,
+        )
+        reconstructed_observations = self.decode_observations(z)
+        masked_reconstructed_observations = self.decode_observations(history_z)
+        output.update({
+            "z": z,
+            "target_z": target_z,
+            "history_z": history_z,
+            "reconstructed_observations": reconstructed_observations,
+            "masked_reconstructed_observations": masked_reconstructed_observations,
+            "reconstructed_messages": self.message_decoder(output["agent_outputs"]),
+        })
+        return output
 
     @torch.no_grad()
     def sample_z(
@@ -171,6 +211,7 @@ class BCRBCModel(nn.Module):
         kv_cache=None,
         use_kv_cache=False,
         rope_offset=None,
+        reconstruct=True,
     ):
         z = (
             self.encode_observations(observations)
@@ -195,10 +236,11 @@ class BCRBCModel(nn.Module):
         dynamics_output.update(
             {
                 "z": z,
-                "reconstructed_observations": self.decode_observations(z),
                 "reconstructed_messages": self.message_decoder(
                     dynamics_output["agent_outputs"]
                 ),
             }
         )
+        if reconstruct:
+            dynamics_output["reconstructed_observations"] = self.decode_observations(z)
         return dynamics_output
