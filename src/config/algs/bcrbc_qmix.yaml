@@ -3,8 +3,8 @@
 # ------------------------------------------------------------------------------
 name: "bcrbc_qmix"
 
-runner: "parallel"
-batch_size_run: 16
+runner: "delayed_parallel"
+batch_size_run: 8
 
 entity_scheme: False
 
@@ -51,6 +51,8 @@ bcrbc_num_z_tokens: 2
 bcrbc_depth: 4
 bcrbc_heads: 4
 bcrbc_dropout: 0.0
+# Sample p uniformly, then mask each observation block independently with p.
+bcrbc_mask_probability_max: 0.9
 bcrbc_q_hidden_dim: 128
 bcrbc_retro_max_replay_len: 0
 
@@ -62,6 +64,8 @@ bcrbc_retro_max_replay_len: 0
 bcrbc_use_comm: True
 comm_gaussian_delay_mean: 1.0
 comm_gaussian_delay_std: 1.0
+# Must cover both observation and communication delay upper bounds so every
+# still-correctable latent remains in the mutable rollout tail.
 bcrbc_max_delay: 16
 # Context window: cap how many recent steps the dynamics rollout attends
 # (temporal attention is banded to the previous W steps; the eval generative rollout
@@ -76,7 +80,7 @@ bcrbc_context_window: 48
 # Persistent across-step KV cache for the eval generative rollout: cache the frozen
 # committed prefix [lo, t - max_delay) between env steps so each step is an O(W) append
 # plus an O(max_delay^2) tail recompute, instead of re-walking the whole window O(W^2).
-# Provably bit-identical to the uncached rollout (asserted in smokes). 0/False = off.
+# Cache regression compares against uncached rollout numerically. False = off.
 bcrbc_kv_cache: True
 
 # --- DCRBC v2 generative world model (the method) ---
@@ -88,14 +92,14 @@ bcrbc_generative_eval: True
 # Loss weights. The generative method is ACTIVE by default:
 #  - flow_loss: dynamics transformer x-prediction of clean z from noisy z.
 #  - rec_loss: reconstruct observations from the tokenizer bottleneck z.
-#  - retro_loss: stage-1 batch patch-and-replay consistency; the generative
-#    rollout is the inference-time mechanism, so keep 0 unless ablating.
-#  - msg_rec: reconstruct each agent's incoming messages from its agent output.
+#  - retro_loss: optional batch patch-and-replay ablation. It is not part of the
+#    online correction-on-arrival mechanism, so the main method keeps it off.
+#  - msg_rec: reconstruct the mean incoming message from each agent output.
 # For the plain no-delay QMIX baseline, set flow/rec to 0 and bcrbc_generative_eval False.
 td_loss_weight: 1.0
 rec_loss_weight: 1.0
 retro_loss_weight: 0.0
-msg_rec_loss_weight: 0.0
+msg_rec_loss_weight: 1.0
 # Flow-matching world model. flow_steps = Euler steps used when sampling at eval.
 flow_loss_weight: 1.0
 bcrbc_flow_steps: 8

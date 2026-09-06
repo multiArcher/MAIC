@@ -7,11 +7,12 @@ import torch
 from components.episode_buffer import EpisodeBatch
 from utils.maker import EnvMaker
 from runners.runner import Runner
+from runners.delayed_episode_runner import get_obs_delay_data
 
 
 # Based (very) heavily on SubprocVecEnv from OpenAI Baselines
 # https://github.com/openai/baselines/blob/master/baselines/common/vec_env/subproc_vec_env.py
-class ParallelRunner(Runner):
+class DelayedParallelRunner(Runner):
     def __init__(self, args, logger):
         self.args = args
         self.logger = logger
@@ -66,6 +67,7 @@ class ParallelRunner(Runner):
         self.test_stats = {}
 
         self.log_train_stats_t = -100000
+        self.diagnostics = None
 
     def setup(self, scheme, groups, preprocess, mac):
         self.new_batch = partial(
@@ -102,15 +104,18 @@ class ParallelRunner(Runner):
 
         # Reset the envs
         for parent_conn in self.parent_conns:
-            parent_conn.send(("reset", None))
+            parent_conn.send(("reset", not test_mode))
 
-        pre_transition_data = {"state": [], "avail_actions": [], "obs": []}
+        pre_transition_data = {"state": [], "avail_actions": [], "obs": [], "obs_delay": [], "obs_gen_t": [], "obs_fresh_mask": []}
         # Get the obs, state and avail_actions back
         for parent_conn in self.parent_conns:
             data = parent_conn.recv()
             pre_transition_data["state"].append(data["state"])
             pre_transition_data["avail_actions"].append(data["avail_actions"])
             pre_transition_data["obs"].append(data["obs"])
+            pre_transition_data["obs_delay"].append(data["obs_delay"])
+            pre_transition_data["obs_gen_t"].append(data["obs_gen_t"])
+            pre_transition_data["obs_fresh_mask"].append(data["obs_fresh_mask"])
 
         self.batch.update(pre_transition_data, ts=0)
 
@@ -128,6 +133,7 @@ class ParallelRunner(Runner):
                 np.zeros(self.args.n_agents) for _ in range(self.batch_size)
             ]
         episode_lengths = [0 for _ in range(self.batch_size)]
+        episode_wins = [False for _ in range(self.batch_size)]
         self.mac.init_hidden(batch_size=self.batch_size)
         terminated = [False for _ in range(self.batch_size)]
         envs_not_terminated = [
@@ -146,6 +152,10 @@ class ParallelRunner(Runner):
                 test_mode=test_mode,
             )
             cpu_actions = actions.to("cpu").numpy()
+
+            if self.diagnostics is not None:
+                active = [i for i in envs_not_terminated if not terminated[i]]
+                self.diagnostics.record(self, active)
 
             # Update the actions taken
             actions_chosen = {"actions": actions.unsqueeze(1)}
@@ -174,7 +184,7 @@ class ParallelRunner(Runner):
             # Post step data we will insert for the current timestep
             post_transition_data = {"reward": [], "terminated": []}
             # Data for the next step we will insert in order to select an action
-            pre_transition_data = {"state": [], "avail_actions": [], "obs": []}
+            pre_transition_data = {"state": [], "avail_actions": [], "obs": [], "obs_delay": [], "obs_gen_t": [], "obs_fresh_mask": []}
 
             # Receive data back for each unterminated env
             for idx, parent_conn in enumerate(self.parent_conns):
@@ -191,6 +201,7 @@ class ParallelRunner(Runner):
                     env_terminated = False
                     if data["terminated"]:
                         final_env_infos.append(data["info"])
+                        episode_wins[idx] = bool(data["info"].get("battle_won", False))
                     if data["terminated"] and not data["info"].get(
                         "episode_limit", False
                     ):
@@ -202,6 +213,9 @@ class ParallelRunner(Runner):
                     pre_transition_data["state"].append(data["state"])
                     pre_transition_data["avail_actions"].append(data["avail_actions"])
                     pre_transition_data["obs"].append(data["obs"])
+                    pre_transition_data["obs_delay"].append(data["obs_delay"])
+                    pre_transition_data["obs_gen_t"].append(data["obs_gen_t"])
+                    pre_transition_data["obs_fresh_mask"].append(data["obs_fresh_mask"])
 
             # Add post_transiton data into the batch
             self.batch.update(
@@ -245,6 +259,9 @@ class ParallelRunner(Runner):
         cur_stats["ep_length"] = sum(episode_lengths) + cur_stats.get("ep_length", 0)
 
         cur_returns.extend(episode_returns)
+
+        if self.diagnostics is not None:
+            self.diagnostics.finish(episode_returns, episode_lengths, episode_wins)
 
         n_test_runs = (
             max(1, self.args.test_nepisode // self.batch_size) * self.batch_size
@@ -295,28 +312,35 @@ class ParallelRunner(Runner):
 
 
 def env_worker(remote, env_fn, seed):
-    # Each environment worker has an independent random stream.
+    # DelayModel samples with torch; each worker needs its own reproducible stream.
     np.random.seed(seed)
     torch.manual_seed(seed)
     # Make environment
     env = env_fn.x()
+    env_info = env.get_env_info()
+    env_t = 0
     while True:
         cmd, data = remote.recv()
         if cmd == "step":
             actions = data
             # Take a step in the environment
             _, reward, terminated, truncated, step_info = env.step(actions)
+            env_t += 1
             terminated = terminated or truncated
             # Return the observations, avail_actions and state to make the next action
             state = env.get_state()
             avail_actions = env.get_avail_actions()
             obs = env.get_obs()
+            delay_data = get_obs_delay_data(env, env_info["n_agents"], env_t)
             remote.send(
                 {
                     # Data for the next timestep needed to pick an action
                     "state": state,
                     "avail_actions": avail_actions,
                     "obs": obs,
+                    "obs_delay": delay_data["obs_delay"],
+                    "obs_gen_t": delay_data["obs_gen_t"],
+                    "obs_fresh_mask": delay_data["obs_fresh_mask"],
                     # Rest of the data for the current timestep
                     "reward": reward,
                     "terminated": terminated,
@@ -324,12 +348,19 @@ def env_worker(remote, env_fn, seed):
                 }
             )
         elif cmd == "reset":
+            if hasattr(env, "training"):
+                env.training = data
             env.reset()
+            env_t = 0
+            delay_data = get_obs_delay_data(env, env_info["n_agents"], env_t)
             remote.send(
                 {
                     "state": env.get_state(),
                     "avail_actions": env.get_avail_actions(),
                     "obs": env.get_obs(),
+                    "obs_delay": delay_data["obs_delay"],
+                    "obs_gen_t": delay_data["obs_gen_t"],
+                    "obs_fresh_mask": delay_data["obs_fresh_mask"],
                 }
             )
         elif cmd == "close":
@@ -340,6 +371,9 @@ def env_worker(remote, env_fn, seed):
             remote.send(env.get_env_info())
         elif cmd == "get_stats":
             remote.send(env.get_stats())
+        elif cmd == "get_fresh_obs":
+            # Oracle observations leave the worker only for offline scoring.
+            remote.send(env.env.get_obs())
         elif cmd == "render":
             env.render()
         elif cmd == "save_replay":
@@ -364,9 +398,3 @@ class CloudpickleWrapper:
         import pickle
 
         self.x = pickle.loads(ob)
-
-
-
-
-
-

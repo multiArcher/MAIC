@@ -18,3 +18,13 @@ CLAUDE.md
 /imported
 /eval_summaries
 /bian_docs
+/ara
+/.agents
+/.claude
+/.remember
+/docs/superpowers/
+
+# Machine-local experiment parameters; keep default scripts tracked.
+*.local.sh
+*.local.py
+*.local.yaml

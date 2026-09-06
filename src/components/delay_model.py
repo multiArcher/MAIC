@@ -50,6 +50,7 @@ class DelayModel(nn.Module):
         self.delay_std = float(delay_std)
         self.max_delay = int(max_delay)
         self.delay_per_source = bool(delay_per_source)
+        self.generator = None
 
         # Stateful (online) caches; allocated by reset(). Shapes are established on the
         # first push so the model stays payload-agnostic.
@@ -69,9 +70,9 @@ class DelayModel(nn.Module):
 
     def _draw(self, shape, device) -> torch.Tensor:
         if self.delay_type == "uniform":
-            sampled = torch.randint(0, self.max_delay + 1, shape, device=device)
+            sampled = torch.randint(0, self.max_delay + 1, shape, device=device, generator=self.generator)
         else:  # gaussian
-            sampled = torch.normal(self.delay_mean, self.delay_std, size=shape, device=device).clamp(min=0.0).ceil()
+            sampled = torch.normal(self.delay_mean, self.delay_std, size=shape, device=device, generator=self.generator).clamp(min=0.0).ceil()
         return sampled.clamp(0, self.max_delay).long()
 
     # ------------------------------------------------------- freshest-arrived gather

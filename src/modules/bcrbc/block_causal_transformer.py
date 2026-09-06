@@ -101,3 +101,8 @@ class BlockCausalTransformer(nn.Module):
             return self.transformer(tokens, kv_cache=kv_cache, use_kv_cache=True,
                                     rope_offset=rope_offset)
         return self.transformer(tokens)
+
+    def forward_conditioned(self, tokens, history_tokens, start_t=0):
+        return self.transformer.forward_conditioned(
+            tokens, history_tokens, rope_offset=start_t
+        )
