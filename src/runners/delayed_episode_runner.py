@@ -67,6 +67,7 @@ class DelayedEpisodeRunner(Runner):
 
         # Log the first run
         self.log_train_stats_t = -1000000
+        self.diagnostics = None
 
     def setup(self, scheme, groups, preprocess, mac):
         self.new_batch = partial(
@@ -79,9 +80,13 @@ class DelayedEpisodeRunner(Runner):
             device=self.args.device,
         )
         self.mac = mac
+        self.diagnostics = getattr(mac, "evaluation_diagnostics", None)
 
     def get_env_info(self):
         return self.env.get_env_info()
+
+    def get_fresh_obs(self, active):
+        return [self.env.env.get_obs() for _ in active]
 
     def save_replay(self):
         self.env.save_replay()
@@ -126,6 +131,9 @@ class DelayedEpisodeRunner(Runner):
             actions = self.mac.select_actions(
                 self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode
             )
+
+            if test_mode and self.diagnostics is not None:
+                self.diagnostics.record(self, [0])
 
             _, reward, terminated, truncated, env_info = self.env.step(actions[0])
             terminated = terminated or truncated
@@ -180,8 +188,16 @@ class DelayedEpisodeRunner(Runner):
 
         cur_returns.append(episode_return)
 
+        if test_mode and self.diagnostics is not None:
+            self.diagnostics.finish(
+                [episode_return], [self.t],
+                [bool(env_info.get("battle_won", False))],
+            )
+
         if test_mode and (len(self.test_returns) == self.args.test_nepisode):
             self._log(cur_returns, cur_stats, log_prefix)
+            if self.diagnostics is not None:
+                self.diagnostics.log(self.logger, self.t_env)
         elif self.t_env - self.log_train_stats_t >= self.args.runner_log_interval:
             self._log(cur_returns, cur_stats, log_prefix)
             if hasattr(self.mac.action_selector, "epsilon"):

@@ -8,6 +8,7 @@ from .mac import MAC
 from components.action_selectors.action_selector import ActionSelector
 from components.episode_buffer import EpisodeBatch
 from modules.bcrbc.bcrbc_model import BCRBCModel
+from modules.bcrbc.evaluation_diagnostics import EvaluationDiagnostics
 from modules.bcrbc.comm_delay import CommDelay
 from modules.bcrbc.retro_replay import RetroReplay
 from utils.maker import ActionSelectorMaker
@@ -56,6 +57,9 @@ class BCRBCMAC(MAC):
         self._online_message_t = -1
         # Stateful generative-eval buffer, rebuilt lazily and reset in init_hidden.
         self._eval_state = None
+        self.evaluation_diagnostics = EvaluationDiagnostics(
+            output_path=None, batch_size=args.batch_size_run,
+        )
 
     def select_actions(
         self,
