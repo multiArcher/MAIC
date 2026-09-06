@@ -1,7 +1,6 @@
 import datetime
 import os
 import sys
-import gc
 import pprint
 import shutil
 import tqdm
@@ -248,10 +247,10 @@ def run_sequential(args, logger):
 
                 learner.train(episode_sample, runner.t_env, episode)
 
-                # Clear cache.
                 del episode_sample
-                gc.collect()
-                torch.cuda.empty_cache()
+
+            # Reuse allocations across updates; release unused cache once per round.
+            torch.cuda.empty_cache()
 
         # Execute test runs once in a while
         n_test_runs = max(1, args.test_nepisode // runner.batch_size)
@@ -259,6 +258,7 @@ def run_sequential(args, logger):
             last_test_t = runner.t_env
             for _ in range(n_test_runs):
                 runner.run(test_mode=True)
+            torch.cuda.empty_cache()
 
         new_winrate = logger.stats["running/test_battle_won_mean"][-1][1]
         best_model = (new_winrate > max_winrate) or (episode == 0)
