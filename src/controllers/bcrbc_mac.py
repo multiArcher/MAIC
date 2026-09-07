@@ -37,25 +37,22 @@ class BCRBCMAC(MAC):
             )
         else:
             self.comm_delay = None
-        # Generative autoregressive imputation at eval (Phase 3). When enabled and
-        # test_mode is on, not-yet-arrived observations are replaced by latents the
-        # world model generates from history; late arrivals are written back to
-        # their generation slot and the rollout is re-rolled (correction-on-arrival).
-        self.use_generative_eval = args.bcrbc_generative_eval
+        # Missing raw observations use learned MASK tokens. Late arrivals replace
+        # those tokens and trigger recomputation of the mutable history tail.
         # Persistent across-step eval cache (freeze-on-commit). 0/False => recompute the
         # whole window each step (still freezes committed latents); True => also persist
         # the committed-prefix KV so only the mutable tail [t-D, t] is recomputed.
         self.use_kv_cache = args.bcrbc_kv_cache
         self.hidden_states = None
         # Episode-local transformer history for ordinary one-step action sampling.
-        # Independent from the correction-aware generative-eval state below.
+        # Independent from the correction-aware evaluation state below.
         self._online_kv_cache = None
         self._online_encoder_cache = None
         self._online_decoder_cache = None
         # Messages delivered by the stateful online communication channel.
         self._online_message_history = None
         self._online_message_t = -1
-        # Stateful generative-eval buffer, rebuilt lazily and reset in init_hidden.
+        # Corrected history buffer, rebuilt lazily and reset in init_hidden.
         self._eval_state = None
         self.evaluation_diagnostics = EvaluationDiagnostics(
             output_path=None, batch_size=args.batch_size_run,
@@ -98,9 +95,8 @@ class BCRBCMAC(MAC):
             t = slice(t, t + 1)
 
         messages = kwargs.pop("messages", None)
-        generative_eval = (
-            self.use_generative_eval
-            and test_mode
+        masked_eval = (
+            test_mode
             and "obs_override" not in kwargs
             and "z_override" not in kwargs
         )
@@ -108,7 +104,7 @@ class BCRBCMAC(MAC):
         # Online communication samples every packet delay once and preserves its
         # arrival across later environment steps. Batched learner forwards keep the
         # stateless zero-delay path below.
-        if self.comm_delay is not None and (incremental or generative_eval):
+        if self.comm_delay is not None and (incremental or masked_eval):
             messages = self._update_online_messages(
                 ep_batch,
                 t,
@@ -116,11 +112,11 @@ class BCRBCMAC(MAC):
                 messages,
             )
 
-        # At evaluation, the generative path fills not-yet-arrived observations.
+        # At evaluation, encode the available history with MASK at missing slots.
         # An explicit obs/z override (used by retro replay and diagnostics)
         # bypasses it and runs the plain pass.
-        if generative_eval:
-            return self._generative_forward(ep_batch, t)
+        if masked_eval:
+            return self._masked_forward(ep_batch, t)
 
         # This override evaluates reconstruction against the original observation
         # while the delayed trajectory remains unchanged.
@@ -198,12 +194,12 @@ class BCRBCMAC(MAC):
         return aligned, missing[..., None]
 
     @torch.no_grad()
-    def _generative_forward(self, ep_batch: EpisodeBatch, t: slice):
-        """Correct raw arrivals, encode masked history, then sample missing z.
+    def _masked_forward(self, ep_batch: EpisodeBatch, t: slice):
+        """Correct raw arrivals and use the masked history encoding for decisions.
 
         Encoder, dynamics and decoder have separate causal caches. Only the
         prefix older than the maximum delay is committed. Every mutable tail is
-        recomputed after arrivals; generated z never enters the encoder cache.
+        recomputed after arrivals. No latent generation or feedback is used.
         """
         end = t.stop
         observations, previous_actions = self._build_inputs(ep_batch, slice(0, end))
@@ -244,22 +240,12 @@ class BCRBCMAC(MAC):
         encoded_parts.append(encoded_tail)
         encoded_z = torch.cat(encoded_parts, dim=1)
 
-        # Frozen generated prefix remains part of the dynamics trajectory.
+        # All slots, including missing ones, use the temporal encoder output.
         z_parts = [previous["z"][:, :cache_start]] if cache_start else []
         committed_dynamics_cache = dynamics_cache
         for step in range(cache_start, end):
             z = encoded_z[:, step:step + 1]
-            step_missing = missing[:, step:step + 1]
             step_messages = None if messages is None else messages[:, step:step + 1]
-            if step < commit_end:
-                z = torch.where(step_missing, previous["z"][:, step:step + 1], z)
-            elif step_missing.any():
-                generated_z = self.agent.sample_z(
-                    previous_actions[:, step:step + 1], step_messages,
-                    steps=self.args.bcrbc_flow_steps, start_t=step,
-                    kv_cache=dynamics_cache, rope_offset=step,
-                )
-                z = torch.where(step_missing, generated_z, z)
             output = self.agent.estimate_clean_z(
                 z, previous_actions[:, step:step + 1], step_messages,
                 torch.ones_like(z[..., :1, :1]), start_t=step,
@@ -310,115 +296,13 @@ class BCRBCMAC(MAC):
                 ep_batch["obs"][:, :end].to(self.device), start_t=0, training=False
             )
         for step in range(end):
-            self._generative_forward(ep_batch, slice(step, step + 1))
+            self._masked_forward(ep_batch, slice(step, step + 1))
         z = self._eval_state["z"][:, lo:end]
         is_real = ~self._eval_state["missing"][:, lo:end, :, 0, 0]
         observations, actions = self._build_inputs(ep_batch, slice(lo, end))
         self._eval_state = saved_state
         self._online_message_history = saved_messages
         return z, is_real.to(z.dtype), observations, actions
-
-    @torch.no_grad()
-    def z_diagnostics(self, ep_batch: EpisodeBatch, full_obs: torch.Tensor) -> dict:
-        """Generated-z diagnostics against full-information observations.
-
-        Measures whether generative imputation + correction-on-arrival actually
-        rebuilds timely z by comparing against full-information z
-        encoded from the un-delayed observations ``full_obs`` (available only for
-        analysis / in simulation, never used for control).
-
-        Returns dict of scalars:
-            - diag/z_reconstruction_error: mean ||z_imputed - z_full||^2 over generated
-              (not-yet-arrived) slots — how well the WM completes missing latents.
-            - diag/correction_improvement: on slots later corrected by a delayed
-              arrival, how much closer the corrected latent is to the full-info
-              latent than the pure-generated estimate (positive = correction helps).
-            - diag/msg_recovery_error: message reconstruction error.
-        """
-        device = self.device
-        time_steps = full_obs.size(1)
-        num_agents = self.n_agents
-        batch_size = ep_batch.batch_size
-        observations_full, last_actions = self._build_inputs(
-            ep_batch,
-            slice(0, time_steps),
-            obs_override=full_obs.to(device),
-        )
-        observations_full = observations_full.to(device)
-        last_actions = last_actions.to(device)
-        z_full = self.agent.encode_observations(observations_full)
-
-        z_corr, is_real, _, _ = self._rollout_latent_buffer(ep_batch, time_steps)
-
-        # masks carry the token axis (broadcast over it): [B, T, n, 1, 1].
-        gen_mask = (is_real < 1).view(batch_size, time_steps, num_agents, 1, 1).float()
-        denom = gen_mask.sum().clamp_min(1.0)
-        z_reconstruction_error = (
-            ((z_corr - z_full) ** 2).mean(-1, keepdim=True) * gen_mask
-        ).sum() / denom
-
-        messages = None
-        if self.comm_delay is not None:
-            messages = self.comm_delay(
-                full_obs.to(device),
-                start_t=0,
-                training=True,
-            )
-        out = self.agent(
-            observations_full,
-            last_actions,
-            start_t=0,
-            z_override=z_corr,
-            messages=messages,
-        )
-        gen_est = z_corr.clone()
-        cache = None
-        for step in range(time_steps - 1):
-            step_messages = None if messages is None else messages[:, step:step + 1]
-            history_output = self.agent(
-                observations_full[:, step:step + 1],
-                last_actions[:, step:step + 1],
-                start_t=step,
-                z_override=z_corr[:, step:step + 1],
-                messages=step_messages,
-                kv_cache=cache,
-                use_kv_cache=True,
-                rope_offset=step,
-            )
-            cache = history_output["kv_cache"]
-            next_messages = None if messages is None else messages[:, step + 1:step + 2]
-            gen_est[:, step + 1:step + 2] = self.agent.sample_z(
-                last_actions[:, step + 1:step + 2],
-                next_messages,
-                steps=self.args.bcrbc_flow_steps,
-                start_t=step + 1,
-                kv_cache=cache,
-                rope_offset=step + 1,
-            )
-        delay = ep_batch["obs_delay"][:, :time_steps].to(device).squeeze(-1)
-        delayed_real = ((is_real > 0).float() * (delay > 0).float()).view(
-            batch_size,
-            time_steps,
-            num_agents,
-            1,
-            1,
-        )
-        d_denom = delayed_real.sum().clamp_min(1.0)
-        err_gen = (((gen_est - z_full) ** 2).mean(-1, keepdim=True) * delayed_real).sum() / d_denom
-        err_corr = (((z_corr - z_full) ** 2).mean(-1, keepdim=True) * delayed_real).sum() / d_denom
-        correction_improvement = err_gen - err_corr
-
-        diag = {
-            "diag/z_reconstruction_error": z_reconstruction_error.item(),
-            "diag/correction_improvement": correction_improvement.item(),
-        }
-        if self.comm_delay is not None:
-            teacher = self.comm_delay(full_obs.to(device), start_t=0, training=True)
-            target_messages = teacher.mean(dim=3, keepdim=True)
-            diag["diag/msg_recovery_error"] = (
-                (out["reconstructed_messages"] - target_messages) ** 2
-            ).mean().item()
-        return diag
 
     def init_hidden(self, batch_size):
         self.hidden_states = None
@@ -429,7 +313,7 @@ class BCRBCMAC(MAC):
         self._online_message_t = -1
         if self.comm_delay is not None:
             self.comm_delay.reset()
-        # New episode(s): drop the stateful generative-eval buffer (frozen z + committed KV).
+        # New episodes discard the aligned history and committed caches.
         self._eval_state = None
 
     def _update_online_messages(

@@ -15,7 +15,7 @@ python -u src/main.py --config=bcrbc_qmix --env-config=delayed_sc2 with \
     name="$EXPERIMENT_NAME" env_args.map_name="$MAP_NAME" seed="$SEED" \
     runner=delayed_parallel batch_size_run="$BATCH_SIZE_RUN" \
     batch_size="$BATCH_SIZE" buffer_size=5000 buffer_cpu_only=True \
-    use_cuda=True bcrbc_use_comm=True bcrbc_generative_eval=True \
+    use_cuda=True bcrbc_use_comm=True \
     test_nepisode=16 test_interval=50000 log_interval=5000 \
     runner_log_interval=5000 learner_log_interval=5000 \
     save_model_interval=100000 t_max="$T_MAX"

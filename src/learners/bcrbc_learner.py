@@ -10,7 +10,6 @@ from components.standarize_stream import RunningMeanStd
 from controllers.bcrbc_mac import BCRBCMAC
 from learners.learner import Learner
 from modules.bcrbc.losses import (
-    flow_matching_loss,
     message_reconstruction_loss,
     reconstruction_loss,
     retro_consistency_loss,
@@ -144,10 +143,9 @@ class BCRBCLearner(Learner):
         td_loss = (masked_td_error**2).sum() / mixer_mask.sum().clamp_min(1.0)
 
         rec_weight = self.args.rec_loss_weight
-        flow_weight = self.args.flow_loss_weight
         msg_rec_weight = self.args.msg_rec_loss_weight
 
-        if rec_weight > 0 or msg_rec_weight > 0 or flow_weight > 0:
+        if rec_weight > 0 or msg_rec_weight > 0:
             # Per-agent mask with the explicit vector axis: [b, t, n, 1, 1].
             # Broadcasts over feature / token axes in every aux loss.
             agent_mask = mask.unsqueeze(2).unsqueeze(-1).expand(-1, -1, self.n_agents, 1, 1)
@@ -168,14 +166,6 @@ class BCRBCLearner(Learner):
             rec_loss = 0.5 * (rec_loss + masked_rec_loss)
         else:
             rec_loss = td_loss.new_zeros(())
-        if flow_weight > 0:
-            flow_loss = flow_matching_loss(
-                mac_out["predicted_z"][:, :-1],
-                mac_out["target_z"][:, :-1],
-                agent_mask,
-            )
-        else:
-            flow_loss = td_loss.new_zeros(())
         if msg_rec_weight > 0 and self.mac.use_comm:
             with torch.no_grad():
                 teacher_msgs = self.mac.comm_delay(
@@ -207,7 +197,6 @@ class BCRBCLearner(Learner):
             + rec_weight * rec_loss
             + retro_weight * retro_loss
             + msg_rec_weight * msg_rec_loss
-            + flow_weight * flow_loss
         )
 
         self.optimizer.zero_grad()
@@ -232,7 +221,6 @@ class BCRBCLearner(Learner):
                 self.logger.log_stat("loss/rec_loss", rec_loss.item(), t_env)
                 self.logger.log_stat("loss/retro_loss", retro_loss.item(), t_env)
                 self.logger.log_stat("loss/msg_rec_loss", msg_rec_loss.item(), t_env)
-                self.logger.log_stat("loss/flow_loss", flow_loss.item(), t_env)
                 self.logger.log_stat("loss/total_loss", total_loss.item(), t_env)
                 self.logger.log_stat("running/grad_norm", grad_norm.item(), t_env)
                 self.logger.log_stat("q_values/td_error_abs", masked_td_error.abs().sum().item() / mask_elems, t_env)
