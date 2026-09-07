@@ -134,70 +134,26 @@ class BCRBCModel(nn.Module):
 
     def forward_training(self, observations, previous_actions, messages,
                          missing_mask, start_t=0):
-        """Full-information targets, independently masked history conditions."""
+        """Train decisions directly on the masked observation encoding."""
         z = self.encode_observations(observations, rope_offset=start_t)
         history_z = self.encode_observations(
             observations, missing_mask=missing_mask, rope_offset=start_t
         )
-        target_z = z.detach()
-        signal_levels = torch.rand(*z.shape[:3], 1, 1, device=z.device)
-        noise = torch.randn_like(z)
-        noisy_z = (1.0 - signal_levels) * noise + signal_levels * target_z
+        signal_levels = torch.ones_like(history_z[..., :1, :1])
         output = self.estimate_clean_z(
-            noisy_z, previous_actions, messages, signal_levels,
-            start_t=start_t, history_z=history_z,
+            history_z, previous_actions, messages, signal_levels,
+            start_t=start_t,
         )
         reconstructed_observations = self.decode_observations(z)
         masked_reconstructed_observations = self.decode_observations(history_z)
         output.update({
-            "z": z,
-            "target_z": target_z,
+            "z": history_z,
             "history_z": history_z,
             "reconstructed_observations": reconstructed_observations,
             "masked_reconstructed_observations": masked_reconstructed_observations,
             "reconstructed_messages": self.message_decoder(output["agent_outputs"]),
         })
         return output
-
-    @torch.no_grad()
-    def sample_z(
-        self,
-        previous_actions,
-        messages,
-        steps,
-        start_t=0,
-        kv_cache=None,
-        rope_offset=None,
-    ):
-        batch_size, time_steps, num_agents = previous_actions.shape[:3]
-        noisy_z = torch.randn(
-            batch_size,
-            time_steps,
-            num_agents,
-            self.num_z_tokens,
-            self.z_dim,
-            device=previous_actions.device,
-        )
-        step_size = 1.0 / steps
-        for step in range(steps):
-            signal_level = step * step_size
-            signal_levels = noisy_z.new_full(
-                (batch_size, time_steps, num_agents, 1, 1),
-                signal_level,
-            )
-            predicted_z = self.estimate_clean_z(
-                noisy_z,
-                previous_actions,
-                messages,
-                signal_levels,
-                start_t=start_t,
-                kv_cache=kv_cache,
-                use_kv_cache=True,
-                rope_offset=rope_offset,
-            )["predicted_z"]
-            velocity = (predicted_z - noisy_z) / (1.0 - signal_level)
-            noisy_z = noisy_z + step_size * velocity
-        return noisy_z
 
     def forward(
         self,
