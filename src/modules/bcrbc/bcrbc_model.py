@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
 from modules.bcrbc.agent_readout import AgentReadout
 from modules.bcrbc.block_causal_transformer import BlockCausalTransformer
@@ -23,6 +24,7 @@ class BCRBCModel(nn.Module):
         self.num_z_tokens = num_z_tokens
         self.observation_dim = observation_dim
         self.context_window = args.bcrbc_context_window
+        self.flow_steps = args.bcrbc_flow_steps
 
         self.observation_encoder = ObservationEncoder(
             observation_dim,
@@ -109,10 +111,7 @@ class BCRBCModel(nn.Module):
             new_kv_cache = None
         elif use_kv_cache:
             transformer_outputs, new_kv_cache = self.transformer(
-                tokens,
-                kv_cache=kv_cache,
-                use_kv_cache=True,
-                rope_offset=rope_offset,
+                tokens, kv_cache=kv_cache, use_kv_cache=True, rope_offset=rope_offset,
             )
         else:
             transformer_outputs = self.transformer(tokens)
@@ -132,27 +131,138 @@ class BCRBCModel(nn.Module):
             "kv_cache": new_kv_cache,
         }
 
+    def complete_step(self, encoded_z, previous_actions, messages, missing_mask,
+                      noise, start_t=0, kv_cache=None):
+        """Generate one missing time block; only the final clean pass commits KV.
+
+        Linear flow: x(s) = (1-s) noise + s target. The network predicts the
+        clean endpoint, giving velocity (predicted_z - x) / (1-s).
+        All solver iterations read the same past, never each other's KV.
+        """
+        current_z = torch.where(missing_mask, noise, encoded_z)
+        if missing_mask.any():
+            for index in range(self.flow_steps):
+                signal = torch.full_like(
+                    encoded_z[..., :1, :1], index / self.flow_steps,
+                )
+                signal = torch.where(missing_mask, signal, 1.0)
+                estimate = self.estimate_clean_z(
+                    current_z, previous_actions, messages, signal,
+                    start_t=start_t, kv_cache=kv_cache,
+                    use_kv_cache=True, rope_offset=start_t,
+                )["predicted_z"]
+                # dt / (1-s) = 1 / (K-index); last step reaches the endpoint.
+                velocity_step = (estimate - current_z) / (self.flow_steps - index)
+                updated_z = current_z + velocity_step
+                current_z = torch.where(missing_mask, updated_z, encoded_z)
+        output = self.estimate_clean_z(
+            current_z, previous_actions, messages,
+            torch.ones_like(encoded_z[..., :1, :1]), start_t=start_t,
+            kv_cache=kv_cache, use_kv_cache=True, rope_offset=start_t,
+        )
+        output["z"] = current_z
+        return output
+
+    def _training_step(self, encoded, target, actions, messages, missing, noise,
+                       history_z, start_t, compute_aux):
+        """Rebuild differentiable history features from committed latent values."""
+        history_length = history_z.shape[1]
+        current_t = start_t + history_length
+        dynamics_cache = None
+        if history_length:
+            history_messages = None if messages is None else messages[:, :-1]
+            history_output = self.estimate_clean_z(
+                history_z, actions[:, :-1], history_messages,
+                torch.ones_like(history_z[..., :1, :1]), start_t=start_t,
+                use_kv_cache=True, rope_offset=start_t,
+            )
+            dynamics_cache = history_output["kv_cache"]
+        current_actions = actions[:, -1:]
+        current_messages = None if messages is None else messages[:, -1:]
+        output = self.complete_step(
+            encoded, current_actions, current_messages, missing, noise,
+            start_t=current_t, kv_cache=dynamics_cache,
+        )
+        if compute_aux:
+            # Teacher endpoints enter this auxiliary pass only, never Q or KV.
+            signal = torch.rand_like(encoded[..., :1, :1])
+            noisy = torch.lerp(torch.randn_like(encoded), target, signal)
+            noisy = torch.where(missing, noisy, encoded.detach())
+            flow = self.estimate_clean_z(
+                noisy, current_actions, current_messages,
+                torch.where(missing, signal, 1.0),
+                start_t=current_t, kv_cache=dynamics_cache,
+                use_kv_cache=True, rope_offset=current_t,
+            )
+            decoder_z = torch.cat([history_z, output["z"]], dim=1)
+            decoded = self.decode_observations(
+                decoder_z, rope_offset=start_t,
+            )
+            output["predicted_z"] = flow["predicted_z"]
+            output["generated_reconstructed_observations"] = decoded[:, -1:]
+        output.pop("kv_cache")
+        return output
+
     def forward_training(self, observations, previous_actions, messages,
-                         missing_mask, start_t=0):
-        """Train decisions directly on the masked observation encoding."""
-        z = self.encode_observations(observations, rope_offset=start_t)
+                         missing_mask, start_t=0, completion_noise=None,
+                         compute_aux=True):
+        """Train Q on the same sequential noise-to-clean rollout used online."""
         history_z = self.encode_observations(
             observations, missing_mask=missing_mask, rope_offset=start_t
         )
-        signal_levels = torch.ones_like(history_z[..., :1, :1])
-        output = self.estimate_clean_z(
-            history_z, previous_actions, messages, signal_levels,
-            start_t=start_t,
-        )
-        reconstructed_observations = self.decode_observations(z)
-        masked_reconstructed_observations = self.decode_observations(history_z)
+        if completion_noise is None:
+            completion_noise = torch.randn_like(history_z)
+        target_z = None
+        if compute_aux:
+            target_z = self.encode_observations(observations, rope_offset=start_t)
+        committed_z = []
+        outputs, flow_predictions, reconstructed = [], [], []
+        for step in range(observations.shape[1]):
+            current = slice(step, step + 1)
+            encoded = history_z[:, current]
+            actions = previous_actions[:, :step + 1]
+            step_messages = None if messages is None else messages[:, :step + 1]
+            missing = missing_mask[:, current]
+            target = target_z[:, current].detach() if compute_aux else None
+            history = torch.cat(committed_z, dim=1) if step else history_z[:, :0]
+            step_args = (encoded, target, actions, step_messages, missing,
+                         completion_noise[:, current], history, start_t,
+                         compute_aux)
+            if torch.is_grad_enabled():
+                # Recompute history and solver activations during backward.
+                output = checkpoint(
+                    self._training_step, *step_args, use_reentrant=False,
+                )
+            else:
+                output = self._training_step(*step_args)
+            if compute_aux:
+                flow_predictions.append(output["predicted_z"])
+                reconstructed.append(output["generated_reconstructed_observations"])
+            # Stop only the recursive generation chain, not history features.
+            committed_z.append(torch.where(missing, output["z"].detach(), encoded))
+            outputs.append(output)
+        output = {
+            key: torch.cat([item[key] for item in outputs], dim=1)
+            for key in ("z", "q_values", "agent_outputs")
+        }
         output.update({
-            "z": history_z,
             "history_z": history_z,
-            "reconstructed_observations": reconstructed_observations,
-            "masked_reconstructed_observations": masked_reconstructed_observations,
-            "reconstructed_messages": self.message_decoder(output["agent_outputs"]),
+            "missing_mask": missing_mask,
+            "completion_noise": completion_noise,
         })
+        if compute_aux:
+            output.update({
+                "target_z": target_z.detach(),
+                "predicted_z": torch.cat(flow_predictions, dim=1),
+                "reconstructed_observations": self.decode_observations(
+                    target_z, rope_offset=start_t,
+                ),
+                "masked_reconstructed_observations": self.decode_observations(
+                    history_z, rope_offset=start_t,
+                ),
+                "generated_reconstructed_observations": torch.cat(reconstructed, dim=1),
+                "reconstructed_messages": self.message_decoder(output["agent_outputs"]),
+            })
         return output
 
     def forward(
