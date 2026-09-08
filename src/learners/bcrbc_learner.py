@@ -10,6 +10,7 @@ from components.standarize_stream import RunningMeanStd
 from controllers.bcrbc_mac import BCRBCMAC
 from learners.learner import Learner
 from modules.bcrbc.losses import (
+    flow_matching_loss,
     message_reconstruction_loss,
     reconstruction_loss,
     retro_consistency_loss,
@@ -107,7 +108,10 @@ class BCRBCLearner(Learner):
         with torch.no_grad():
             self.target_mac.train()
             self.target_mac.init_hidden(batch.batch_size)
-            target_out = self.target_mac.forward(batch, t_slice)
+            target_out = self.target_mac.forward(
+                batch, t_slice, missing_mask=mac_out["missing_mask"],
+                completion_noise=mac_out["completion_noise"], compute_aux=False,
+            )
             target_q_values = target_out["q_values"]
             target_q_values = torch.masked_fill(target_q_values, avail_actions.unsqueeze(-2) == 0, -1e7)
 
@@ -144,13 +148,11 @@ class BCRBCLearner(Learner):
 
         rec_weight = self.args.rec_loss_weight
         msg_rec_weight = self.args.msg_rec_loss_weight
+        flow_weight = self.args.flow_loss_weight
+        generated_rec_weight = self.args.generated_rec_loss_weight
 
-        if rec_weight > 0 or msg_rec_weight > 0:
-            # Per-agent mask with the explicit vector axis: [b, t, n, 1, 1].
-            # Broadcasts over feature / token axes in every aux loss.
-            agent_mask = mask.unsqueeze(2).unsqueeze(-1).expand(-1, -1, self.n_agents, 1, 1)
-        else:
-            agent_mask = None
+        # [B, T, N, 1, 1]; each valid agent contributes once to auxiliary losses.
+        agent_mask = mask[:, :, None, None].expand(-1, -1, self.n_agents, 1, 1)
 
         if rec_weight > 0:
             rec_loss = reconstruction_loss(
@@ -166,6 +168,19 @@ class BCRBCLearner(Learner):
             rec_loss = 0.5 * (rec_loss + masked_rec_loss)
         else:
             rec_loss = td_loss.new_zeros(())
+        completion_mask = mask[:, :, None, None] * mac_out["missing_mask"][:, :-1]
+        flow_loss = flow_matching_loss(
+            mac_out["predicted_z"][:, :-1],
+            mac_out["target_z"][:, :-1], completion_mask,
+        )
+        generated_z_loss = flow_matching_loss(
+            mac_out["z"][:, :-1],
+            mac_out["target_z"][:, :-1], completion_mask,
+        )
+        generated_rec_loss = reconstruction_loss(
+            mac_out["generated_reconstructed_observations"][:, :-1],
+            batch["obs"][:, :-1], completion_mask.squeeze(-2),
+        )
         if msg_rec_weight > 0 and self.mac.use_comm:
             with torch.no_grad():
                 teacher_msgs = self.mac.comm_delay(
@@ -197,6 +212,9 @@ class BCRBCLearner(Learner):
             + rec_weight * rec_loss
             + retro_weight * retro_loss
             + msg_rec_weight * msg_rec_loss
+            + flow_weight * flow_loss
+            + flow_weight * generated_z_loss
+            + generated_rec_weight * generated_rec_loss
         )
 
         self.optimizer.zero_grad()
@@ -221,6 +239,11 @@ class BCRBCLearner(Learner):
                 self.logger.log_stat("loss/rec_loss", rec_loss.item(), t_env)
                 self.logger.log_stat("loss/retro_loss", retro_loss.item(), t_env)
                 self.logger.log_stat("loss/msg_rec_loss", msg_rec_loss.item(), t_env)
+                self.logger.log_stat("loss/flow_loss", flow_loss.item(), t_env)
+                self.logger.log_stat("loss/generated_z_loss", generated_z_loss.item(), t_env)
+                self.logger.log_stat(
+                    "loss/generated_rec_loss", generated_rec_loss.item(), t_env,
+                )
                 self.logger.log_stat("loss/total_loss", total_loss.item(), t_env)
                 self.logger.log_stat("running/grad_norm", grad_norm.item(), t_env)
                 self.logger.log_stat("q_values/td_error_abs", masked_td_error.abs().sum().item() / mask_elems, t_env)

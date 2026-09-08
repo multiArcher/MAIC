@@ -53,6 +53,8 @@ bcrbc_heads: 4
 bcrbc_dropout: 0.0
 # Sample p uniformly, then mask each observation block independently with p.
 bcrbc_mask_probability_max: 0.9
+# Shared number of Euler flow steps for training and delayed evaluation.
+bcrbc_flow_steps: 4
 bcrbc_q_hidden_dim: 128
 bcrbc_retro_max_replay_len: 0
 
@@ -73,9 +75,10 @@ bcrbc_context_window: 48
 # Cache regression compares against uncached rollout numerically. False = off.
 bcrbc_kv_cache: True
 
-# --- Random-MASK history encoding, without diffusion generation ---
-# Train on random masked observations; test on actually available observations.
-# Late arrivals correct the raw history. Signal levels stay at 1 in both paths.
+# --- Random-MASK encoding with sequential flow completion ---
+# Q uses final generated z in both training and delayed evaluation. Generated
+# z is detached between environment steps; history features retain gradients.
+# Late arrivals correct raw history and regenerate the mutable missing tail.
 # Loss weights:
 #  - rec_loss: reconstruct observations from the tokenizer bottleneck z.
 #  - retro_loss: optional batch patch-and-replay ablation. It is not part of the
@@ -85,6 +88,10 @@ td_loss_weight: 1.0
 rec_loss_weight: 1.0
 retro_loss_weight: 0.0
 msg_rec_loss_weight: 1.0
+# Random-time and final generated latent supervision (valid missing only).
+flow_loss_weight: 1.0
+# Decode the final generated z using the actual mixed history (missing only).
+generated_rec_loss_weight: 1.0
 
 # ------------------------------------------------------------------------------
 # --- Learner specific parameters ---

@@ -95,6 +95,9 @@ class BCRBCMAC(MAC):
             t = slice(t, t + 1)
 
         messages = kwargs.pop("messages", None)
+        missing_mask = kwargs.pop("missing_mask", None)
+        completion_noise = kwargs.pop("completion_noise", None)
+        compute_aux = kwargs.pop("compute_aux", True)
         masked_eval = (
             test_mode
             and "obs_override" not in kwargs
@@ -150,14 +153,16 @@ class BCRBCMAC(MAC):
             self._online_kv_cache = self._trim_cache(out["kv_cache"])
         elif not test_mode and not kwargs:
             # One probability per sequence/agent, then independent block masks.
-            missing_probability = torch.rand(
-                obs.shape[0], 1, self.n_agents, 1, 1, device=obs.device
-            ) * self.args.bcrbc_mask_probability_max
-            missing_mask = torch.rand(
-                *obs.shape[:3], 1, 1, device=obs.device
-            ) < missing_probability
+            if missing_mask is None:
+                missing_probability = torch.rand(
+                    obs.shape[0], 1, self.n_agents, 1, 1, device=obs.device
+                ) * self.args.bcrbc_mask_probability_max
+                missing_mask = torch.rand(
+                    *obs.shape[:3], 1, 1, device=obs.device
+                ) < missing_probability
             out = self.agent.forward_training(
-                obs, last_actions, messages, missing_mask, start_t=t.start or 0
+                obs, last_actions, messages, missing_mask, start_t=t.start or 0,
+                completion_noise=completion_noise, compute_aux=compute_aux,
             )
         else:
             out = self.agent(
@@ -195,11 +200,12 @@ class BCRBCMAC(MAC):
 
     @torch.no_grad()
     def _masked_forward(self, ep_batch: EpisodeBatch, t: slice):
-        """Correct raw arrivals and use the masked history encoding for decisions.
+        """Correct raw arrivals and regenerate the mutable missing history.
 
         Encoder, dynamics and decoder have separate causal caches. Only the
         prefix older than the maximum delay is committed. Every mutable tail is
-        recomputed after arrivals. No latent generation or feedback is used.
+        recomputed after arrivals. Each missing block uses the same initial noise
+        on every replay, so a correction does not randomly resample the history.
         """
         end = t.stop
         observations, previous_actions = self._build_inputs(ep_batch, slice(0, end))
@@ -240,19 +246,23 @@ class BCRBCMAC(MAC):
         encoded_parts.append(encoded_tail)
         encoded_z = torch.cat(encoded_parts, dim=1)
 
-        # All slots, including missing ones, use the temporal encoder output.
+        # Noise is indexed by generation time, independent of cache/replay policy.
+        noise = previous["noise"] if previous is not None else encoded_z[:, :0]
+        if noise.shape[1] < end:
+            new_noise = torch.randn_like(encoded_z[:, noise.shape[1]:])
+            noise = torch.cat([noise, new_noise], dim=1)
         z_parts = [previous["z"][:, :cache_start]] if cache_start else []
         committed_dynamics_cache = dynamics_cache
         for step in range(cache_start, end):
             z = encoded_z[:, step:step + 1]
             step_messages = None if messages is None else messages[:, step:step + 1]
-            output = self.agent.estimate_clean_z(
+            output = self.agent.complete_step(
                 z, previous_actions[:, step:step + 1], step_messages,
-                torch.ones_like(z[..., :1, :1]), start_t=step,
-                kv_cache=dynamics_cache, use_kv_cache=True, rope_offset=step,
+                missing[:, step:step + 1], noise[:, step:step + 1],
+                start_t=step, kv_cache=dynamics_cache,
             )
             dynamics_cache = self._trim_cache(output["kv_cache"])
-            z_parts.append(z)
+            z_parts.append(output["z"])
             if step + 1 == commit_end:
                 committed_dynamics_cache = dynamics_cache
         trajectory_z = torch.cat(z_parts, dim=1)
@@ -276,6 +286,7 @@ class BCRBCMAC(MAC):
             "kv": committed_dynamics_cache,
             "decoder_cache": committed_decoder_cache,
             "missing": missing,
+            "noise": noise,
         }
         output.update({
             "z": trajectory_z[:, -1:],
