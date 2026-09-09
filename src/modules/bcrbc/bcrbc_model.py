@@ -163,25 +163,22 @@ class BCRBCModel(nn.Module):
         output["z"] = current_z
         return output
 
+    def _detach_cache(self, cache):
+        """Keep the causal window and truncate gradients between time steps."""
+        if self.context_window:
+            cache = [
+                (key[..., -self.context_window:, :],
+                 value[..., -self.context_window:, :])
+                for key, value in cache
+            ]
+        return [(key.detach(), value.detach()) for key, value in cache]
+
     def _training_step(self, encoded, target, actions, messages, missing, noise,
-                       history_z, start_t, compute_aux):
-        """Rebuild differentiable history features from committed latent values."""
-        history_length = history_z.shape[1]
-        current_t = start_t + history_length
-        dynamics_cache = None
-        if history_length:
-            history_messages = None if messages is None else messages[:, :-1]
-            history_output = self.estimate_clean_z(
-                history_z, actions[:, :-1], history_messages,
-                torch.ones_like(history_z[..., :1, :1]), start_t=start_t,
-                use_kv_cache=True, rope_offset=start_t,
-            )
-            dynamics_cache = history_output["kv_cache"]
-        current_actions = actions[:, -1:]
-        current_messages = None if messages is None else messages[:, -1:]
+                       dynamics_cache, decoder_cache, start_t, compute_aux):
+        """Train the current block against a detached, completed history."""
         output = self.complete_step(
-            encoded, current_actions, current_messages, missing, noise,
-            start_t=current_t, kv_cache=dynamics_cache,
+            encoded, actions, messages, missing, noise,
+            start_t=start_t, kv_cache=dynamics_cache,
         )
         if compute_aux:
             # Teacher endpoints enter this auxiliary pass only, never Q or KV.
@@ -189,18 +186,18 @@ class BCRBCModel(nn.Module):
             noisy = torch.lerp(torch.randn_like(encoded), target, signal)
             noisy = torch.where(missing, noisy, encoded.detach())
             flow = self.estimate_clean_z(
-                noisy, current_actions, current_messages,
+                noisy, actions, messages,
                 torch.where(missing, signal, 1.0),
-                start_t=current_t, kv_cache=dynamics_cache,
-                use_kv_cache=True, rope_offset=current_t,
+                start_t=start_t, kv_cache=dynamics_cache,
+                use_kv_cache=True, rope_offset=start_t,
             )
-            decoder_z = torch.cat([history_z, output["z"]], dim=1)
-            decoded = self.decode_observations(
-                decoder_z, rope_offset=start_t,
+            decoded, decoder_cache = self.decode_observations(
+                output["z"], kv_cache=decoder_cache,
+                use_kv_cache=True, rope_offset=start_t,
             )
             output["predicted_z"] = flow["predicted_z"]
-            output["generated_reconstructed_observations"] = decoded[:, -1:]
-        output.pop("kv_cache")
+            output["generated_reconstructed_observations"] = decoded
+            output["decoder_cache"] = decoder_cache
         return output
 
     def forward_training(self, observations, previous_actions, messages,
@@ -215,21 +212,20 @@ class BCRBCModel(nn.Module):
         target_z = None
         if compute_aux:
             target_z = self.encode_observations(observations, rope_offset=start_t)
-        committed_z = []
+        dynamics_cache = decoder_cache = None
         outputs, flow_predictions, reconstructed = [], [], []
         for step in range(observations.shape[1]):
             current = slice(step, step + 1)
             encoded = history_z[:, current]
-            actions = previous_actions[:, :step + 1]
-            step_messages = None if messages is None else messages[:, :step + 1]
+            actions = previous_actions[:, current]
+            step_messages = None if messages is None else messages[:, current]
             missing = missing_mask[:, current]
             target = target_z[:, current].detach() if compute_aux else None
-            history = torch.cat(committed_z, dim=1) if step else history_z[:, :0]
             step_args = (encoded, target, actions, step_messages, missing,
-                         completion_noise[:, current], history, start_t,
-                         compute_aux)
+                         completion_noise[:, current], dynamics_cache,
+                         decoder_cache, start_t + step, compute_aux)
             if torch.is_grad_enabled():
-                # Recompute history and solver activations during backward.
+                # Recompute only the current block's solver during backward.
                 output = checkpoint(
                     self._training_step, *step_args, use_reentrant=False,
                 )
@@ -238,8 +234,8 @@ class BCRBCModel(nn.Module):
             if compute_aux:
                 flow_predictions.append(output["predicted_z"])
                 reconstructed.append(output["generated_reconstructed_observations"])
-            # Stop only the recursive generation chain, not history features.
-            committed_z.append(torch.where(missing, output["z"].detach(), encoded))
+                decoder_cache = self._detach_cache(output.pop("decoder_cache"))
+            dynamics_cache = self._detach_cache(output.pop("kv_cache"))
             outputs.append(output)
         output = {
             key: torch.cat([item[key] for item in outputs], dim=1)
