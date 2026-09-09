@@ -76,8 +76,8 @@ bcrbc_context_window: 48
 bcrbc_kv_cache: True
 
 # --- Random-MASK encoding with sequential flow completion ---
-# Q uses final generated z in both training and delayed evaluation. Generated
-# z is detached between environment steps; history features retain gradients.
+# Q uses final generated z in both training and delayed evaluation.
+# Dynamics/decoder KV is reused and detached after each environment step.
 # Late arrivals correct raw history and regenerate the mutable missing tail.
 # Loss weights:
 #  - rec_loss: reconstruct observations from the tokenizer bottleneck z.
