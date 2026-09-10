@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from torch.utils.checkpoint import checkpoint
 
 from modules.bcrbc.agent_readout import AgentReadout
 from modules.bcrbc.block_causal_transformer import BlockCausalTransformer
@@ -221,16 +220,11 @@ class BCRBCModel(nn.Module):
             step_messages = None if messages is None else messages[:, current]
             missing = missing_mask[:, current]
             target = target_z[:, current].detach() if compute_aux else None
-            step_args = (encoded, target, actions, step_messages, missing,
-                         completion_noise[:, current], dynamics_cache,
-                         decoder_cache, start_t + step, compute_aux)
-            if torch.is_grad_enabled():
-                # Recompute only the current block's solver during backward.
-                output = checkpoint(
-                    self._training_step, *step_args, use_reentrant=False,
-                )
-            else:
-                output = self._training_step(*step_args)
+            output = self._training_step(
+                encoded, target, actions, step_messages, missing,
+                completion_noise[:, current], dynamics_cache,
+                decoder_cache, start_t + step, compute_aux,
+            )
             if compute_aux:
                 flow_predictions.append(output["predicted_z"])
                 reconstructed.append(output["generated_reconstructed_observations"])
