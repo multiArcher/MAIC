@@ -28,3 +28,5 @@ CLAUDE.md
 *.local.sh
 *.local.py
 *.local.yaml
+
+/results_history/
