@@ -51,8 +51,6 @@ class BCRBCModel(nn.Module):
             n_agents,
             model_hidden_dim,
             max_t=max_time_steps,
-            num_messages_per_agent=n_agents - 1,
-            message_dim=observation_dim,
             num_z_tokens=num_z_tokens,
         )
         self.transformer = BlockCausalTransformer(
@@ -67,12 +65,6 @@ class BCRBCModel(nn.Module):
         self.z_predictor = nn.Linear(model_hidden_dim, z_dim)
         self.agent_readout = AgentReadout(model_hidden_dim, agent_output_dim)
         self.q_head = BCRBCQHead(agent_output_dim, n_actions, args.bcrbc_q_hidden_dim)
-        self.message_decoder = nn.Sequential(
-            nn.LayerNorm(agent_output_dim),
-            nn.Linear(agent_output_dim, agent_output_dim),
-            nn.ReLU(inplace=True),
-            nn.Linear(agent_output_dim, observation_dim),
-        )
 
     def encode_observations(self, observations, **kwargs):
         return self.observation_encoder(observations, **kwargs)
@@ -84,7 +76,6 @@ class BCRBCModel(nn.Module):
         self,
         noisy_z,
         previous_actions,
-        messages,
         signal_levels,
         start_t=0,
         kv_cache=None,
@@ -97,12 +88,11 @@ class BCRBCModel(nn.Module):
             previous_actions,
             signal_levels,
             start_t=start_t,
-            messages=messages,
         )
         if history_z is not None:
             history_tokens = self.dynamics_tokenizer(
                 history_z, previous_actions, torch.ones_like(signal_levels),
-                start_t=start_t, messages=messages,
+                start_t=start_t,
             )
             transformer_outputs = self.transformer.forward_conditioned(
                 tokens, history_tokens, start_t=start_t
@@ -130,7 +120,7 @@ class BCRBCModel(nn.Module):
             "kv_cache": new_kv_cache,
         }
 
-    def complete_step(self, encoded_z, previous_actions, messages, missing_mask,
+    def complete_step(self, encoded_z, previous_actions, missing_mask,
                       noise, start_t=0, kv_cache=None):
         """Generate one missing time block; only the final clean pass commits KV.
 
@@ -146,7 +136,7 @@ class BCRBCModel(nn.Module):
                 )
                 signal = torch.where(missing_mask, signal, 1.0)
                 estimate = self.estimate_clean_z(
-                    current_z, previous_actions, messages, signal,
+                    current_z, previous_actions, signal,
                     start_t=start_t, kv_cache=kv_cache,
                     use_kv_cache=True, rope_offset=start_t,
                 )["predicted_z"]
@@ -155,7 +145,7 @@ class BCRBCModel(nn.Module):
                 updated_z = current_z + velocity_step
                 current_z = torch.where(missing_mask, updated_z, encoded_z)
         output = self.estimate_clean_z(
-            current_z, previous_actions, messages,
+            current_z, previous_actions,
             torch.ones_like(encoded_z[..., :1, :1]), start_t=start_t,
             kv_cache=kv_cache, use_kv_cache=True, rope_offset=start_t,
         )
@@ -172,11 +162,11 @@ class BCRBCModel(nn.Module):
             ]
         return [(key.detach(), value.detach()) for key, value in cache]
 
-    def _training_step(self, encoded, target, actions, messages, missing, noise,
+    def _training_step(self, encoded, target, actions, missing, noise,
                        dynamics_cache, decoder_cache, start_t, compute_aux):
         """Train the current block against a detached, completed history."""
         output = self.complete_step(
-            encoded, actions, messages, missing, noise,
+            encoded, actions, missing, noise,
             start_t=start_t, kv_cache=dynamics_cache,
         )
         if compute_aux:
@@ -185,7 +175,7 @@ class BCRBCModel(nn.Module):
             noisy = torch.lerp(torch.randn_like(encoded), target, signal)
             noisy = torch.where(missing, noisy, encoded.detach())
             flow = self.estimate_clean_z(
-                noisy, actions, messages,
+                noisy, actions,
                 torch.where(missing, signal, 1.0),
                 start_t=start_t, kv_cache=dynamics_cache,
                 use_kv_cache=True, rope_offset=start_t,
@@ -199,7 +189,7 @@ class BCRBCModel(nn.Module):
             output["decoder_cache"] = decoder_cache
         return output
 
-    def forward_training(self, observations, previous_actions, messages,
+    def forward_training(self, observations, previous_actions,
                          missing_mask, start_t=0, completion_noise=None,
                          compute_aux=True):
         """Train Q on the same sequential noise-to-clean rollout used online."""
@@ -217,11 +207,10 @@ class BCRBCModel(nn.Module):
             current = slice(step, step + 1)
             encoded = history_z[:, current]
             actions = previous_actions[:, current]
-            step_messages = None if messages is None else messages[:, current]
             missing = missing_mask[:, current]
             target = target_z[:, current].detach() if compute_aux else None
             output = self._training_step(
-                encoded, target, actions, step_messages, missing,
+                encoded, target, actions, missing,
                 completion_noise[:, current], dynamics_cache,
                 decoder_cache, start_t + step, compute_aux,
             )
@@ -251,7 +240,6 @@ class BCRBCModel(nn.Module):
                     history_z, rope_offset=start_t,
                 ),
                 "generated_reconstructed_observations": torch.cat(reconstructed, dim=1),
-                "reconstructed_messages": self.message_decoder(output["agent_outputs"]),
             })
         return output
 
@@ -260,7 +248,6 @@ class BCRBCModel(nn.Module):
         observations,
         previous_actions,
         start_t=0,
-        messages=None,
         z_override=None,
         noisy_z=None,
         signal_levels=None,
@@ -282,21 +269,13 @@ class BCRBCModel(nn.Module):
         dynamics_output = self.estimate_clean_z(
             noisy_z,
             previous_actions,
-            messages,
             signal_levels,
             start_t=start_t,
             kv_cache=kv_cache,
             use_kv_cache=use_kv_cache,
             rope_offset=rope_offset,
         )
-        dynamics_output.update(
-            {
-                "z": z,
-                "reconstructed_messages": self.message_decoder(
-                    dynamics_output["agent_outputs"]
-                ),
-            }
-        )
+        dynamics_output["z"] = z
         if reconstruct:
             dynamics_output["reconstructed_observations"] = self.decode_observations(z)
         return dynamics_output
