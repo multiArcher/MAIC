@@ -1,108 +1,97 @@
-"""Aggregate completed on/off grid results and draw delay heatmaps."""
+"""Plot saved decision diagnostics; no environment or model execution."""
 
-import argparse
 import json
 from pathlib import Path
+import sys
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("output", type=Path)
-    options = parser.parse_args()
-    data = pd.read_csv(options.output / "results.csv")
-    aggregates = []
-    keys = ["obs_mean", "comm_mean", "completion"]
-    for condition, frame in data.groupby(keys, dropna=False):
-        row = dict(zip(keys, condition))
-        n = frame["episodes"].sum()
-        wins = (frame["running/test_battle_won_mean"] * frame["episodes"]).sum()
-        p = wins / n
-        scale = 1 + 1.96 ** 2 / n
-        center = (p + 1.96 ** 2 / (2 * n)) / scale
-        radius = 1.96 * np.sqrt(p * (1 - p) / n + 1.96 ** 2 / (4 * n ** 2)) / scale
-        row.update(episodes=n, wins=wins, win_rate=p,
-                   win_ci_low=center - radius, win_ci_high=center + radius,
-                   evaluation_seeds=len(frame))
-        row["return_mean"] = (
-            frame["metric/test_return_mean"] * frame["episodes"]
-        ).sum() / n
-        for column in frame.columns:
-            if column.endswith("_sum"):
-                group = next(g for g in ("missing", "never_arrived", "stale_arrived")
-                             if column.startswith(g + "_"))
-                count = frame[group + "_count"].sum()
-                row[column[:-4]] = frame[column].sum() / count if count else np.nan
-        row["missing_count"] = frame["missing_count"].sum()
-        row["missing_fraction"] = row["missing_count"] / frame["agent_steps"].sum()
-        aggregates.append(row)
-    table = pd.DataFrame(aggregates)
-    table.to_csv(options.output / "aggregate.csv", index=False)
-    grid = table.dropna(subset=["obs_mean", "comm_mean"])
-    means = sorted(set(grid["obs_mean"]) | set(grid["comm_mean"]))
-    modes = sorted(grid["completion"].unique())
-    plt.rcParams.update({"font.size": 9, "axes.titlesize": 10})
-    figures = options.output / "figures"
+def plot_grid(output):
+    rows = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+    figures = output / "figures"
     figures.mkdir(exist_ok=True)
-    metrics = ["win_rate", "return_mean", "missing_used_z_mse",
-               "missing_used_obs_mse", "missing_tokenizer_mse",
-               "missing_stale_obs_mse", "missing_completion_gain"]
-    for metric in metrics:
-        matrices = []
-        for completion in modes:
-            subset = grid[grid["completion"] == completion]
-            matrix = subset.pivot(index="obs_mean", columns="comm_mean", values=metric)
-            matrices.append(matrix.reindex(index=means, columns=means).to_numpy())
-        finite = np.concatenate([m[np.isfinite(m)] for m in matrices])
-        if not finite.size:
+    for cap in sorted({row["cap"] for row in rows}):
+        gaussian = [row for row in rows if row["delay_type"] == "gaussian" and row["cap"] == cap]
+        if not gaussian:
             continue
-        low, high = (0, 1) if metric == "win_rate" else (finite.min(), finite.max())
-        panels = 3 if len(modes) == 2 else 1
-        fig, axes = plt.subplots(
-            1, panels, figsize=(5 * panels, 4.6), layout="constrained",
-            squeeze=False,
+        means = sorted({row["mean"] for row in gaussian})
+        stds = sorted({row["std"] for row in gaussian})
+        fields = [
+            ("win_rate", "Generated policy win rate"),
+            ("generated_agreement", "Generated / reference agreement"),
+            ("mask_agreement", "Mask / reference agreement"),
+            ("generated_kl", "KL(reference || generated)"),
+            ("mask_kl", "KL(reference || mask)"),
+            ("decision_count", "Eligible agent decisions"),
+        ]
+        kl_max = max(
+            (row[key] for row in gaussian for key in ("generated_kl", "mask_kl")
+             if row[key] is not None), default=1,
         )
-        axes = axes[0]
-        titles = ["Completion on" if mode else "Completion off" for mode in modes]
-        for axis, matrix, title in zip(axes, matrices, titles):
-            picture = axis.imshow(matrix, origin="lower", interpolation="none",
-                                  cmap="cividis", vmin=low, vmax=high)
-            axis.set_title(title)
-            fig.colorbar(picture, ax=axis)
-        if len(modes) == 2:
-            difference = matrices[1] - matrices[0]
-            bound = np.nanmax(np.abs(difference))
-            if not np.isfinite(bound) or bound == 0:
-                bound = 1.0
-            picture = axes[2].imshow(
-                difference, origin="lower", interpolation="none",
-                cmap="PuOr", vmin=-bound, vmax=bound,
+        fig, axes = plt.subplots(2, 3, figsize=(13, 8), constrained_layout=True)
+        for axis, (field, title) in zip(axes.flat, fields):
+            values = np.full((len(stds), len(means)), np.nan)
+            for row in gaussian:
+                value = row[field]
+                if value is not None:
+                    values[stds.index(row["std"]), means.index(row["mean"])] = value
+            maximum = 1 if field in ("win_rate", "generated_agreement", "mask_agreement") else (
+                kl_max if field.endswith("kl") else None
             )
-            axes[2].set_title("On minus off")
-            fig.colorbar(picture, ax=axes[2])
-        for axis in axes:
-            axis.set_xticks(range(len(means)), [f"{mu:g}" for mu in means], rotation=45)
-            axis.set_yticks(range(len(means)), [f"{mu:g}" for mu in means])
-            axis.set_xlabel("Communication Gaussian mean")
-            axis.set_ylabel("Observation Gaussian mean")
-        fig.suptitle(metric + " | sigma=1; blank cells are unavailable")
-        for extension in ("png", "pdf"):
-            fig.savefig(figures / f"{metric}.{extension}", dpi=220)
+            picture = axis.imshow(values, origin="lower", cmap="cividis", vmin=0, vmax=maximum)
+            axis.set_xticks(range(len(means)), means)
+            axis.set_yticks(range(len(stds)), stds)
+            axis.set(xlabel="Gaussian mean (steps)", ylabel="Gaussian std (steps)", title=title)
+            for (y, x), value in np.ndenumerate(values):
+                label = "—" if np.isnan(value) else (
+                    f"{value:.0f}" if field == "decision_count" else f"{value:.2f}"
+                )
+                axis.text(x, y, label, ha="center", va="center", fontsize=9,
+                          color="white" if np.isnan(value) or picture.norm(value) < .5 else "black")
+            fig.colorbar(picture, ax=axis, shrink=.75)
+        counts = sorted({row["episodes"] for row in gaussian})
+        fig.suptitle(
+            f"Delay cap {cap}; episodes per point: {counts}\n"
+            "Agreement/KL: missing observation and >1 legal action only; — = no eligible decisions",
+            fontsize=12,
+        )
+        fig.savefig(figures / f"delay_grid_cap_{cap}.png", dpi=200)
+        fig.savefig(figures / f"delay_grid_cap_{cap}.pdf")
         plt.close(fig)
-    metadata = {
-        "completed_jobs": len(data),
-        "episodes": int(data["episodes"].sum()),
-        "checkpoint": data["checkpoint"].unique().tolist(),
-        "uncertainty": "Wilson 95% episode-level intervals; one training seed",
-        "interpretation": "On/off trajectories differ. Used-vector errors describe each actual rollout; completion gain is within-trajectory stale minus decoded error. Off-mode gain is not generative benefit.",
-    }
-    (options.output / "summary.json").write_text(json.dumps(metadata, indent=2))
+    for path in sorted(output.glob("*/batch_*/trajectories.jsonl")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            plot_trajectory(json.loads(line), path.parent.parent / "figures")
+
+
+def plot_trajectory(episode, directory):
+    steps = episode["steps"]
+    paths = ("reference", "generated", "mask", "actual")
+    actions = np.asarray([[step[path] for path in paths] for step in steps])
+    missing = np.asarray([step["missing"] for step in steps])
+    agents = actions.shape[-1]
+    fig, axes = plt.subplots(agents + 1, 1, figsize=(14, 1.4 * (agents + 1)),
+                             sharex=True, constrained_layout=True)
+    action_count = int(actions.max()) + 1
+    colormap = plt.get_cmap("tab20", action_count)
+    for agent, axis in enumerate(axes[:-1]):
+        image = axis.imshow(actions[:, :, agent].T, aspect="auto", interpolation="nearest",
+                            cmap=colormap, vmin=-.5, vmax=action_count - .5)
+        axis.set_yticks(range(4), paths)
+        axis.set_ylabel(f"Agent {agent}")
+    axes[-1].imshow(missing.T, aspect="auto", cmap="Greys", vmin=0, vmax=1)
+    axes[-1].set_yticks(range(agents), range(agents))
+    axes[-1].set(xlabel="Environment step", ylabel="Missing obs\n(black = missing)")
+    fig.colorbar(image, ax=list(axes[:-1]), ticks=range(action_count),
+                 label="Action index", fraction=.015)
+    fig.suptitle(f"Episode {episode['episode']}: three policies on the SAME executed trajectory")
+    directory.mkdir(exist_ok=True)
+    fig.savefig(directory / f"actions_episode_{episode['episode']:03d}.png", dpi=180)
+    plt.close(fig)
 
 
 if __name__ == "__main__":
-    main()
+    plot_grid(Path(sys.argv[1]))

@@ -88,10 +88,10 @@ class DelayedParallelRunner(Runner):
     def get_env_info(self):
         return self.env_info
 
-    def get_fresh_obs(self, active):
+    def get_diagnostic_data(self, active):
         # Oracle observations are used only by the diagnostic scorer.
         for index in active:
-            self.parent_conns[index].send(("get_fresh_obs", None))
+            self.parent_conns[index].send(("get_diagnostic_data", None))
         observations = [self.parent_conns[index].recv() for index in active]
         return observations
 
@@ -161,15 +161,15 @@ class DelayedParallelRunner(Runner):
             )
             cpu_actions = actions.to("cpu").numpy()
 
-            if test_mode and self.diagnostics is not None:
-                active = [i for i in envs_not_terminated if not terminated[i]]
-                self.diagnostics.record(self, active)
-
             # Update the actions taken
             actions_chosen = {"actions": actions.unsqueeze(1)}
             self.batch.update(
                 actions_chosen, bs=envs_not_terminated, ts=self.t, mark_filled=False
             )
+
+            if test_mode and self.diagnostics is not None:
+                active = [i for i in envs_not_terminated if not terminated[i]]
+                self.diagnostics.record(self, active)
 
             # Send actions to each env
             action_idx = 0
@@ -381,9 +381,13 @@ def env_worker(remote, env_fn, seed):
             remote.send(env.get_env_info())
         elif cmd == "get_stats":
             remote.send(env.get_stats())
-        elif cmd == "get_fresh_obs":
+        elif cmd == "get_diagnostic_data":
             # Oracle observations leave the worker only for diagnostic scoring.
-            remote.send(env.env.get_obs())
+            sampled = env.delay_model._cache_arrival[0, env_t] - env_t
+            remote.send({
+                "observations": env.env.get_obs(),
+                "sampled_delays": sampled.long().tolist(),
+            })
         elif cmd == "render":
             env.render()
         elif cmd == "save_replay":

@@ -1,4 +1,4 @@
-"""Score actual online decisions without feeding oracle data to the controller."""
+"""Paired action diagnostics on the generated policy's actual trajectory."""
 
 import json
 
@@ -6,107 +6,139 @@ import numpy as np
 import torch
 
 
+def action_scores(reference_q, candidate_q, available_actions):
+    """Compare greedy actions and KL(reference || candidate), using softmax(Q)."""
+    legal = available_actions.bool()
+    reference_q = reference_q.float().masked_fill(~legal, -1e9)
+    candidate_q = candidate_q.float().masked_fill(~legal, -1e9)
+    reference_logp = reference_q.log_softmax(dim=-1)
+    candidate_logp = candidate_q.log_softmax(dim=-1)
+    reference_action = reference_q.argmax(dim=-1)
+    candidate_action = candidate_q.argmax(dim=-1)
+    kl = (reference_logp.exp() * (reference_logp - candidate_logp)).sum(dim=-1)
+    kl = kl.clamp_min(0.0)  # Round-off can otherwise give a tiny negative KL.
+    return {
+        "agreement": candidate_action == reference_action,
+        "kl": kl,
+        "reference_action": reference_action,
+        "candidate_action": candidate_action,
+    }
+
+
 class EvaluationDiagnostics:
-    def __init__(self, output_path, batch_size):
+    def __init__(self, output_path, batch_size, episode_offset=0):
         self.output_path = output_path
         self.batch_size = batch_size
-        self.episode_index = 0
+        self.episode_index = episode_offset
         self.totals = {}
-        self.sums = [dict() for _ in range(batch_size)]
-        self.encoder_caches = [None] * batch_size
-        self.true_decoder_caches = [None] * batch_size
+        self._reset_histories()
+
+    def _reset_histories(self):
+        self.sums = [dict() for _ in range(self.batch_size)]
+        self.trajectories = [[] for _ in range(self.batch_size)]
+        self.delay_histograms = [dict() for _ in range(self.batch_size)]
+        self.reference_encoder_cache = None
+        self.reference_dynamics_cache = None
+        self.mask_state = None
 
     @torch.no_grad()
     def record(self, runner, active):
         if not active:
             return
-        fresh = runner.get_fresh_obs(active)
         mac = runner.mac
-        observations = torch.as_tensor(
-            np.asarray(fresh), device=mac.device, dtype=torch.float32
-        )[:, None]
-        z_used = mac.decision_z[active]
-        true_z, autoencoded_rows = [], []
-        for row, index in enumerate(active):
-            z, encoder_cache = mac.agent.encode_observations(
-                observations[row:row + 1], kv_cache=self.encoder_caches[index],
-                use_kv_cache=True, rope_offset=runner.t,
-            )
-            autoencoded, true_cache = mac.agent.decode_observations(
-                z, kv_cache=self.true_decoder_caches[index],
-                use_kv_cache=True, rope_offset=runner.t,
-            )
-            self.encoder_caches[index] = mac._trim_cache(encoder_cache)
-            self.true_decoder_caches[index] = mac._trim_cache(true_cache)
-            true_z.append(z)
-            autoencoded_rows.append(autoencoded)
-        z_true = torch.cat(true_z, dim=0)
-        # Score the actual corrected decoder trajectory used by the controller.
-        decoded = mac.decision_reconstructed_observations[active]
-        autoencoded = torch.cat(autoencoded_rows, dim=0)
-        delivered = runner.batch["obs"][active, runner.t][:, None]
-        generation_time = runner.batch["obs_gen_t"][active, runner.t, :, 0]
-        masks = {
-            "missing": generation_time < runner.t,
-            "never_arrived": generation_time < 0,
-            "stale_arrived": (generation_time >= 0)
-            & (generation_time < runner.t),
+        step = runner.t
+        data = runner.get_diagnostic_data(active)
+        # Full local observations are confined to this shadow branch.
+        observations = torch.zeros_like(runner.batch["obs"][:, step:step + 1])
+        observations[active, 0] = torch.as_tensor(
+            np.asarray([item["observations"] for item in data]),
+            device=mac.device, dtype=observations.dtype,
+        )
+        _, previous_actions = mac._build_inputs(
+            runner.batch, slice(step, step + 1),
+        )
+        reference_z, encoder_cache = mac.agent.encode_observations(
+            observations, kv_cache=self.reference_encoder_cache,
+            use_kv_cache=True, rope_offset=step,
+        )
+        reference = mac.agent.estimate_clean_z(
+            reference_z, previous_actions,
+            torch.ones_like(reference_z[..., :1, :1]), start_t=step,
+            kv_cache=self.reference_dynamics_cache,
+            use_kv_cache=True, rope_offset=step,
+        )
+        self.reference_encoder_cache = mac._trim_cache(encoder_cache)
+        self.reference_dynamics_cache = mac._trim_cache(reference["kv_cache"])
+        mask_output, self.mask_state = mac.history_forward(
+            runner.batch, slice(step, step + 1), self.mask_state, generate=False,
+        )
+        reference_q = reference["q_values"][:, 0, :, 0]
+        mask_q = mask_output["q_values"][:, 0, :, 0]
+        available = runner.batch["avail_actions"][:, step]
+        generation_time = runner.batch["obs_gen_t"][:, step, :, 0]
+        missing = generation_time < step
+        eligible = missing & (available.sum(dim=-1) > 1)
+        scores = {
+            "generated": action_scores(reference_q, mac.decision_q_values, available),
+            "mask": action_scores(reference_q, mask_q, available),
         }
-        errors = {
-            "used_z_mse": (z_used - z_true).square().mean(dim=(-2, -1))[:, 0],
-            "used_obs_mse": (decoded - observations).square().mean(-1)[:, 0],
-            "tokenizer_mse": (autoencoded - observations).square().mean(-1)[:, 0],
-            "stale_obs_mse": (delivered - observations).square().mean(-1)[:, 0],
-        }
-        errors["completion_gain"] = errors["stale_obs_mse"] - errors["used_obs_mse"]
         for row, index in enumerate(active):
             totals = self.sums[index]
-            totals["agent_steps"] = totals.get("agent_steps", 0) + mac.n_agents
-            for group, mask in masks.items():
-                count_key = f"{group}_count"
-                totals[count_key] = totals.get(count_key, 0) + mask[row].sum().item()
-                for name, values in errors.items():
-                    key = f"{group}_{name}_sum"
-                    value = (values[row] * mask[row]).sum().item()
-                    totals[key] = totals.get(key, 0.0) + value
+            totals["decision_count"] = (
+                totals.get("decision_count", 0) + eligible[index].sum().item()
+            )
+            for path, values in scores.items():
+                for metric in ("agreement", "kl"):
+                    key = f"{path}_{metric}_sum"
+                    total = (values[metric][index] * eligible[index]).sum().item()
+                    totals[key] = totals.get(key, 0.0) + total
+            histogram = self.delay_histograms[index]
+            for delay in data[row]["sampled_delays"]:
+                key = str(delay)
+                histogram[key] = histogram.get(key, 0) + 1
+            if self.output_path is not None and self.episode_index + index < 4:
+                self.trajectories[index].append({
+                    "step": step,
+                    "reference": scores["generated"]["reference_action"][index].tolist(),
+                    "generated": scores["generated"]["candidate_action"][index].tolist(),
+                    "mask": scores["mask"]["candidate_action"][index].tolist(),
+                    "actual": runner.batch["actions"][index, step, :, 0].tolist(),
+                    "missing": missing[index].tolist(),
+                    "eligible": eligible[index].tolist(),
+                })
 
     def finish(self, returns, lengths, wins):
-        # Keep raw sums/counts: aggregation must not average per-episode MSEs.
         for totals in self.sums:
             for key, value in totals.items():
                 self.totals[key] = self.totals.get(key, 0) + value
-        # Standalone evaluation keeps episode records; training only logs scalars.
         if self.output_path is not None:
             with self.output_path.open("a", encoding="utf-8") as stream:
                 for index, totals in enumerate(self.sums):
                     row = {
-                        "episode": self.episode_index,
-                        "environment": index,
+                        "episode": self.episode_index + index,
                         "return": float(returns[index]),
-                        "length": lengths[index],
-                        "won": wins[index],
+                        "length": int(lengths[index]),
+                        "won": bool(wins[index]),
+                        "sampled_delay_histogram": self.delay_histograms[index],
                         **totals,
                     }
                     stream.write(json.dumps(row) + "\n")
-                    self.episode_index += 1
-        self.sums = [dict() for _ in range(self.batch_size)]
-        self.encoder_caches = [None] * self.batch_size
-        self.true_decoder_caches = [None] * self.batch_size
+            trajectory_path = self.output_path.parent / "trajectories.jsonl"
+            with trajectory_path.open("a", encoding="utf-8") as stream:
+                for index, steps in enumerate(self.trajectories):
+                    if steps:
+                        stream.write(json.dumps({
+                            "episode": self.episode_index + index, "steps": steps,
+                        }) + "\n")
+        self.episode_index += self.batch_size
+        self._reset_histories()
 
     def log(self, logger, t_env):
-        """Log sample-weighted errors over all batches in this test interval."""
-        for key, value in self.totals.items():
-            if key.endswith("_sum"):
-                # Group names also contain underscores (e.g. never_arrived).
-                for group in ("missing", "never_arrived", "stale_arrived"):
-                    if key.startswith(group + "_"):
-                        count = self.totals[f"{group}_count"]
-                        break
-                if count == 0:
-                    continue
-                name = key[:-4]
-                value /= count
-            else:
-                name = key
-            logger.log_stat(f"test_completion/{name}", value, t_env)
+        count = self.totals.get("decision_count", 0)
+        logger.log_stat("test_action/decision_count", count, t_env)
+        if count:
+            for path in ("generated", "mask"):
+                for metric in ("agreement", "kl"):
+                    value = self.totals[f"{path}_{metric}_sum"] / count
+                    logger.log_stat(f"test_action/{path}_{metric}", value, t_env)
         self.totals.clear()
