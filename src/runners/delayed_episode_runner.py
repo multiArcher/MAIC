@@ -85,8 +85,12 @@ class DelayedEpisodeRunner(Runner):
     def get_env_info(self):
         return self.env.get_env_info()
 
-    def get_fresh_obs(self, active):
-        return [self.env.env.get_obs() for _ in active]
+    def get_diagnostic_data(self, active):
+        sampled = self.env.delay_model._cache_arrival[0, self.t] - self.t
+        return [{
+            "observations": self.env.env.get_obs(),
+            "sampled_delays": sampled.long().tolist(),
+        } for _ in active]
 
     def save_replay(self):
         self.env.save_replay()
@@ -132,6 +136,10 @@ class DelayedEpisodeRunner(Runner):
                 self.batch, t_ep=self.t, t_env=self.t_env, test_mode=test_mode
             )
 
+            self.batch.update(
+                {"actions": actions}, ts=self.t, mark_filled=False
+            )
+
             if test_mode and self.diagnostics is not None:
                 self.diagnostics.record(self, [0])
 
@@ -142,7 +150,6 @@ class DelayedEpisodeRunner(Runner):
             episode_return += reward
 
             post_transition_data = {
-                "actions": actions,
                 "terminated": [(terminated != env_info.get("episode_limit", False),)],
             }
             if self.args.common_reward:
@@ -241,6 +248,4 @@ class DelayedEpisodeRunner(Runner):
                     "running/" + prefix + k + "_mean", v / stats["n_episodes"], self.t_env
                 )
         stats.clear()
-
-
 

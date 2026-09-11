@@ -1,11 +1,7 @@
 """Unified arrival-time delay model.
 
 Generalizes the arrival logic of :class:`components.communication_model.CommunicationModel`
-to an arbitrary payload, so a single component models *any* delayed channel. It is
-instantiated twice in BC-RBC:
-
-  * obs-delay-process: payload = each agent's own observation (online, step-wise).
-  * comm-delay-process: payload = sender observations (batched over a window).
+to an arbitrary payload. BCRBC uses this component for local observation delay.
 
 Arrival semantics (the fix vs. the old query-centric paths): each item produced at
 ``sent_time = t`` is assigned a delay sampled **once** for that packet, giving a fixed
@@ -17,7 +13,8 @@ monotone in ``q`` — a received item never "un-arrives".
 
 Locked design: training is always no-delay (``training=True`` ⇒ delay 0); delay is
 never exposed to the model as an input (staleness lives in the delivered content);
-missing information is zero-filled rather than represented by a learnable token.
+the wrapper supplies zero-filled missing packets and the BCRBC encoder replaces
+missing observation slots with its learned MASK token.
 
 Layout convention: ``payload`` is ``[b, T, *source_dims, *feat_dims]`` where the
 leading axis ``b`` is the batch/env axis (single env ``b=1``, parallel ``b=N``, replay
