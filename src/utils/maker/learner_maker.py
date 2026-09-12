@@ -91,3 +91,8 @@ class LearnerMaker(Maker):
         from learners.bcrbc_learner import BCRBCLearner
         return BCRBCLearner(*args, **kwargs)
 
+    @staticmethod
+    def make_rdc_q_learner(*args, **kwargs) -> 'Learner':
+        """RDC Echo QMIX learner."""
+        from learners.rdc_q_learner import RDCQLearner
+        return RDCQLearner(*args, **kwargs)
