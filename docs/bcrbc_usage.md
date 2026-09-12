@@ -26,6 +26,12 @@ endpoint supervision and existing loss weights remain; generated reconstruction
 also uses fixed masked history. Historical KV is detached, as in the previous
 truncated history training.
 
+For the pure-MASK training control, set `bcrbc_flow_steps=0`,
+`flow_loss_weight=0.0`, and `generated_rec_loss_weight=0.0`. Missing states then
+use the masked encoder output directly; the TD and tokenizer reconstruction
+objectives remain. Unweighted auxiliary forwards still run, so this control is
+for policy-quality comparison rather than minimum possible MASK runtime.
+
 For checkpoint evaluation, copy `bcrbc_key_conditions.py` or
 `bcrbc_delay_grid.py` beside the original as a `*.local.py` file. Set the training
 run, checkpoint step, output directory and experiment parameters at the top.

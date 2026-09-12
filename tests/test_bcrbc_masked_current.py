@@ -57,6 +57,14 @@ class MaskedCurrentTest(unittest.TestCase):
         torch.testing.assert_close(original["z"][:, 1:], changed["z"][:, 1:])
         torch.testing.assert_close(original["q_values"][:, 1:], changed["q_values"][:, 1:])
 
+    def test_zero_solver_steps_use_masked_latents_without_noise(self):
+        self.model.flow_steps = 0
+        with torch.no_grad():
+            original = self.run_model()
+            changed = self.run_model(noise=self.noise + 100)
+        torch.testing.assert_close(original["z"], original["history_z"])
+        torch.testing.assert_close(original["q_values"], changed["q_values"])
+
     def test_missing_values_and_future_observations_cannot_leak(self):
         with torch.no_grad():
             original = self.run_model()

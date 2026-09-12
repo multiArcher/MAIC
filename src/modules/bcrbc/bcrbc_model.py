@@ -136,6 +136,8 @@ class BCRBCModel(nn.Module):
         Solver iterations and Q share history; generated values never enter it.
         """
         current_z = torch.where(missing_mask, noise, encoded_z)
+        if self.flow_steps == 0:
+            current_z = encoded_z  # Pure-MASK ablation; no sampling noise enters Q.
         if missing_mask.any():
             for index in range(self.flow_steps):
                 signal = torch.full_like(

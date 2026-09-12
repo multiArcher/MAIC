@@ -63,6 +63,7 @@ bcrbc_dropout: 0.0
 # Sample p uniformly, then mask each observation block independently with p.
 bcrbc_mask_probability_max: 0.9
 # Shared number of Euler flow steps for training and delayed evaluation.
+# 0 uses the masked encoder directly (disable generation losses for pure MASK).
 bcrbc_flow_steps: 4
 bcrbc_q_hidden_dim: 64
 bcrbc_retro_max_replay_len: 0
