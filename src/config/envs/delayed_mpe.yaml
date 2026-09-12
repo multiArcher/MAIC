@@ -1,0 +1,21 @@
+env: "delayed_mpe"
+
+env_args:
+  scenario: "simple_spread_v3"
+  time_limit: 25
+  seed: null
+  # Delay only local observations. State and available actions remain fresh.
+  # Training is always zero-delay (DelayModel); evaluation uses these values.
+  delay_type: "gaussian"  # uniform or gaussian (fixed d is N(d, 0))
+  delay_mean: 1.0
+  delay_std: 1.0
+  max_delay: 4
+  delay_per_agent: True
+
+test_greedy: True
+test_nepisode: 32
+test_interval: 50000
+log_interval: 50000
+runner_log_interval: 10000
+learner_log_interval: 10000
+t_max: 2050000

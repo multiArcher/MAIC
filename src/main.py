@@ -154,10 +154,15 @@ if __name__ == "__main__":
     # endregion
 
     # Generate unique token.
-    if "map_name" in config_dict["env_args"]:
-        map_name = config_dict["env_args"]["map_name"]
-    elif "key" in config_dict["env_args"]:
-        map_name = config_dict["env_args"]["key"]
+    env_args = config_dict["env_args"]
+    if env_args.get("map_name"):
+        map_name = env_args["map_name"]
+    elif env_args.get("key"):
+        map_name = env_args["key"]
+    elif env_args.get("scenario"):
+        map_name = env_args["scenario"]
+    else:
+        map_name = config_dict.get("env", "env")
 
     # Get experiment name from yaml
     experiment_name = config_dict["name"]
@@ -167,6 +172,8 @@ if __name__ == "__main__":
         if param.startswith("env_args.map_name"):
             map_name = param.split("=")[1]
         elif param.startswith("env_args.key"):
+            map_name = param.split("=")[1]
+        elif param.startswith("env_args.scenario"):
             map_name = param.split("=")[1]
         elif param.startswith("name"):
             experiment_name = param.split("=")[1]

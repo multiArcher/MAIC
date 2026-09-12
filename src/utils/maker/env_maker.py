@@ -45,15 +45,7 @@ class EnvMaker(Maker):
         from envs.wrappers import DelayedObservationWrapper
 
         kwargs = EnvMaker._check_and_prepare_smac_kwargs(kwargs)
-        delay_kwargs = {
-            "delay_type": kwargs.pop("delay_type", "gaussian"),
-            "delay_mean": kwargs.pop("delay_mean", 0.0),
-            "delay_std": kwargs.pop("delay_std", 0.0),
-            "max_delay": kwargs.pop("max_delay", 0),
-            "delay_per_agent": kwargs.pop("delay_per_agent", True),
-        }
-        # "delay" (the legacy fixed-delay scalar) is dropped: a fixed delay d is N(d, 0).
-        kwargs.pop("delay", None)
+        delay_kwargs = EnvMaker._pop_delay_kwargs(kwargs)
         env = SMACWrapper(*args, **kwargs)
         return DelayedObservationWrapper(env, **delay_kwargs)
 
@@ -77,5 +69,35 @@ class EnvMaker(Maker):
         from envs.emulate_sc2v2 import EmulateSMACv2
         kwargs = EnvMaker._check_and_prepare_smac_kwargs(kwargs)
         return EmulateSMACv2(*args, **kwargs)
+
+    @staticmethod
+    def _pop_delay_kwargs(kwargs):
+        delay_kwargs = {
+            "delay_type": kwargs.pop("delay_type", "gaussian"),
+            "delay_mean": kwargs.pop("delay_mean", 0.0),
+            "delay_std": kwargs.pop("delay_std", 0.0),
+            "max_delay": kwargs.pop("max_delay", 0),
+            "delay_per_agent": kwargs.pop("delay_per_agent", True),
+        }
+        # "delay" (the legacy fixed-delay scalar) is dropped: a fixed delay d is N(d, 0).
+        kwargs.pop("delay", None)
+        return delay_kwargs
+
+    @staticmethod
+    def make_mpe(*args, **kwargs) -> MultiAgentEnv:
+        from envs.mpe import MPEEnv
+
+        assert "common_reward" in kwargs and "reward_scalarisation" in kwargs
+        return MPEEnv(*args, **kwargs)
+
+    @staticmethod
+    def make_delayed_mpe(*args, **kwargs) -> MultiAgentEnv:
+        from envs.mpe import MPEEnv
+        from envs.wrappers import DelayedObservationWrapper
+
+        assert "common_reward" in kwargs and "reward_scalarisation" in kwargs
+        delay_kwargs = EnvMaker._pop_delay_kwargs(kwargs)
+        env = MPEEnv(*args, **kwargs)
+        return DelayedObservationWrapper(env, **delay_kwargs)
 
 
