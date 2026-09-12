@@ -85,16 +85,30 @@ class ObservationDecoder(nn.Module):
         )
         self.to_observation = nn.Linear(model_hidden_dim, observation_dim)
 
-    def forward(self, z, kv_cache=None, use_kv_cache=False, rope_offset=0):
+    def forward(self, z, kv_cache=None, use_kv_cache=False, rope_offset=0,
+                history_z=None):
         batch_size, time_steps, num_agents = z.shape[:3]
         observation_queries = self.observation_query.view(1, 1, 1, 1, -1).expand(
             batch_size, time_steps, num_agents, -1, -1
         )
         tokens = torch.cat([observation_queries, self.z_projection(z)], dim=-2)
-        decoder_outputs = self.transformer(
-            tokens, kv_cache=kv_cache, use_kv_cache=use_kv_cache,
-            rope_offset=rope_offset,
-        )
+        if history_z is not None:
+            # Generated reconstruction uses the same fixed history definition.
+            with torch.no_grad():
+                history_tokens = torch.cat(
+                    [observation_queries, self.z_projection(history_z)], dim=-2,
+                )
+                condition = self.transformer.prepare_condition(
+                    history_tokens, rope_offset=rope_offset, detach=True,
+                )
+            decoder_outputs = self.transformer.query_condition(
+                tokens, condition, rope_offset=rope_offset,
+            )
+        else:
+            decoder_outputs = self.transformer(
+                tokens, kv_cache=kv_cache, use_kv_cache=use_kv_cache,
+                rope_offset=rope_offset,
+            )
         if use_kv_cache:
             decoder_outputs, new_cache = decoder_outputs
         reconstructed_observations = self.to_observation(decoder_outputs[..., 0, :])

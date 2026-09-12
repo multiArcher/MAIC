@@ -27,9 +27,8 @@ class BCRBCMAC(MAC):
         self.agent = BCRBCModel(self.obs_shape, self.n_actions, self.n_agents, args)
         # Missing raw observations use learned MASK tokens. Late arrivals replace
         # those tokens and trigger recomputation of the mutable history tail.
-        # Persistent across-step eval cache (freeze-on-commit). 0/False => recompute the
-        # whole window each step (still freezes committed latents); True => also persist
-        # the committed-prefix KV so only the mutable tail [t-D, t] is recomputed.
+        # Cache only the committed evidence prefix; recompute the mutable
+        # masked tail [t-D, t] after arrivals. Generated values never enter KV.
         self.use_kv_cache = args.bcrbc_kv_cache
         self.hidden_states = None
         # Episode-local transformer history for ordinary one-step action sampling.
@@ -157,12 +156,12 @@ class BCRBCMAC(MAC):
 
     @torch.no_grad()
     def _masked_forward(self, ep_batch: EpisodeBatch, t: slice):
-        """Correct raw arrivals and regenerate the mutable missing history.
+        """Correct raw arrivals, encode MASK history and complete only now.
 
         Encoder and dynamics have separate causal caches. Only the
         prefix older than the maximum delay is committed. Every mutable tail is
-        recomputed after arrivals. Each missing block uses the same initial noise
-        on every replay, so a correction does not randomly resample the history.
+        recomputed after arrivals. All four current-time solver queries reuse
+        the resulting fixed history condition.
         """
         output, self._eval_state = self.history_forward(
             ep_batch, t, self._eval_state, generate=True,
@@ -171,7 +170,7 @@ class BCRBCMAC(MAC):
 
     @torch.no_grad()
     def history_forward(self, ep_batch, t, previous, generate):
-        """Replay available history with independent state for each policy path."""
+        """Encode available history with independent state for each policy path."""
         end = t.stop
         observations, previous_actions = self._build_inputs(ep_batch, slice(0, end))
         aligned, missing = self._align_observations(
@@ -205,45 +204,48 @@ class BCRBCMAC(MAC):
         encoded_parts.append(encoded_tail)
         encoded_z = torch.cat(encoded_parts, dim=1)
 
-        # Reuse each generation slot's noise when late arrivals trigger replay.
+        # Keep initial noise stable if the same decision is queried again.
         noise = previous["noise"] if previous is not None else encoded_z[:, :0]
         if generate and noise.shape[1] < end:
             new_noise = torch.randn_like(encoded_z[:, noise.shape[1]:])
             noise = torch.cat([noise, new_noise], dim=1)
-        z_parts = [previous["z"][:, :cache_start]] if cache_start else []
-        committed_dynamics_cache = dynamics_cache
-        for step in range(cache_start, end):
-            z = encoded_z[:, step:step + 1]
-            if generate:
-                output = self.agent.complete_step(
-                    z, previous_actions[:, step:step + 1],
-                    missing[:, step:step + 1], noise[:, step:step + 1],
-                    start_t=step, kv_cache=dynamics_cache,
-                )
-            else:
-                output = self.agent.estimate_clean_z(
-                    z, previous_actions[:, step:step + 1],
-                    torch.ones_like(z[..., :1, :1]), start_t=step,
-                    kv_cache=dynamics_cache, use_kv_cache=True, rope_offset=step,
-                )
-                output["z"] = z
-            dynamics_cache = self._trim_cache(output["kv_cache"])
-            z_parts.append(output["z"])
-            if step + 1 == commit_end:
-                committed_dynamics_cache = dynamics_cache
-        trajectory_z = torch.cat(z_parts, dim=1)
+        # Commit masked evidence, then prepare the mutable tail once for all queries.
+        if cache_start < commit_end:
+            committed = self.agent.prepare_condition(
+                encoded_z[:, cache_start:commit_end],
+                previous_actions[:, cache_start:commit_end],
+                start_t=cache_start, kv_cache=dynamics_cache,
+            )
+            dynamics_cache = committed["kv"]
+        committed_dynamics_cache = (
+            self._trim_cache(dynamics_cache) if dynamics_cache is not None else None
+        )
+        condition = self.agent.prepare_condition(
+            encoded_z[:, commit_end:end], previous_actions[:, commit_end:end],
+            start_t=commit_end, kv_cache=dynamics_cache,
+        )
+        current_z = encoded_z[:, -1:]
+        if generate:
+            output = self.agent.complete_current(
+                current_z, previous_actions[:, -1:], missing[:, -1:],
+                noise[:, -1:], condition, start_t=end - 1,
+            )
+        else:
+            output = self.agent.estimate_clean_z(
+                current_z, previous_actions[:, -1:],
+                torch.ones_like(current_z[..., :1, :1]),
+                start_t=end - 1, condition=condition,
+            )
+            output["z"] = current_z
 
         state = {
             "base": 0, "commit_end": commit_end,
-            "z": trajectory_z.detach(), "encoded_z": encoded_z.detach(),
+            "encoded_z": encoded_z.detach(),
             "encoder_cache": committed_encoder_cache,
             "kv": committed_dynamics_cache,
             "missing": missing,
             "noise": noise,
         }
-        output.update({
-            "z": trajectory_z[:, -1:],
-        })
         avail_actions = ep_batch["avail_actions"][:, end - 1:end].unsqueeze(-2)
         output["q_values"] = output["q_values"].masked_fill(avail_actions == 0, -1e7)
         return output, state

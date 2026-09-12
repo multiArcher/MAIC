@@ -68,16 +68,16 @@ bcrbc_q_hidden_dim: 64
 bcrbc_retro_max_replay_len: 0
 
 # The mutable tail uses env_args.max_delay, the actual observation-delay cap.
-# Temporal attention uses the previous W steps; 0 means unbounded.
+# Temporal attention spans W positions including the current one; 0 is unbounded.
 bcrbc_context_window: 16
 # Cache the committed prefix; recompute the mutable tail after late arrivals.
 # Cache regression compares against uncached rollout numerically. False = off.
 bcrbc_kv_cache: True
 
-# --- Random-MASK encoding with sequential flow completion ---
+# --- Random-MASK history with parallel current-time flow completion ---
 # Q uses final generated z in both training and delayed evaluation.
-# Dynamics/decoder KV is reused and detached after each environment step.
-# Late arrivals correct raw history and regenerate the mutable missing tail.
+# Fixed masked-history KV is prepared once and detached for all current queries.
+# Late arrivals correct raw history; only the current missing state is generated.
 # Loss weights:
 #  - rec_loss: reconstruct observations from the tokenizer bottleneck z.
 #  - retro_loss: optional batch patch-and-replay ablation. It is not part of the
@@ -87,7 +87,7 @@ rec_loss_weight: 1.0
 retro_loss_weight: 0.0
 # Random-time and final generated latent supervision (valid missing only).
 flow_loss_weight: 1.0
-# Decode the final generated z using the actual mixed history (missing only).
+# Decode final generated z against fixed masked history (missing only).
 generated_rec_loss_weight: 1.0
 
 # ------------------------------------------------------------------------------

@@ -17,6 +17,15 @@ Algorithm defaults are in `src/config/algs/bcrbc_qmix.yaml`; observation-delay
 settings are in `src/config/envs/delayed_sc2.yaml`. Communication-delay settings
 are in the algorithm config. Gaussian and uniform sampling are supported.
 
+Mixed forward encodes the masked observation history and prepares fixed dynamics
+history KV once per online/target forward. Four flow solver queries complete each
+current missing latent, followed by a separate clean Q query. Training batches
+time queries together; generated latents never enter history. Late arrivals
+correct raw history before only the latest state is generated. Random-time
+endpoint supervision and existing loss weights remain; generated reconstruction
+also uses fixed masked history. Historical KV is detached, as in the previous
+truncated history training.
+
 For checkpoint evaluation, copy `bcrbc_key_conditions.py` or
 `bcrbc_delay_grid.py` beside the original as a `*.local.py` file. Set the training
 run, checkpoint step, output directory and experiment parameters at the top.
