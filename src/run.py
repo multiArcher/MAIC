@@ -124,6 +124,7 @@ def run_sequential(args, logger):
     args.n_agents = env_info["n_agents"]
     args.n_actions = env_info["n_actions"]
     args.state_shape = env_info["state_shape"]
+    args.env_info = env_info
 
     # Default/Base scheme
     scheme = parse_buffer_scheme(env_info, args.common_reward)
@@ -444,5 +445,4 @@ def parse_buffer_scheme(env_info: dict, common_reward: bool = True):
     else:
         scheme["reward"] = {"vshape": (env_info["n_agents"],)}
     return scheme
-
 

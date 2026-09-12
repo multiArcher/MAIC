@@ -1,0 +1,71 @@
+# RDC Echo + QMIX baseline for SMAC observation-delay evaluation.
+name: "rdc_qmix"
+
+runner: "parallel"
+batch_size_run: 8
+sample_times_per_run: 1
+buffer_size: 5000
+batch_size: 128
+buffer_cpu_only: True
+
+t_max: 6050000
+test_greedy: True
+test_nepisode: 32
+test_interval: 10000
+log_interval: 10000
+runner_log_interval: 10000
+learner_log_interval: 10000
+save_model: True
+save_model_interval: 1000000
+
+mac: "rdc_mac"
+agent: "pymarl2_qmix_agent"
+agent_output_type: "q"
+learner: "rdc_q_learner"
+mixer: "pymarl2_qmix_mixer"
+
+action_selector: "epsilon_greedy"
+epsilon_start: 1.0
+epsilon_finish: 0.05
+epsilon_anneal_time: 100000
+evaluation_epsilon: 0.0
+
+optimizer: "adam"
+lr: 0.001
+gamma: 0.99
+td_lambda: 0.6
+q_lambda: False
+target_update_interval: 200
+grad_norm_clip: 10
+standardise_returns: False
+standardise_rewards: False
+
+mixing_embed_dim: 32
+hypernet_embed: 64
+rnn_hidden_dim: 64
+obs_agent_id: True
+obs_last_action: True
+use_layer_norm: False
+use_orthogonal: False
+gain: 0.01
+
+# Echo predictor. Transformer runs override predictor_model and minibatch count.
+predictor_mode: "single_step"
+predictor_model: "gru"
+transformer_structure: "encoder-decoder"
+use_history: True
+n_expand_action: 6
+pd_hidden_dim: 64
+pd_lr: 0.001
+num_minibatch_predictor: 2
+rdc_regression_loss_weight: 10.0
+rdc_classification_loss_weight: 1.0
+
+# EPyMARL whole-observation delay only. Training data remains delay-free by design.
+obs_delay_enabled: True
+obs_delay_apply_train: False
+obs_delay_apply_test: True
+obs_gaussian_delay_mean: 3.0
+obs_gaussian_delay_std: 2.0
+obs_delay_discretization: "round"
+obs_delay_max: 6
