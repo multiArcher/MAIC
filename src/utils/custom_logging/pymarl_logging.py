@@ -221,7 +221,8 @@ class PyMARLLogger(CustomLogger):
             self.tb_writer.add_hparams(
                 hparam_dict=hparam_dict,
                 metric_dict=metric_dict,
-                run_name=args.name
+                run_name=".",
+                global_step=max(values[-1][0] for values in self.stats.values()),
             )
             self.tb_writer.close()
 

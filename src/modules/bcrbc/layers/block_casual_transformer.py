@@ -165,44 +165,52 @@ class BlockCasualTransformer(nn.Module):
 
         self.final_norm = nn.RMSNorm(dim, device=device)
 
-    def forward_conditioned(self, queries, history, rope_offset=0):
-        """Denoise each query against strictly past conditioning blocks.
+    def prepare_condition(self, history, rope_offset=0, kv_cache=None, detach=False):
+        """Prepare fixed historical KV once for repeated denoising queries."""
+        _, caches = self.forward(
+            history, kv_cache=kv_cache, use_kv_cache=True, rope_offset=rope_offset,
+        )
+        n_cached = kv_cache[0][0].shape[-2] if kv_cache else 0
+        positions = torch.arange(
+            rope_offset - n_cached, rope_offset + history.shape[-4],
+            device=history.device,
+        )
+        if detach:
+            caches = [(keys.detach(), values.detach()) for keys, values in caches]
+        return {"kv": caches, "positions": positions}
 
-        History never reads queries. Query k reads history < k and its own
-        block only, so clean targets in other queries cannot leak into k.
-        This is the batched equivalent of querying then committing history.
-        """
+    def query_condition(self, queries, condition, rope_offset=0):
+        """Each query reads strictly past history and its own block only."""
         time_steps = queries.shape[-4]
-        positions = torch.arange(time_steps, device=queries.device)
-        distance = positions[:, None] - positions[None, :]
-        causal = distance >= 0
+        positions = torch.arange(
+            rope_offset, rope_offset + time_steps, device=queries.device,
+        )
+        distance = positions[:, None] - condition["positions"][None, :]
         past = distance > 0
         if self.context_window is not None:
-            causal = causal & (distance < self.context_window)
             past = past & (distance < self.context_window)
-        query_mask = torch.cat([past, distance == 0], dim=-1)
+        same_query = positions[:, None] == positions[None, :]
+        query_mask = torch.cat([past, same_query], dim=-1)
         space_mask = self._build_space_mask(queries.shape[-2], queries.device)
         frequencies = self.rotary(time_steps, offset=rope_offset)
+        cache_iter = iter(condition["kv"])
 
         for layer, is_time in zip(self.layers, self.is_time_layer):
             if is_time:
                 queries = queries.movedim(-4, -2)
-                history = history.movedim(-4, -2)
-                history, history_cache = layer(
-                    history, mask=causal, rotary_pos_emb=frequencies,
-                    return_cache=True,
-                )
                 queries = layer(
                     queries, mask=query_mask, rotary_pos_emb=frequencies,
-                    kv_cache=history_cache,
+                    kv_cache=next(cache_iter),
                 )
                 queries = queries.movedim(-2, -4)
-                history = history.movedim(-2, -4)
             else:
                 queries = layer(queries, mask=space_mask)
-                history = layer(history, mask=space_mask)
-        transformer_outputs = self.final_norm(queries)
-        return transformer_outputs
+        return self.final_norm(queries)
+
+    def forward_conditioned(self, queries, history, rope_offset=0):
+        """Denoise against fixed strictly past history without cross-query leakage."""
+        condition = self.prepare_condition(history, rope_offset=rope_offset)
+        return self.query_condition(queries, condition, rope_offset=rope_offset)
 
     def _build_space_mask(self, dim: int, device=None) -> Optional[Tensor]:
         """Build the spatial attention mask considering special tokens and dynamics logic.

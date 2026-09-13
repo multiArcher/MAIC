@@ -30,3 +30,4 @@ CLAUDE.md
 *.local.yaml
 
 /results_history/
+/tmp/
