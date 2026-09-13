@@ -1,6 +1,13 @@
-import logging
 import os
 import sys
+
+# ParallelRunner uses fork. TensorBoard (setup_tb) imports protobuf in the
+# parent; children reuse that copy. PySC2's s2clientprotocol was generated for
+# protobuf 3.x and crashes on protobuf 6–7's C++ backend. Switch backends
+# before any google.protobuf import. Does not change SMAC obs/reward/winrate.
+os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
+
+import logging
 import yaml
 import datetime
 import random

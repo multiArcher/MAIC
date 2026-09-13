@@ -1,4 +1,10 @@
 import copy
+import os
+
+# pysc2's generated *_pb2.py targets protobuf 3.x. TensorFlow 2.21 pulls
+# protobuf 6–7, which refuses those descriptors. Pure-Python parsing is enough
+# for SC2 IPC; do this before importing smac/pysc2.
+os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 
 from smac.env import StarCraft2Env
 

@@ -1,6 +1,9 @@
-import datetime
 import os
 import sys
+
+os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
+
+import datetime
 import pprint
 import shutil
 import tqdm
