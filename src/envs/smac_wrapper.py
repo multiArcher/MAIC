@@ -72,7 +72,30 @@ class SMACWrapper(MultiAgentEnv):
         self.env.save_replay()
 
     def get_env_info(self):
-        return self.env.get_env_info()
+        env_info = self.env.get_env_info()
+        env_info.update(
+            {
+                "n_enemies": self.env.n_enemies,
+                "n_allies": self.env.n_agents - 1,
+                "n_actions_move": self.env.n_actions_move,
+                "obs_move_feats_size": self.env.get_obs_move_feats_size(),
+                "obs_enemy_feats_size": self.env.get_obs_enemy_feats_size(),
+                "obs_ally_feats_size": self.env.get_obs_ally_feats_size(),
+                "obs_own_feats_size": self.env.get_obs_own_feats_size(),
+                "unit_type_bits": self.env.unit_type_bits,
+                "obs_pathing_grid": self.env.obs_pathing_grid,
+                "obs_terrain_height": self.env.obs_terrain_height,
+                "obs_timestep_number": self.env.obs_timestep_number,
+                "env_obs_last_action": self.env.obs_last_action,
+            }
+        )
+        env_info["obs_components"] = (
+            env_info["obs_move_feats_size"],
+            env_info["obs_enemy_feats_size"],
+            env_info["obs_ally_feats_size"],
+            env_info["obs_own_feats_size"],
+        )
+        return env_info
 
     def get_stats(self):
         return self.env.get_stats()

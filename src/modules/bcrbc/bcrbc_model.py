@@ -72,6 +72,17 @@ class BCRBCModel(nn.Module):
     def decode_observations(self, z, **kwargs):
         return self.observation_decoder(z, **kwargs)
 
+    @torch.no_grad()
+    def prepare_condition(self, history_z, previous_actions, start_t=0, kv_cache=None):
+        """Build detached MASK-history KV once for all current queries."""
+        tokens = self.dynamics_tokenizer(
+            history_z, previous_actions, torch.ones_like(history_z[..., :1, :1]),
+            start_t=start_t,
+        )
+        return self.transformer.prepare_condition(
+            tokens, start_t=start_t, kv_cache=kv_cache, detach=True,
+        )
+
     def estimate_clean_z(
         self,
         noisy_z,
@@ -81,7 +92,7 @@ class BCRBCModel(nn.Module):
         kv_cache=None,
         use_kv_cache=False,
         rope_offset=None,
-        history_z=None,
+        condition=None,
     ):
         tokens = self.dynamics_tokenizer(
             noisy_z,
@@ -89,13 +100,9 @@ class BCRBCModel(nn.Module):
             signal_levels,
             start_t=start_t,
         )
-        if history_z is not None:
-            history_tokens = self.dynamics_tokenizer(
-                history_z, previous_actions, torch.ones_like(signal_levels),
-                start_t=start_t,
-            )
-            transformer_outputs = self.transformer.forward_conditioned(
-                tokens, history_tokens, start_t=start_t
+        if condition is not None:
+            transformer_outputs = self.transformer.query_condition(
+                tokens, condition, start_t=start_t,
             )
             new_kv_cache = None
         elif use_kv_cache:
@@ -120,15 +127,17 @@ class BCRBCModel(nn.Module):
             "kv_cache": new_kv_cache,
         }
 
-    def complete_step(self, encoded_z, previous_actions, missing_mask,
-                      noise, start_t=0, kv_cache=None):
-        """Generate one missing time block; only the final clean pass commits KV.
+    def complete_current(self, encoded_z, previous_actions, missing_mask,
+                         noise, condition, start_t=0):
+        """Generate independent current blocks against the same MASK history.
 
         Linear flow: x(s) = (1-s) noise + s target. The network predicts the
         clean endpoint, giving velocity (predicted_z - x) / (1-s).
-        All solver iterations read the same past, never each other's KV.
+        Solver iterations and Q share history; generated values never enter it.
         """
         current_z = torch.where(missing_mask, noise, encoded_z)
+        if self.flow_steps == 0:
+            current_z = encoded_z  # Pure-MASK ablation; no sampling noise enters Q.
         if missing_mask.any():
             for index in range(self.flow_steps):
                 signal = torch.full_like(
@@ -137,8 +146,7 @@ class BCRBCModel(nn.Module):
                 signal = torch.where(missing_mask, signal, 1.0)
                 estimate = self.estimate_clean_z(
                     current_z, previous_actions, signal,
-                    start_t=start_t, kv_cache=kv_cache,
-                    use_kv_cache=True, rope_offset=start_t,
+                    start_t=start_t, condition=condition,
                 )["predicted_z"]
                 # dt / (1-s) = 1 / (K-index); last step reaches the endpoint.
                 velocity_step = (estimate - current_z) / (self.flow_steps - index)
@@ -147,99 +155,52 @@ class BCRBCModel(nn.Module):
         output = self.estimate_clean_z(
             current_z, previous_actions,
             torch.ones_like(encoded_z[..., :1, :1]), start_t=start_t,
-            kv_cache=kv_cache, use_kv_cache=True, rope_offset=start_t,
+            condition=condition,
         )
         output["z"] = current_z
-        return output
-
-    def _detach_cache(self, cache):
-        """Keep the causal window and truncate gradients between time steps."""
-        if self.context_window:
-            cache = [
-                (key[..., -self.context_window:, :],
-                 value[..., -self.context_window:, :])
-                for key, value in cache
-            ]
-        return [(key.detach(), value.detach()) for key, value in cache]
-
-    def _training_step(self, encoded, target, actions, missing, noise,
-                       dynamics_cache, decoder_cache, start_t, compute_aux):
-        """Train the current block against a detached, completed history."""
-        output = self.complete_step(
-            encoded, actions, missing, noise,
-            start_t=start_t, kv_cache=dynamics_cache,
-        )
-        if compute_aux:
-            # Teacher endpoints enter this auxiliary pass only, never Q or KV.
-            signal = torch.rand_like(encoded[..., :1, :1])
-            noisy = torch.lerp(torch.randn_like(encoded), target, signal)
-            noisy = torch.where(missing, noisy, encoded.detach())
-            flow = self.estimate_clean_z(
-                noisy, actions,
-                torch.where(missing, signal, 1.0),
-                start_t=start_t, kv_cache=dynamics_cache,
-                use_kv_cache=True, rope_offset=start_t,
-            )
-            decoded, decoder_cache = self.decode_observations(
-                output["z"], kv_cache=decoder_cache,
-                use_kv_cache=True, rope_offset=start_t,
-            )
-            output["predicted_z"] = flow["predicted_z"]
-            output["generated_reconstructed_observations"] = decoded
-            output["decoder_cache"] = decoder_cache
         return output
 
     def forward_training(self, observations, previous_actions,
                          missing_mask, start_t=0, completion_noise=None,
                          compute_aux=True):
-        """Train Q on the same sequential noise-to-clean rollout used online."""
+        """Encode masked history once and batch all current-time queries."""
         history_z = self.encode_observations(
             observations, missing_mask=missing_mask, rope_offset=start_t
         )
         if completion_noise is None:
             completion_noise = torch.randn_like(history_z)
-        target_z = None
-        if compute_aux:
-            target_z = self.encode_observations(observations, rope_offset=start_t)
-        dynamics_cache = decoder_cache = None
-        outputs, flow_predictions, reconstructed = [], [], []
-        for step in range(observations.shape[1]):
-            current = slice(step, step + 1)
-            encoded = history_z[:, current]
-            actions = previous_actions[:, current]
-            missing = missing_mask[:, current]
-            target = target_z[:, current].detach() if compute_aux else None
-            output = self._training_step(
-                encoded, target, actions, missing,
-                completion_noise[:, current], dynamics_cache,
-                decoder_cache, start_t + step, compute_aux,
-            )
-            if compute_aux:
-                flow_predictions.append(output["predicted_z"])
-                reconstructed.append(output["generated_reconstructed_observations"])
-                decoder_cache = self._detach_cache(output.pop("decoder_cache"))
-            dynamics_cache = self._detach_cache(output.pop("kv_cache"))
-            outputs.append(output)
-        output = {
-            key: torch.cat([item[key] for item in outputs], dim=1)
-            for key in ("z", "q_values", "agent_outputs")
-        }
+        condition = self.prepare_condition(history_z, previous_actions, start_t=start_t)
+        output = self.complete_current(
+            history_z, previous_actions, missing_mask, completion_noise,
+            condition, start_t=start_t,
+        )
         output.update({
             "history_z": history_z,
             "missing_mask": missing_mask,
             "completion_noise": completion_noise,
         })
         if compute_aux:
+            target_z = self.encode_observations(observations, rope_offset=start_t)
+            # Clean targets enter only this auxiliary query, never Q or history.
+            signal = torch.rand_like(history_z[..., :1, :1])
+            noisy = torch.lerp(torch.randn_like(history_z), target_z.detach(), signal)
+            noisy = torch.where(missing_mask, noisy, history_z.detach())
+            flow = self.estimate_clean_z(
+                noisy, previous_actions, torch.where(missing_mask, signal, 1.0),
+                start_t=start_t, condition=condition,
+            )
             output.update({
                 "target_z": target_z.detach(),
-                "predicted_z": torch.cat(flow_predictions, dim=1),
+                "predicted_z": flow["predicted_z"],
                 "reconstructed_observations": self.decode_observations(
                     target_z, rope_offset=start_t,
                 ),
                 "masked_reconstructed_observations": self.decode_observations(
                     history_z, rope_offset=start_t,
                 ),
-                "generated_reconstructed_observations": torch.cat(reconstructed, dim=1),
+                "generated_reconstructed_observations": self.decode_observations(
+                    output["z"], history_z=history_z, rope_offset=start_t,
+                ),
             })
         return output
 

@@ -80,3 +80,9 @@ class MACMaker(Maker):
         """BC-RBC joint block-causal MAC."""
         from controllers.bcrbc_mac import BCRBCMAC
         return BCRBCMAC(*args, **kwargs)
+
+    @staticmethod
+    def make_rdc_mac(*args, **kwargs) -> MAC:
+        """RDC Echo delay-compensating MAC."""
+        from controllers.rdc_controller import RDCMAC
+        return RDCMAC(*args, **kwargs)
