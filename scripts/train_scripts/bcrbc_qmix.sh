@@ -18,4 +18,4 @@ python -u src/main.py --config=bcrbc_qmix --env-config=delayed_sc2 with \
     use_cuda=True \
     test_nepisode=16 test_interval=50000 log_interval=5000 \
     runner_log_interval=5000 learner_log_interval=5000 \
-    save_model_interval=100000 t_max="$T_MAX"
+    save_model_interval=100000 t_max="$T_MAX" "$@"
