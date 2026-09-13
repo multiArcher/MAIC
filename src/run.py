@@ -1,6 +1,6 @@
-import datetime
 import os
 import sys
+import datetime
 import pprint
 import shutil
 import tqdm
@@ -261,8 +261,14 @@ def run_sequential(args, logger):
                 runner.run(test_mode=True)
             torch.cuda.empty_cache()
 
-        new_winrate = logger.stats["running/test_battle_won_mean"][-1][1]
-        best_model = (new_winrate > max_winrate) or (episode == 0)
+        battle_stats = logger.stats.get("running/test_battle_won_mean") or []
+        if battle_stats:
+            new_winrate = battle_stats[-1][1]
+            best_model = (new_winrate > max_winrate) or (episode == 0)
+        else:
+            # MPE and other non-SMAC envs do not log battle_won.
+            new_winrate = max_winrate
+            best_model = episode == 0
         
         if best_model is True:
             model_save_dir = Path(args.local_results_path) / "models" / args.unique_token
@@ -383,6 +389,27 @@ def args_sanity_check(config, logger):
         logger.warning(
             "CUDA flag use_cuda was switched OFF automatically because no CUDA device is available!"
         )
+
+    # MPE episodes are short vector tasks; kernel_qmix's SMAC parallel worker
+    # settings are the wrong default and collide with pygame.
+    if config.get("env") == "mpe":
+        if config.get("runner") != "episode":
+            logger.warning(
+                "MPE forces runner=episode and batch_size_run=1 "
+                f"(was runner={config.get('runner')}, "
+                f"batch_size_run={config.get('batch_size_run')})."
+            )
+        config["runner"] = "episode"
+        config["batch_size_run"] = 1
+    elif config.get("env") == "delayed_mpe":
+        if config.get("runner") != "delayed_episode":
+            logger.warning(
+                "delayed_mpe forces runner=delayed_episode and batch_size_run=1 "
+                f"(was runner={config.get('runner')}, "
+                f"batch_size_run={config.get('batch_size_run')})."
+            )
+        config["runner"] = "delayed_episode"
+        config["batch_size_run"] = 1
 
     # Adjust batch_size_run and test_nepisode to be divisible by batch_size_run.
     if config["test_nepisode"] < config["batch_size_run"]:

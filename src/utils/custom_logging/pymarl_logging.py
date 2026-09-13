@@ -11,6 +11,23 @@ import numpy
 from utils.custom_logging.custom_logging import CustomLogger, CustomLoggerConfig
 
 
+def _use_tensorboard_without_tensorflow():
+    """Force TensorBoard's stub TF API so the real TensorFlow package is not imported.
+
+    ``torch.utils.tensorboard.SummaryWriter`` goes through ``tensorboard.compat.tf``.
+    If TensorFlow is installed, that loads the real TF CUDA runtime, which
+    segfaults with pygame/mpe2 (and with PyTorch). Pre-registering the empty
+    ``tensorboard.compat.notf`` module makes TensorBoard use ``tensorflow_stub``
+    instead; event files are unchanged.
+    """
+    import sys
+    import types
+
+    sys.modules.setdefault(
+        "tensorboard.compat.notf", types.ModuleType("tensorboard.compat.notf")
+    )
+
+
 @dataclass
 class PyMARLLoggerConfig(CustomLoggerConfig):
     """
@@ -103,6 +120,7 @@ class PyMARLLogger(CustomLogger):
 
     def setup_tensorboard_logging(self, directory_name: Path):
         """Initialize a SummaryWriter to log tensorboard data."""
+        _use_tensorboard_without_tensorflow()
         from torch.utils.tensorboard import SummaryWriter
 
         self.tb_writer = SummaryWriter(log_dir=directory_name)

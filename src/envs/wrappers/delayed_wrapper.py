@@ -55,7 +55,17 @@ class DelayedObservationWrapper(MultiAgentEnv):
 
     @property
     def episode_timestep(self):
-        return self.env.env._episode_steps
+        env = self.env
+        clock = getattr(env, "episode_timestep", None)
+        if clock is not None:
+            return int(clock)
+        inner = getattr(env, "env", None)
+        if inner is not None and hasattr(inner, "_episode_steps"):
+            return int(inner._episode_steps)
+        raise AttributeError(
+            f"{type(env).__name__} has no episode clock for observation delay "
+            "(need episode_timestep or env._episode_steps)"
+        )
 
     @property
     def training(self) -> bool:
