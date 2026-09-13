@@ -1,11 +1,8 @@
-import os
 import yaml
 from pathlib import Path
 from collections import OrderedDict
 
 from typing import Union
-
-os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 
 from smacv2.env.starcraft2.wrapper import StarCraftCapabilityEnvWrapper
 
