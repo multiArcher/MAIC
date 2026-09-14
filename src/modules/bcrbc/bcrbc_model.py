@@ -26,8 +26,9 @@ class BCRBCModel(nn.Module):
         self.flow_steps = args.bcrbc_flow_steps
         self.generation_horizon = args.bcrbc_generation_horizon
         self.rec_loss_enabled = args.rec_loss_weight > 0
-        self.flow_loss_enabled = args.flow_loss_weight > 0
-        self.generated_rec_loss_enabled = args.generated_rec_loss_weight > 0
+        # N=0 is the pure-MASK ablation, including its auxiliary objectives.
+        self.flow_loss_enabled = self.generation_horizon != 0 and args.flow_loss_weight > 0
+        self.generated_rec_loss_enabled = self.generation_horizon != 0 and args.generated_rec_loss_weight > 0
 
         self.observation_encoder = ObservationEncoder(
             observation_dim,
