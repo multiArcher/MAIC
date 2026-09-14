@@ -112,5 +112,7 @@ class BlockCausalTransformer(nn.Module):
             history, rope_offset=start_t, kv_cache=kv_cache, detach=detach,
         )
 
-    def query_condition(self, queries, condition, start_t=0):
-        return self.transformer.query_condition(queries, condition, rope_offset=start_t)
+    def query_condition(self, queries, condition, start_t=0, return_cache=False):
+        return self.transformer.query_condition(
+            queries, condition, rope_offset=start_t, return_cache=return_cache,
+        )
