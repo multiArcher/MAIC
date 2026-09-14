@@ -144,8 +144,8 @@ class BCRBCLearner(Learner):
         td_loss = (masked_td_error**2).sum() / mixer_mask.sum().clamp_min(1.0)
 
         rec_weight = self.args.rec_loss_weight
-        flow_weight = self.args.flow_loss_weight
-        generated_rec_weight = self.args.generated_rec_loss_weight
+        flow_weight = self.args.flow_loss_weight if self.mac.agent.flow_loss_enabled else 0.0
+        generated_rec_weight = self.args.generated_rec_loss_weight if self.mac.agent.generated_rec_loss_enabled else 0.0
 
         # [B, T, N, 1, 1]; each valid agent contributes once to auxiliary losses.
         agent_mask = mask[:, :, None, None].expand(-1, -1, self.n_agents, 1, 1)
