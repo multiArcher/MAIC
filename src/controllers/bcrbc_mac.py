@@ -28,7 +28,7 @@ class BCRBCMAC(MAC):
         # Missing raw observations use learned MASK tokens. Late arrivals replace
         # those tokens and trigger recomputation of the mutable history tail.
         # Cache only the committed evidence prefix; recompute the mutable
-        # masked tail [t-D, t] after arrivals. Generated values never enter KV.
+        # masked tail [t-D, t] after arrivals. Generated KV is never committed.
         self.use_kv_cache = args.bcrbc_kv_cache
         self.hidden_states = None
         # Episode-local transformer history for ordinary one-step action sampling.
@@ -129,9 +129,10 @@ class BCRBCMAC(MAC):
         out["q_values"] = out["q_values"].masked_fill(avail_actions == 0, -1e7)
         return out
 
-    def _trim_cache(self, cache):
+    def _trim_cache(self, cache, extra_steps=0):
         window = self.agent.context_window
         if window:
+            window += extra_steps
             cache = [(key[..., -window:, :], value[..., -window:, :])
                      for key, value in cache]
         return [(key.detach(), value.detach()) for key, value in cache]
@@ -156,12 +157,12 @@ class BCRBCMAC(MAC):
 
     @torch.no_grad()
     def _masked_forward(self, ep_batch: EpisodeBatch, t: slice):
-        """Correct raw arrivals, encode MASK history and complete only now.
+        """Correct raw arrivals, encode MASK history and complete the recent window.
 
         Encoder and dynamics have separate causal caches. Only the
         prefix older than the maximum delay is committed. Every mutable tail is
-        recomputed after arrivals. All four current-time solver queries reuse
-        the resulting fixed history condition.
+        recomputed after arrivals. Generated blocks are temporary conditions;
+        only MASK evidence enters the persistent cache.
         """
         output, self._eval_state = self.history_forward(
             ep_batch, t, self._eval_state, generate=True,
@@ -172,6 +173,7 @@ class BCRBCMAC(MAC):
     def history_forward(self, ep_batch, t, previous, generate):
         """Encode available history with independent state for each policy path."""
         end = t.stop
+        horizon = max(1, self.agent.completion_horizon(end)) if generate else 1
         observations, previous_actions = self._build_inputs(ep_batch, slice(0, end))
         aligned, missing = self._align_observations(
             observations, ep_batch["obs_gen_t"][:, :end].to(self.device)
@@ -218,7 +220,8 @@ class BCRBCMAC(MAC):
             )
             dynamics_cache = committed["kv"]
         committed_dynamics_cache = (
-            self._trim_cache(dynamics_cache) if dynamics_cache is not None else None
+            self._trim_cache(dynamics_cache, extra_steps=horizon - 1)
+            if dynamics_cache is not None else None
         )
         condition = self.agent.prepare_condition(
             encoded_z[:, commit_end:end], previous_actions[:, commit_end:end],
@@ -226,9 +229,10 @@ class BCRBCMAC(MAC):
         )
         current_z = encoded_z[:, -1:]
         if generate:
-            output = self.agent.complete_current(
-                current_z, previous_actions[:, -1:], missing[:, -1:],
-                noise[:, -1:], condition, start_t=end - 1,
+            window = slice(end - horizon, end)
+            output, _ = self.agent.complete_horizon(
+                encoded_z[:, window], previous_actions[:, window], missing[:, window],
+                noise[:, window], condition, start_t=end - horizon, last_only=True,
             )
         else:
             output = self.agent.estimate_clean_z(

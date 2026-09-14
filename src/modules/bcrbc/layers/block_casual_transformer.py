@@ -45,16 +45,19 @@ class AxialTransformerBlock(nn.Module):
 
     @overload
     def forward(
-        self, x: Tensor, mask=None, rotary_pos_emb=None, kv_cache=None, *, return_cache: Literal[False] = False
+        self, x: Tensor, mask=None, rotary_pos_emb=None, kv_cache=None, *,
+        return_cache: Literal[False] = False, key_indices=None,
     ) -> Tensor: ...    # Returns only output
 
     @overload
     def forward(
-        self, x: Tensor, mask=None, rotary_pos_emb=None, kv_cache=None, *, return_cache: Literal[True]
+        self, x: Tensor, mask=None, rotary_pos_emb=None, kv_cache=None, *,
+        return_cache: Literal[True], key_indices=None,
     ) -> Tuple[Tensor, Tuple[Tensor, Tensor]]: ...    # Returns output and cache
 
     def forward(
-        self, x: Tensor, mask=None, rotary_pos_emb=None, kv_cache=None, *, return_cache: bool = False,
+        self, x: Tensor, mask=None, rotary_pos_emb=None, kv_cache=None, *,
+        return_cache: bool = False, key_indices=None,
     ):
         """
         Args:
@@ -78,7 +81,7 @@ class AxialTransformerBlock(nn.Module):
             mask=mask,
             rotary_pos_emb=rotary_pos_emb,
             kv_cache=kv_cache,
-            return_cache=return_cache
+            return_cache=return_cache, key_indices=key_indices,
         )
         if return_cache:
             attn, new_cache = attention_out
@@ -179,8 +182,8 @@ class BlockCasualTransformer(nn.Module):
             caches = [(keys.detach(), values.detach()) for keys, values in caches]
         return {"kv": caches, "positions": positions}
 
-    def query_condition(self, queries, condition, rope_offset=0):
-        """Each query reads strictly past history and its own block only."""
+    def query_condition(self, queries, condition, rope_offset=0, return_cache=False):
+        """Read a fixed causal condition and optionally return the clean query KV."""
         time_steps = queries.shape[-4]
         positions = torch.arange(
             rope_offset, rope_offset + time_steps, device=queries.device,
@@ -189,23 +192,46 @@ class BlockCasualTransformer(nn.Module):
         past = distance > 0
         if self.context_window is not None:
             past = past & (distance < self.context_window)
+        if "generation_depth" in condition:
+            # Depth d supplies exactly position t-(N-d). MASK supplies u <= t-N.
+            depth = condition["generation_depth"]
+            lag = condition["generation_horizon"] - depth
+            past = past & torch.where(depth == 0, distance >= lag, distance == lag)
         same_query = positions[:, None] == positions[None, :]
         query_mask = torch.cat([past, same_query], dim=-1)
+        key_indices, query_mask = self._window_indices(query_mask)
         space_mask = self._build_space_mask(queries.shape[-2], queries.device)
         frequencies = self.rotary(time_steps, offset=rope_offset)
         cache_iter = iter(condition["kv"])
+        query_caches = []
 
         for layer, is_time in zip(self.layers, self.is_time_layer):
             if is_time:
                 queries = queries.movedim(-4, -2)
                 queries = layer(
                     queries, mask=query_mask, rotary_pos_emb=frequencies,
-                    kv_cache=next(cache_iter),
+                    kv_cache=next(cache_iter), return_cache=return_cache,
+                    key_indices=key_indices,
                 )
+                if return_cache:
+                    queries, cache = queries
+                    query_caches.append(tuple(value[..., -time_steps:, :] for value in cache))
                 queries = queries.movedim(-2, -4)
             else:
                 queries = layer(queries, mask=space_mask)
-        return self.final_norm(queries)
+        queries = self.final_norm(queries)
+        return (queries, query_caches) if return_cache else queries
+
+    def _window_indices(self, mask):
+        """Select legal keys in original order, keeping padding outside softmax."""
+        if self.context_window is None:
+            return None, mask
+        key_count = mask.shape[-1]
+        positions = torch.arange(key_count, device=mask.device)
+        candidates = torch.where(mask, positions, key_count)
+        indices = candidates.topk(min(self.context_window, key_count), largest=False).values
+        valid = indices < key_count
+        return indices.clamp_max(key_count - 1), valid
 
     def forward_conditioned(self, queries, history, rope_offset=0):
         """Denoise against fixed strictly past history without cross-query leakage."""
@@ -323,6 +349,7 @@ class BlockCasualTransformer(nn.Module):
             time_mask = None
             freqs = None
             layer_cache = None
+            key_indices = None
 
             if is_time_layer:
                 if use_kv_cache:
@@ -367,6 +394,8 @@ class BlockCasualTransformer(nn.Module):
                     if self.context_window is not None:
                         time_mask = time_mask & (rel < self.context_window)
 
+                key_indices, time_mask = self._window_indices(time_mask)
+
             # 2. Block Computation
             # Transformer accross dim -2 (Time or Space).
             layer_out = layer(
@@ -375,6 +404,7 @@ class BlockCasualTransformer(nn.Module):
                 rotary_pos_emb=freqs, # Space Layer is None
                 kv_cache=layer_cache, # Space Layer is None
                 return_cache=use_kv_cache,
+                key_indices=key_indices,
             )
 
             if use_kv_cache:
