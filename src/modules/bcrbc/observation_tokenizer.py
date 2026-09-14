@@ -86,13 +86,13 @@ class ObservationDecoder(nn.Module):
         self.to_observation = nn.Linear(model_hidden_dim, observation_dim)
 
     def forward(self, z, kv_cache=None, use_kv_cache=False, rope_offset=0,
-                history_z=None):
+                history_z=None, condition=None):
         batch_size, time_steps, num_agents = z.shape[:3]
         observation_queries = self.observation_query.view(1, 1, 1, 1, -1).expand(
             batch_size, time_steps, num_agents, -1, -1
         )
         tokens = torch.cat([observation_queries, self.z_projection(z)], dim=-2)
-        if history_z is not None:
+        if history_z is not None and condition is None:
             # Generated reconstruction uses the same fixed history definition.
             with torch.no_grad():
                 history_tokens = torch.cat(
@@ -101,6 +101,7 @@ class ObservationDecoder(nn.Module):
                 condition = self.transformer.prepare_condition(
                     history_tokens, rope_offset=rope_offset, detach=True,
                 )
+        if condition is not None:
             decoder_outputs = self.transformer.query_condition(
                 tokens, condition, rope_offset=rope_offset,
             )

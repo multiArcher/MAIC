@@ -165,18 +165,22 @@ class BCRBCLearner(Learner):
         else:
             rec_loss = td_loss.new_zeros(())
         completion_mask = mask[:, :, None, None] * mac_out["missing_mask"][:, :-1]
-        flow_loss = flow_matching_loss(
-            mac_out["predicted_z"][:, :-1],
-            mac_out["target_z"][:, :-1], completion_mask,
-        )
-        generated_z_loss = flow_matching_loss(
-            mac_out["z"][:, :-1],
-            mac_out["target_z"][:, :-1], completion_mask,
-        )
-        generated_rec_loss = reconstruction_loss(
-            mac_out["generated_reconstructed_observations"][:, :-1],
-            batch["obs"][:, :-1], completion_mask.squeeze(-2),
-        )
+        flow_loss = generated_z_loss = td_loss.new_zeros(())
+        if flow_weight > 0:
+            flow_loss = flow_matching_loss(
+                mac_out["predicted_z"][:, :-1],
+                mac_out["target_z"][:, :-1], completion_mask,
+            )
+            generated_z_loss = flow_matching_loss(
+                mac_out["z"][:, :-1],
+                mac_out["target_z"][:, :-1], completion_mask,
+            )
+        generated_rec_loss = td_loss.new_zeros(())
+        if generated_rec_weight > 0:
+            generated_rec_loss = reconstruction_loss(
+                mac_out["generated_reconstructed_observations"][:, :-1],
+                batch["obs"][:, :-1], completion_mask.squeeze(-2),
+            )
         retro_weight = self.args.retro_loss_weight
         if retro_weight > 0:
             retro = self.retro_replay.compute(self.mac, batch, t_slice, mac_out)
@@ -202,6 +206,12 @@ class BCRBCLearner(Learner):
 
         self.optimizer.zero_grad()
         total_loss.backward()
+        if rec_weight == 0 or flow_weight == 0 or generated_rec_weight == 0:
+            # Disabled branches previously supplied zero gradients. Preserve
+            # optimizer state updates and weight decay for those parameters.
+            for parameter in self.mac.parameters():
+                if parameter.grad is None:
+                    parameter.grad = torch.zeros_like(parameter)
         grad_norm = torch.nn.utils.clip_grad_norm_(self.params, self.args.grad_norm_clip)
         self.optimizer.step()
 
@@ -219,14 +229,17 @@ class BCRBCLearner(Learner):
             with torch.no_grad():
                 mask_elems = mixer_mask.sum().item()
                 self.logger.log_stat("loss/td_loss", td_loss.item(), t_env)
-                self.logger.log_stat("loss/rec_loss", rec_loss.item(), t_env)
+                if rec_weight > 0:
+                    self.logger.log_stat("loss/rec_loss", rec_loss.item(), t_env)
                 if retro_weight > 0:
                     self.logger.log_stat("loss/retro_loss", retro_loss.item(), t_env)
-                self.logger.log_stat("loss/flow_loss", flow_loss.item(), t_env)
-                self.logger.log_stat("loss/generated_z_loss", generated_z_loss.item(), t_env)
-                self.logger.log_stat(
-                    "loss/generated_rec_loss", generated_rec_loss.item(), t_env,
-                )
+                if flow_weight > 0:
+                    self.logger.log_stat("loss/flow_loss", flow_loss.item(), t_env)
+                    self.logger.log_stat("loss/generated_z_loss", generated_z_loss.item(), t_env)
+                if generated_rec_weight > 0:
+                    self.logger.log_stat(
+                        "loss/generated_rec_loss", generated_rec_loss.item(), t_env,
+                    )
                 self.logger.log_stat("loss/total_loss", total_loss.item(), t_env)
                 self.logger.log_stat("running/grad_norm", grad_norm.item(), t_env)
                 self.logger.log_stat("q_values/td_error_abs", masked_td_error.abs().sum().item() / mask_elems, t_env)

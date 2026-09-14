@@ -65,6 +65,9 @@ bcrbc_mask_probability_max: 0.9
 # Shared number of Euler flow steps for training and delayed evaluation.
 # 0 uses the masked encoder directly (disable generation losses for pure MASK).
 bcrbc_flow_steps: 4
+# Recent environment steps to complete, including now. Capped by context_window.
+# 0: MASK (disable generation losses); 1: current only; -1: Full retained window.
+bcrbc_generation_horizon: 1
 bcrbc_q_hidden_dim: 64
 bcrbc_retro_max_replay_len: 0
 
@@ -75,10 +78,10 @@ bcrbc_context_window: 16
 # Cache regression compares against uncached rollout numerically. False = off.
 bcrbc_kv_cache: True
 
-# --- Random-MASK history with parallel current-time flow completion ---
+# --- Random-MASK history with batched N-step flow completion ---
 # Q uses final generated z in both training and delayed evaluation.
-# Fixed masked-history KV is prepared once and detached for all current queries.
-# Late arrivals correct raw history; only the current missing state is generated.
+# MASK-history KV is prepared once; intermediate generated KV is also detached.
+# Late arrivals correct raw history; generated history stays within each window.
 # Loss weights:
 #  - rec_loss: reconstruct observations from the tokenizer bottleneck z.
 #  - retro_loss: optional batch patch-and-replay ablation. It is not part of the

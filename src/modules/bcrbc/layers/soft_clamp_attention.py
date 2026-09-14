@@ -45,12 +45,14 @@ class SoftClampAttention(nn.Module):
 
     @overload
     def forward(
-        self, x: Tensor, mask=None, rotary_pos_emb=None, kv_cache=None, *, return_cache: Literal[False] = False
+        self, x: Tensor, mask=None, rotary_pos_emb=None, kv_cache=None, *,
+        return_cache: Literal[False] = False, key_indices=None,
     ) -> Tensor: ...
 
     @overload
     def forward(
-        self, x: Tensor, mask=None, rotary_pos_emb=None, kv_cache=None, *, return_cache: Literal[True]
+        self, x: Tensor, mask=None, rotary_pos_emb=None, kv_cache=None, *,
+        return_cache: Literal[True], key_indices=None,
     ) -> Tuple[Tensor, Tuple[Tensor, Tensor]]: ...
 
     def forward(
@@ -60,7 +62,8 @@ class SoftClampAttention(nn.Module):
         rotary_pos_emb=None,
         kv_cache: Optional[Tuple[Tensor, Tensor]] = None,
         *,
-        return_cache: bool = False
+        return_cache: bool = False,
+        key_indices=None,
     ):
         x = self.norm(x)
         q = self.to_q(x)
@@ -89,14 +92,25 @@ class SoftClampAttention(nn.Module):
             k = k.unsqueeze(-3)
             v = v.unsqueeze(-3)
 
-        similarity = (q * self.scale) @ k.transpose(-1, -2)
+        if key_indices is None:
+            attention_q, attention_k, attention_v = q, k, v
+        else:
+            # [..., heads, query_time, 1, D] reads its own W selected keys.
+            # Keep the original K/V layout for the returned causal cache.
+            attention_q = q[..., None, :]
+            attention_k = k[..., key_indices, :]
+            attention_v = v[..., key_indices, :]
+            mask = mask[..., None, :]
+        similarity = (attention_q * self.scale) @ attention_k.transpose(-1, -2)
         similarity = softclamp(similarity, self.softclamp_value)
 
         if mask is not None:
             mask_value = -torch.finfo(similarity.dtype).max
             similarity = similarity.masked_fill(~mask, mask_value)
 
-        attn = similarity.softmax(dim=-1) @ v
+        attn = similarity.softmax(dim=-1) @ attention_v
+        if key_indices is not None:
+            attn = attn.squeeze(-2)
 
         if self.groups > 1:
             attn = attn.reshape(*batch_dims, self.heads, seq_len, self.dim_head)
