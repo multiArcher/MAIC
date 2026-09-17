@@ -1,6 +1,5 @@
 import copy
 import importlib
-from typing import cast
 
 import torch
 from torch.optim import Adam, AdamW, RMSprop, SGD
@@ -71,7 +70,8 @@ class BCRBCLearner(Learner):
 
         self.target_mac = copy.deepcopy(mac)
         if self.args.standardise_returns:
-            self.ret_ms = RunningMeanStd(shape=(self.n_agents,), device=self.device)
+            # QMIX targets have a scalar value axis, not an agent axis.
+            self.ret_ms = RunningMeanStd(shape=(1,), device=self.device)
         if self.args.standardise_rewards:
             rew_shape = (1,) if self.args.common_reward else (self.n_agents,)
             self.rew_ms = RunningMeanStd(shape=rew_shape, device=self.device)
@@ -81,26 +81,112 @@ class BCRBCLearner(Learner):
 
     def train(self, batch: EpisodeBatch, t_env: int, episode_num: int):
         self.optimizer.zero_grad(set_to_none=True)
-        rewards = cast(torch.Tensor, batch["reward"][:, :-1])
-        actions = cast(torch.Tensor, batch["actions"][:, :-1])
-        terminated = cast(torch.Tensor, batch["terminated"][:, :-1]).float()
-        mask = cast(torch.Tensor, batch["filled"][:, :-1]).float()
-        # A transition needs both states; the final bootstrap state has no reward.
+        rewards = batch["reward"][:, :-1]
+        terminated = batch["terminated"][:, :-1].float()
+        mask = batch["filled"][:, :-1].float().clone()
         mask *= batch["filled"][:, 1:]
-        mask[:, 1:] = mask[:, 1:] * (1 - terminated[:, :-1])
-        avail_actions = cast(torch.Tensor, batch["avail_actions"])
-
+        mask[:, 1:] *= 1 - terminated[:, :-1]
         if self.args.standardise_rewards:
             self.rew_ms.update(rewards[mask.squeeze(-1).bool()])
             rewards = (rewards - self.rew_ms.mean) / torch.sqrt(self.rew_ms.var)
 
+        # Sample once so micro-batch boundaries do not change masking or noise.
+        obs = batch["obs"]
+        block_shape = (*obs.shape[:3], 1, 1)
+        z_shape = (*obs.shape[:3], self.mac.agent.num_z_tokens, self.mac.agent.z_dim)
+        probability = torch.rand(
+            batch.batch_size, 1, self.n_agents, 1, 1, device=obs.device,
+        ) * self.args.bcrbc_mask_probability_max
+        random_inputs = {
+            "missing_mask": torch.rand(block_shape, device=obs.device) < probability,
+            "completion_noise": torch.randn(z_shape, device=obs.device),
+            "flow_signal": torch.rand(block_shape, device=obs.device),
+            "flow_noise": torch.randn(z_shape, device=obs.device),
+        }
+        completion_mask = mask[:, :, None, None] * random_inputs["missing_mask"][:, :-1]
+        denominators = {
+            "td": mask.sum().clamp_min(1),
+            "rec": (mask.sum() * self.n_agents).clamp_min(1),
+            "completion": completion_mask.sum().clamp_min(1),
+        }
+        if self.args.retro_loss_weight > 0:
+            replay_length = self.retro_replay.max_replay_len
+            start = max(0, batch.max_seq_length - replay_length) if replay_length > 0 else 0
+            retro_mask = (
+                (batch["obs_delay"][:, start:-1] > 0)
+                & (batch["obs_gen_t"][:, start:-1] >= start)
+            )
+            denominators["retro"] = (
+                retro_mask * mask[:, start:, None]
+            ).sum().clamp_min(1)
+
+        micro_size = self.args.bcrbc_micro_batch_size
+        slices = [slice(start, start + micro_size)
+                  for start in range(0, batch.batch_size, micro_size)]
+        td_targets = None
+        if self.args.standardise_returns:
+            # Return statistics require all targets before any gradient pass.
+            # This extra no-grad pass is only used when return scaling is enabled.
+            with torch.no_grad():
+                targets = [
+                    self._train_micro_batch(
+                        batch[part], rewards[part], mask[part],
+                        {key: value[part] for key, value in random_inputs.items()},
+                        denominators, collect_targets=True,
+                    )
+                    for part in slices
+                ]
+                td_targets = torch.cat(targets)
+                self.ret_ms.update(td_targets)
+                td_targets = (td_targets - self.ret_ms.mean) / torch.sqrt(self.ret_ms.var)
+                del targets
+
+        stats = {}
+        for part in slices:
+            micro_stats = self._train_micro_batch(
+                batch[part], rewards[part], mask[part],
+                {key: value[part] for key, value in random_inputs.items()},
+                denominators,
+                td_targets_override=None if td_targets is None else td_targets[part],
+            )
+            for name, value in micro_stats.items():
+                stats[name] = stats.get(name, 0.0) + value
+
+        grad_norm = torch.nn.utils.clip_grad_norm_(self.params, self.args.grad_norm_clip)
+        self.optimizer.step()
+        self.training_steps += 1
+        if (
+            self.args.target_update_interval_or_tau > 1
+            and (self.training_steps - self.last_target_update_step)
+            / self.args.target_update_interval_or_tau >= 1.0
+        ):
+            self._update_targets_hard()
+            self.last_target_update_step = self.training_steps
+        elif self.args.target_update_interval_or_tau <= 1.0:
+            self._update_targets_soft(self.args.target_update_interval_or_tau)
+
+        if t_env - self.log_stats_t >= self.args.learner_log_interval:
+            for name, value in stats.items():
+                self.logger.log_stat(name, value.item(), t_env)
+            self.logger.log_stat("running/grad_norm", grad_norm.item(), t_env)
+            self.log_stats_t = t_env
+
+    def _train_micro_batch(
+        self, batch, rewards, mask, random_inputs, denominators,
+        td_targets_override=None, collect_targets=False,
+    ):
+        actions = batch["actions"][:, :-1]
+        terminated = batch["terminated"][:, :-1].float()
+        avail_actions = batch["avail_actions"]
         t_slice = slice(0, batch.max_seq_length)
         # Build target Q before retaining the online generation/decoder graphs.
         # Both networks use the same sampled missing blocks and completion noise.
         with torch.no_grad():
             self.target_mac.train()
             self.target_mac.init_hidden(batch.batch_size)
-            target_out = self.target_mac.forward(batch, t_slice, compute_aux=False)
+            target_out = self.target_mac.forward(
+                batch, t_slice, compute_aux=False, **random_inputs,
+            )
             missing_mask = target_out["missing_mask"]
             completion_noise = target_out["completion_noise"]
             target_q_values = target_out["q_values"].masked_fill(
@@ -113,6 +199,8 @@ class BCRBCLearner(Learner):
         mac_out = self.mac.forward(
             batch, t_slice, missing_mask=missing_mask,
             completion_noise=completion_noise,
+            flow_signal=random_inputs["flow_signal"],
+            flow_noise=random_inputs["flow_noise"], compute_aux=not collect_targets,
         )
         q_values = mac_out["q_values"]
 
@@ -142,14 +230,15 @@ class BCRBCLearner(Learner):
                     )
                 case _:
                     raise ValueError(f"Invalid target type {target_type}")
-            if self.args.standardise_returns:
-                self.ret_ms.update(td_targets)
-                td_targets = (td_targets - self.ret_ms.mean) / torch.sqrt(self.ret_ms.var)
+            if collect_targets:
+                return td_targets
+            if td_targets_override is not None:
+                td_targets = td_targets_override
 
         mixer_mask = mask[..., None, None]
         td_error = joint_action_value - td_targets.reshape_as(joint_action_value)
         masked_td_error = td_error * mixer_mask
-        td_loss = (masked_td_error**2).sum() / mixer_mask.sum().clamp_min(1.0)
+        td_loss = (masked_td_error**2).sum() / denominators["td"]
 
         rec_weight = self.args.rec_loss_weight
         flow_weight = self.args.flow_loss_weight if self.mac.agent.flow_loss_enabled else 0.0
@@ -172,6 +261,7 @@ class BCRBCLearner(Learner):
             rec_loss = 0.5 * (rec_loss + masked_rec_loss)
         else:
             rec_loss = td_loss.new_zeros(())
+        rec_loss = rec_loss * agent_mask.sum().clamp_min(1) / denominators["rec"]
         completion_mask = mask[:, :, None, None] * mac_out["missing_mask"][:, :-1]
         flow_loss = generated_z_loss = td_loss.new_zeros(())
         if flow_weight > 0:
@@ -189,6 +279,10 @@ class BCRBCLearner(Learner):
                 mac_out["generated_reconstructed_observations"][:, :-1],
                 batch["obs"][:, :-1], completion_mask.squeeze(-2),
             )
+        completion_scale = completion_mask.sum().clamp_min(1) / denominators["completion"]
+        flow_loss = flow_loss * completion_scale
+        generated_z_loss = generated_z_loss * completion_scale
+        generated_rec_loss = generated_rec_loss * completion_scale
         retro_weight = self.args.retro_loss_weight
         if retro_weight > 0:
             retro = self.retro_replay.compute(self.mac, batch, t_slice, mac_out)
@@ -203,6 +297,9 @@ class BCRBCLearner(Learner):
         else:
             retro_loss = td_loss.new_zeros(())
 
+        if retro_weight > 0:
+            retro_loss = retro_loss * retro_mask.sum().clamp_min(1) / denominators["retro"]
+
         total_loss = (
             self.args.td_loss_weight * td_loss
             + rec_weight * rec_loss
@@ -213,40 +310,26 @@ class BCRBCLearner(Learner):
         )
 
         total_loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm_(self.params, self.args.grad_norm_clip)
-        self.optimizer.step()
-
-        self.training_steps += 1
-        if (
-            self.args.target_update_interval_or_tau > 1
-            and (self.training_steps - self.last_target_update_step) / self.args.target_update_interval_or_tau >= 1.0
-        ):
-            self._update_targets_hard()
-            self.last_target_update_step = self.training_steps
-        elif self.args.target_update_interval_or_tau <= 1.0:
-            self._update_targets_soft(self.args.target_update_interval_or_tau)
-
-        if t_env - self.log_stats_t >= self.args.learner_log_interval:
-            with torch.no_grad():
-                mask_elems = mixer_mask.sum().item()
-                self.logger.log_stat("loss/td_loss", td_loss.item(), t_env)
-                if rec_weight > 0:
-                    self.logger.log_stat("loss/rec_loss", rec_loss.item(), t_env)
-                if retro_weight > 0:
-                    self.logger.log_stat("loss/retro_loss", retro_loss.item(), t_env)
-                if flow_weight > 0:
-                    self.logger.log_stat("loss/flow_loss", flow_loss.item(), t_env)
-                    self.logger.log_stat("loss/generated_z_loss", generated_z_loss.item(), t_env)
-                if generated_rec_weight > 0:
-                    self.logger.log_stat(
-                        "loss/generated_rec_loss", generated_rec_loss.item(), t_env,
-                    )
-                self.logger.log_stat("loss/total_loss", total_loss.item(), t_env)
-                self.logger.log_stat("running/grad_norm", grad_norm.item(), t_env)
-                self.logger.log_stat("q_values/td_error_abs", masked_td_error.abs().sum().item() / mask_elems, t_env)
-                self.logger.log_stat("q_values/q_taken_mean", (chosen_action_values * mixer_mask).sum().item() / (mask_elems * self.args.n_agents), t_env)
-                self.logger.log_stat("q_values/target_mean", (td_targets * mixer_mask).sum().item() / mask_elems, t_env)
-                self.log_stats_t = t_env
+        # Only detached scalars escape this function; free each graph before the next.
+        stats = {
+            "loss/td_loss": td_loss.detach(),
+            "loss/total_loss": total_loss.detach(),
+            "q_values/td_error_abs": masked_td_error.detach().abs().sum() / denominators["td"],
+            "q_values/q_taken_mean": (
+                chosen_action_values.detach() * mixer_mask
+            ).sum() / (denominators["td"] * self.n_agents),
+            "q_values/target_mean": (td_targets * mixer_mask).sum() / denominators["td"],
+        }
+        if rec_weight > 0:
+            stats["loss/rec_loss"] = rec_loss.detach()
+        if flow_weight > 0:
+            stats["loss/flow_loss"] = flow_loss.detach()
+            stats["loss/generated_z_loss"] = generated_z_loss.detach()
+        if generated_rec_weight > 0:
+            stats["loss/generated_rec_loss"] = generated_rec_loss.detach()
+        if retro_weight > 0:
+            stats["loss/retro_loss"] = retro_loss.detach()
+        return stats
 
     def _update_targets_hard(self):
         self.target_mac.load_state(self.mac)

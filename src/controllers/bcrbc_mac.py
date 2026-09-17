@@ -76,6 +76,8 @@ class BCRBCMAC(MAC):
 
         missing_mask = kwargs.pop("missing_mask", None)
         completion_noise = kwargs.pop("completion_noise", None)
+        flow_signal = kwargs.pop("flow_signal", None)
+        flow_noise = kwargs.pop("flow_noise", None)
         compute_aux = kwargs.pop("compute_aux", True)
         masked_eval = (
             test_mode
@@ -107,7 +109,7 @@ class BCRBCMAC(MAC):
             )
             self._online_encoder_cache = self._trim_cache(encoder_cache)
             self._online_kv_cache = self._trim_cache(out["kv_cache"])
-        elif not test_mode and not kwargs:
+        elif not test_mode and obs_override is None and not kwargs:
             # One probability per sequence/agent, then independent block masks.
             if missing_mask is None:
                 missing_probability = torch.rand(
@@ -119,6 +121,7 @@ class BCRBCMAC(MAC):
             out = self.agent.forward_training(
                 obs, last_actions, missing_mask, start_t=t.start or 0,
                 completion_noise=completion_noise, compute_aux=compute_aux,
+                flow_signal=flow_signal, flow_noise=flow_noise,
             )
         else:
             out = self.agent(
