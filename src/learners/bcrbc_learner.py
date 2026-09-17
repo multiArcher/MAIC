@@ -80,6 +80,7 @@ class BCRBCLearner(Learner):
         )
 
     def train(self, batch: EpisodeBatch, t_env: int, episode_num: int):
+        self.optimizer.zero_grad(set_to_none=True)
         rewards = cast(torch.Tensor, batch["reward"][:, :-1])
         actions = cast(torch.Tensor, batch["actions"][:, :-1])
         terminated = cast(torch.Tensor, batch["terminated"][:, :-1]).float()
@@ -93,25 +94,32 @@ class BCRBCLearner(Learner):
             self.rew_ms.update(rewards[mask.squeeze(-1).bool()])
             rewards = (rewards - self.rew_ms.mean) / torch.sqrt(self.rew_ms.var)
 
+        t_slice = slice(0, batch.max_seq_length)
+        # Build target Q before retaining the online generation/decoder graphs.
+        # Both networks use the same sampled missing blocks and completion noise.
+        with torch.no_grad():
+            self.target_mac.train()
+            self.target_mac.init_hidden(batch.batch_size)
+            target_out = self.target_mac.forward(batch, t_slice, compute_aux=False)
+            missing_mask = target_out["missing_mask"]
+            completion_noise = target_out["completion_noise"]
+            target_q_values = target_out["q_values"].masked_fill(
+                avail_actions.unsqueeze(-2) == 0, -1e7,
+            )
+            del target_out
+
         self.mac.agent.train()
         self.mac.init_hidden(batch.batch_size)
-        t_slice = slice(0, batch.max_seq_length)
-        mac_out = self.mac.forward(batch, t_slice)
+        mac_out = self.mac.forward(
+            batch, t_slice, missing_mask=missing_mask,
+            completion_noise=completion_noise,
+        )
         q_values = mac_out["q_values"]
 
         chosen_action_values = torch.gather(q_values[:, :-1], dim=-1, index=actions.unsqueeze(-1))
         joint_action_value = self.mixer(chosen_action_values, batch["state"][:, :-1, None, None])
 
         with torch.no_grad():
-            self.target_mac.train()
-            self.target_mac.init_hidden(batch.batch_size)
-            target_out = self.target_mac.forward(
-                batch, t_slice, missing_mask=mac_out["missing_mask"],
-                completion_noise=mac_out["completion_noise"], compute_aux=False,
-            )
-            target_q_values = target_out["q_values"]
-            target_q_values = torch.masked_fill(target_q_values, avail_actions.unsqueeze(-2) == 0, -1e7)
-
             if self.args.double_q:
                 mac_out_detach = q_values.detach().clone()
                 mac_out_detach = torch.masked_fill(mac_out_detach, avail_actions.unsqueeze(-2) == 0, -1e7)
@@ -204,14 +212,7 @@ class BCRBCLearner(Learner):
             + generated_rec_weight * generated_rec_loss
         )
 
-        self.optimizer.zero_grad()
         total_loss.backward()
-        if rec_weight == 0 or flow_weight == 0 or generated_rec_weight == 0:
-            # Disabled branches previously supplied zero gradients. Preserve
-            # optimizer state updates and weight decay for those parameters.
-            for parameter in self.mac.parameters():
-                if parameter.grad is None:
-                    parameter.grad = torch.zeros_like(parameter)
         grad_norm = torch.nn.utils.clip_grad_norm_(self.params, self.args.grad_norm_clip)
         self.optimizer.step()
 

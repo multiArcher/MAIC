@@ -98,6 +98,7 @@ class BCRBCModel(nn.Module):
         use_kv_cache=False,
         rope_offset=None,
         condition=None,
+        compute_q=True,
     ):
         tokens = self.dynamics_tokenizer(
             noisy_z,
@@ -124,16 +125,17 @@ class BCRBCModel(nn.Module):
         z_outputs = transformer_outputs[..., self.dynamics_tokenizer.z_slice, :]
         normalized_z_outputs = self.z_output_norm(z_outputs)
         predicted_z = self.z_predictor(normalized_z_outputs)
-        agent_outputs = self.agent_readout(
-            transformer_outputs,
-            self.dynamics_tokenizer.query_slice,
-        )
-        return {
+        output = {
             "predicted_z": predicted_z,
-            "agent_outputs": agent_outputs,
-            "q_values": self.q_head(agent_outputs),
             "kv_cache": new_kv_cache,
         }
+        if compute_q:
+            agent_outputs = self.agent_readout(
+                transformer_outputs, self.dynamics_tokenizer.query_slice,
+            )
+            output["agent_outputs"] = agent_outputs
+            output["q_values"] = self.q_head(agent_outputs)
+        return output
 
     def complete_current(self, encoded_z, previous_actions, missing_mask,
                          noise, condition, start_t=0, use_kv_cache=False):
@@ -155,7 +157,7 @@ class BCRBCModel(nn.Module):
                 signal = torch.where(missing_mask, signal, 1.0)
                 estimate = self.estimate_clean_z(
                     current_z, previous_actions, signal,
-                    start_t=start_t, condition=condition,
+                    start_t=start_t, condition=condition, compute_q=False,
                 )["predicted_z"]
                 # dt / (1-s) = 1 / (K-index); last step reaches the endpoint.
                 velocity_step = (estimate - current_z) / (self.flow_steps - index)
@@ -258,7 +260,7 @@ class BCRBCModel(nn.Module):
                 noisy = torch.where(missing_mask, noisy, history_z.detach())
                 flow = self.estimate_clean_z(
                     noisy, previous_actions, torch.where(missing_mask, signal, 1.0),
-                    start_t=start_t, condition=condition,
+                    start_t=start_t, condition=condition, compute_q=False,
                 )
                 output["predicted_z"] = flow["predicted_z"]
             decoder_condition = None

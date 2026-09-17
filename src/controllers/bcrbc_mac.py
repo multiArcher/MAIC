@@ -133,7 +133,9 @@ class BCRBCMAC(MAC):
         window = self.agent.context_window
         if window:
             window += extra_steps
-            cache = [(key[..., -window:, :], value[..., -window:, :])
+            # A view would keep the full pre-trim storage alive across decisions.
+            cache = [(key[..., -window:, :].detach().clone(),
+                      value[..., -window:, :].detach().clone())
                      for key, value in cache]
         return [(key.detach(), value.detach()) for key, value in cache]
 
