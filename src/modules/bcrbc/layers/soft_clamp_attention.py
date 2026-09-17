@@ -92,25 +92,23 @@ class SoftClampAttention(nn.Module):
             k = k.unsqueeze(-3)
             v = v.unsqueeze(-3)
 
-        if key_indices is None:
-            attention_q, attention_k, attention_v = q, k, v
-        else:
-            # [..., heads, query_time, 1, D] reads its own W selected keys.
-            # Keep the original K/V layout for the returned causal cache.
-            attention_q = q[..., None, :]
-            attention_k = k[..., key_indices, :]
-            attention_v = v[..., key_indices, :]
-            mask = mask[..., None, :]
-        similarity = (attention_q * self.scale) @ attention_k.transpose(-1, -2)
+        # Select scalar scores, rather than copying W key/value vectors per query.
+        similarity = (q * self.scale) @ k.transpose(-1, -2)
+        if key_indices is not None:
+            indices = key_indices.expand(*similarity.shape[:-1], -1)
+            similarity = similarity.gather(-1, indices)
         similarity = softclamp(similarity, self.softclamp_value)
 
         if mask is not None:
             mask_value = -torch.finfo(similarity.dtype).max
             similarity = similarity.masked_fill(~mask, mask_value)
 
-        attn = similarity.softmax(dim=-1) @ attention_v
+        weights = similarity.softmax(dim=-1)
         if key_indices is not None:
-            attn = attn.squeeze(-2)
+            # Padding indices may repeat; their masked weights are zero.
+            full_weights = weights.new_zeros(*weights.shape[:-1], k.shape[-2])
+            weights = full_weights.scatter_add(-1, indices, weights)
+        attn = weights @ v
 
         if self.groups > 1:
             attn = attn.reshape(*batch_dims, self.heads, seq_len, self.dim_head)
