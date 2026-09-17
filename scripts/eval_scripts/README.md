@@ -1,5 +1,13 @@
 # BCRBC observation-delay evaluation
 
+## Multi-model study (current entrypoint)
+
+Use `delay_study.py` for the new frozen-model robustness evaluation. The older
+grid scripts below remain available for reproducing the earlier protocol.
+See [DELAY_STUDY.md](DELAY_STUDY.md) for configuration, metrics and plotting.
+
+## Earlier single-model action-consistency protocol
+
 The only experiment-parameter entry is the block at the top of
 `bcrbc_delay_grid.py`. Copy it to `bcrbc_delay_grid.local.py` and edit the training
 run, checkpoint step, test map and grid there. Local parameter copies are ignored
