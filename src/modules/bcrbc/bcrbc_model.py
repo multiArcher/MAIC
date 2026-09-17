@@ -229,7 +229,7 @@ class BCRBCModel(nn.Module):
 
     def forward_training(self, observations, previous_actions,
                          missing_mask, start_t=0, completion_noise=None,
-                         compute_aux=True):
+                         compute_aux=True, flow_signal=None, flow_noise=None):
         """Encode MASK history once and batch decisions over N-step completion windows."""
         history_z = self.encode_observations(
             observations, missing_mask=missing_mask, rope_offset=start_t
@@ -252,14 +252,16 @@ class BCRBCModel(nn.Module):
                     target_z = self.encode_observations(observations, rope_offset=start_t)
                 output["target_z"] = target_z.detach()
             # Keep the random stream unchanged when the flow loss is disabled.
-            signal = torch.rand_like(history_z[..., :1, :1])
-            noise = torch.randn_like(history_z)
+            if flow_signal is None:
+                flow_signal = torch.rand_like(history_z[..., :1, :1])
+            if flow_noise is None:
+                flow_noise = torch.randn_like(history_z)
             if self.flow_loss_enabled:
                 # Clean targets enter only this auxiliary query, never Q or history.
-                noisy = torch.lerp(noise, target_z.detach(), signal)
+                noisy = torch.lerp(flow_noise, target_z.detach(), flow_signal)
                 noisy = torch.where(missing_mask, noisy, history_z.detach())
                 flow = self.estimate_clean_z(
-                    noisy, previous_actions, torch.where(missing_mask, signal, 1.0),
+                    noisy, previous_actions, torch.where(missing_mask, flow_signal, 1.0),
                     start_t=start_t, condition=condition, compute_q=False,
                 )
                 output["predicted_z"] = flow["predicted_z"]

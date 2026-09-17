@@ -109,7 +109,8 @@ lr: 0.0004
 
 grad_norm_clip: 10
 
-batch_size: 32
+batch_size: 16
+bcrbc_micro_batch_size: 8  # Accumulate to batch_size, then update once.
 buffer_size: 5000
 
 double_q: True
