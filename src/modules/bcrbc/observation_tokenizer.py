@@ -14,6 +14,7 @@ class ObservationEncoder(nn.Module):
         depth,
         heads,
         context_window=0,
+        time_block_every=4,
     ):
         super().__init__()
         self.num_z_tokens = num_z_tokens
@@ -26,7 +27,7 @@ class ObservationEncoder(nn.Module):
             heads=heads,
             kv_heads=heads,
             dim_head=model_hidden_dim // heads,
-            time_block_every=4,
+            time_block_every=time_block_every,
             context_window=context_window,
             num_special_tokens=num_z_tokens,
         )
@@ -67,6 +68,7 @@ class ObservationDecoder(nn.Module):
         depth,
         heads,
         context_window=0,
+        time_block_every=4,
     ):
         super().__init__()
         self.num_z_tokens = num_z_tokens
@@ -78,7 +80,7 @@ class ObservationDecoder(nn.Module):
             heads=heads,
             kv_heads=heads,
             dim_head=model_hidden_dim // heads,
-            time_block_every=4,
+            time_block_every=time_block_every,
             context_window=context_window,
             num_special_tokens=num_z_tokens,
             is_decoder=True,

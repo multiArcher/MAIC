@@ -38,8 +38,8 @@ class BlockCausalTransformer(nn.Module):
             context_window: Optional temporal context window. When set (> 0), the causal
                 time attention is banded to the previous `context_window` steps. None / 0
                 => unbounded causal attention (legacy).
-            time_block_every: Apply temporal attention every N layers (architecture
-                constant, not a per-run hyperparameter).
+            time_block_every: Apply temporal attention every N layers; other layers
+                use spatial attention.
             attn_softclamp_value: Softclamp value for attention logits (architecture
                 constant).
             feed_forward_expansion_factor: FFN expansion factor (architecture constant).

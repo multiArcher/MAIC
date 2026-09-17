@@ -15,6 +15,7 @@ class BCRBCModel(nn.Module):
         model_hidden_dim = args.bcrbc_d_model
         agent_output_dim = args.bcrbc_agent_output_dim
         transformer_depth = args.bcrbc_depth
+        time_block_every = args.bcrbc_time_block_every
         attention_heads = args.bcrbc_heads
         z_dim = args.bcrbc_z_dim
         num_z_tokens = args.bcrbc_num_z_tokens
@@ -38,6 +39,7 @@ class BCRBCModel(nn.Module):
             transformer_depth,
             attention_heads,
             context_window=self.context_window,
+            time_block_every=time_block_every,
         )
         self.observation_decoder = ObservationDecoder(
             observation_dim,
@@ -47,6 +49,7 @@ class BCRBCModel(nn.Module):
             transformer_depth,
             attention_heads,
             context_window=self.context_window,
+            time_block_every=time_block_every,
         )
 
         max_time_steps = args.env_info["episode_limit"] + 2
@@ -65,6 +68,7 @@ class BCRBCModel(nn.Module):
             dropout=args.bcrbc_dropout,
             agent_slice=self.dynamics_tokenizer.query_slice,
             context_window=self.context_window,
+            time_block_every=time_block_every,
         )
         self.z_output_norm = nn.LayerNorm(model_hidden_dim)
         self.z_predictor = nn.Linear(model_hidden_dim, z_dim)
