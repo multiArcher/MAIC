@@ -29,6 +29,18 @@ python scripts/eval_scripts/delay_study.local.py
 GPU训练/评估进程争资源。末批可以少于8局，因此总局数严格等于配置值。
 未填写模型清单不会启动任务。
 
+相同地图、环境初始化配置和并行数共用SMAC进程。切换模型或延迟条件不重启
+SC2，只更新延迟采样器并reset；模型历史、KV缓存和诊断状态每批重建。
+不同地图或初始化配置需新建进程；不足整批的末批单独复用较小的环境组。
+执行顺序按环境配置分组，不保证全局模型顺序。
+
+延迟与模型随机数按每批seed初始化，但SMAC随机状态随reset继续推进。
+不同条件不承诺相同初始战局；中断后跳过完成批次，也不承诺复现不中断时的
+环境随机轨迹。每批result记录environment_seed、environment_batch_index和
+worker_pids。此协议为v3，勿混入旧版逐批重启的研究目录。
+根目录session.json记录本次待运行批次，session.log保存整体进度和进程输出；
+批次run.log保存该批Python输出。
+
 每个条件沿用相同环境seed序列，独立的 CPU torch Generator 采样延迟。
 模型生成噪声不会推进延迟随机流。策略改变仍然会导致环境轨迹分叉。
 

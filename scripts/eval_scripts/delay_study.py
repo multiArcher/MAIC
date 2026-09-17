@@ -61,7 +61,7 @@ def main():
         "src/controllers/bcrbc_mac.py", "src/runners/delayed_parallel_runner.py",
         "src/envs/wrappers/delayed_wrapper.py")]
     sources = {str(p.relative_to(ROOT)): digest(p) for p in source_files}
-    manifest = dict(protocol="delay_study_v2", models=MODELS, conditions=cases,
+    manifest = dict(protocol="delay_study_v3_persistent_env", models=MODELS, conditions=cases,
                     gaussian_cells=cells, episodes=EPISODES, parallel=PARALLEL,
                     seed=SEED, mask_intervention=MASK_INTERVENTION,
                     feature_groups=FEATURE_GROUPS, sources=sources,
@@ -73,6 +73,7 @@ def main():
         assert previous == manifest, "Study definition changed; use a new STUDY name."
     path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     environment = dict(os.environ, OMP_NUM_THREADS="1", MKL_NUM_THREADS="1")
+    pending_jobs = []
     for model in MODELS:
         config_path = ROOT / model["config"]
         checkpoint = ROOT / model["checkpoint"]
@@ -92,11 +93,26 @@ def main():
                     assert json.loads(job_path.read_text()) == job, "Checkpoint/config changed; use a new STUDY."
                     continue
                 job_path.write_text(json.dumps(job, indent=2), encoding="utf-8")
-                print(model["id"], condition["id"], offset, flush=True)
-                with (directory / "run.log").open("w") as log:
-                    subprocess.run([sys.executable, str(ROOT / "scripts/eval_scripts/evaluate_study.py"),
-                                    str(job_path)], cwd=ROOT, env=environment,
-                                   stdout=log, stderr=subprocess.STDOUT, check=True)
+                pending_jobs.append(str(job_path))
+    if pending_jobs:
+        print(f"Evaluation: {len(pending_jobs)} pending batches; results: {output}", flush=True)
+        session_path = output / "session.json"
+        session_path.write_text(json.dumps(dict(jobs=pending_jobs), indent=2))
+        with (output / "session.log").open("a") as log:
+            process = subprocess.Popen(
+                [sys.executable, "-u", str(ROOT / "scripts/eval_scripts/evaluate_study.py"),
+                 str(session_path)], cwd=ROOT, env=environment,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
+            )
+            for line in process.stdout:
+                print(line, end="", flush=True)
+                log.write(line)
+                log.flush()
+            return_code = process.wait()
+            if return_code:
+                raise subprocess.CalledProcessError(return_code, process.args)
+    print(f"Summarizing results: {output}", flush=True)
     subprocess.run([sys.executable, str(ROOT / "scripts/eval_scripts/summarize_study.py"), str(output)], check=True)
 
 
