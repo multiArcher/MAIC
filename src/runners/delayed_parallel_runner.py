@@ -329,12 +329,14 @@ def env_worker(remote, env_fn, seed):
     env = env_fn.x()
     env_info = env.get_env_info()
     env_t = 0
+    final_info = {}
     while True:
         cmd, data = remote.recv()
         if cmd == "step":
             actions = data
             # Take a step in the environment
             _, reward, terminated, truncated, step_info = env.step(actions)
+            final_info = step_info
             env_t += 1
             terminated = terminated or truncated
             # Return the observations, avail_actions and state to make the next action
@@ -362,6 +364,7 @@ def env_worker(remote, env_fn, seed):
                 env.training = data
             env.reset()
             env_t = 0
+            final_info = {}
             delay_data = get_obs_delay_data(env, env_info["n_agents"], env_t)
             remote.send(
                 {
@@ -381,13 +384,22 @@ def env_worker(remote, env_fn, seed):
             remote.send(env.get_env_info())
         elif cmd == "get_stats":
             remote.send(env.get_stats())
+        elif cmd == "get_final_info":
+            remote.send(final_info)
         elif cmd == "get_diagnostic_data":
             # Oracle observations leave the worker only for diagnostic scoring.
             sampled = env.delay_model._cache_arrival[0, env_t] - env_t
             remote.send({
                 "observations": env.env.get_obs(),
                 "sampled_delays": sampled.long().tolist(),
+                "regime": getattr(env.delay_model, "regime", None),
+                "regime_age": getattr(env.delay_model, "regime_age", None),
+                "clipped_count": getattr(env.delay_model, "clipped_count", 0),
             })
+        elif cmd == "set_evaluation_delay":
+            from components.evaluation_delay import EvaluationDelay
+            env.delay_model = EvaluationDelay(data["condition"], data["seed"])
+            remote.send(True)
         elif cmd == "render":
             env.render()
         elif cmd == "save_replay":
