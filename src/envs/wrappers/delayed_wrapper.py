@@ -30,6 +30,7 @@ class DelayedObservationWrapper(MultiAgentEnv):
         delay_std: float = 0.0,
         max_delay: int = 0,
         delay_per_agent: bool = True,
+        delay_during_training: bool = False,
         # seed: int | None = None,
         **_ignored,
     ):
@@ -48,6 +49,7 @@ class DelayedObservationWrapper(MultiAgentEnv):
         self._max_t = self.episode_limit + 1
 
         self._training = True
+        self.delay_during_training = delay_during_training
         # self._time = 0  # Moved to property
         self._current_obs: list[np.ndarray] = []
         self._current_delays = np.zeros(self.n_agents, dtype=np.int64)
@@ -143,16 +145,17 @@ class DelayedObservationWrapper(MultiAgentEnv):
     def _push_and_refresh(self, fresh_obs):
         """Push this step's fresh obs into the delay model and pull the delivered obs.
 
-        The runner sets ``self._training`` from its ``test_mode`` flag. DelayModel
-        maps training to zero delay and evaluation to the configured delay. Shapes
-        use the b=1 batch axis: payload [1, n_agents, obs_dim].
+        The runner sets the training mode. Training bypasses delay unless
+        explicitly enabled; evaluation always uses the configured distribution.
+        Shapes use the b=1 batch axis: payload [1, n_agents, obs_dim].
         """
         obs_arr = np.asarray(fresh_obs, dtype=np.float32)  # [n_agents, obs_dim]
         payload = torch.from_numpy(obs_arr).unsqueeze(0)   # [1, n, d]
+        bypass_delay = self._training and not self.delay_during_training
         self.delay_model.push_step(
             payload,
             self.episode_timestep,
-            training=self._training,
+            training=bypass_delay,
             max_t=self._max_t,
             feat_ndims=1,  # Observation features are the last axis, everything else is batch-like.
         )

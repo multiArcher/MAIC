@@ -78,6 +78,7 @@ class EnvMaker(Maker):
             "delay_std": kwargs.pop("delay_std", 0.0),
             "max_delay": kwargs.pop("max_delay", 0),
             "delay_per_agent": kwargs.pop("delay_per_agent", True),
+            "delay_during_training": kwargs.pop("delay_during_training", False),
         }
         # "delay" (the legacy fixed-delay scalar) is dropped: a fixed delay d is N(d, 0).
         kwargs.pop("delay", None)
