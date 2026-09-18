@@ -24,8 +24,9 @@ class EvaluationDelay(DelayModel):
         if kind == "fixed":
             raw = torch.full(shape, float(c["value"]), device=device)
         elif kind == "uniform":
-            raw = torch.randint(c["low"], c["high"] + 1, shape,
-                                generator=self.generator, device=device).float()
+            raw = c["low"] + (c["high"] - c["low"]) * torch.rand(
+                shape, generator=self.generator, device=device
+            )
         else:
             mean, std = c.get("mean", 0), c.get("std", 1)
             if kind in ("mixture", "periodic", "markov"):

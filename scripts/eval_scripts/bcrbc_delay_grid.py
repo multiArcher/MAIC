@@ -169,7 +169,7 @@ def main():
             run_batch(directory / f"batch_{batch_index:03d}", job, environment)
             refresh_summary(output)
     subprocess.run(
-        [sys.executable, str(ROOT / "scripts/eval_scripts/plot_bcrbc_delay_grid.py"),
+        [sys.executable, str(ROOT / "scripts/eval_scripts/plots/plot_bcrbc_delay_grid.py"),
          str(output)], check=True,
     )
     print(f"Results: {output}", flush=True)

@@ -1,6 +1,7 @@
-"""Edit this parameter block in a .local.py copy, then run it in the test environment."""
+"""Import in a parameter-only .local.py entrypoint; set module values and call main."""
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -9,6 +10,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 STUDY = "delay_robustness"
 # Each entry: id, config (saved training JSON), checkpoint (directory).
+# Entries are independent training runs of ONE algorithm.
+# Optional tensorboard directory supplements metrics missing from Sacred.
 # For a legacy config missing bcrbc_time_block_every, explicitly supply
 # legacy_time_block_every=4 in that model entry; never change the method.
 MODELS = []
@@ -25,17 +28,27 @@ FEATURE_GROUPS = {}
 
 def conditions():
     cases = [{"id": "fixed_0", "kind": "fixed", "value": 0, "cap": CAP}]
-    cells = []
-    for mean in MEANS:
-        for std in STDS:
-            name = "fixed_0" if std == 0 and mean <= 0 else f"gaussian_{mean:g}_{std:g}"
-            cells.append({"mean": mean, "std": std, "condition_id": name})
-            if name != "fixed_0":
-                cases.append(dict(id=name, kind="gaussian", mean=mean, std=std, cap=CAP))
+    cells = {"gaussian": [], "uniform": []}
+    for family in cells:
+        for mean in MEANS:
+            for std in STDS:
+                if std == 0:
+                    value = min(CAP, math.ceil(max(0, mean)))
+                    name = f"fixed_{value}"
+                    condition = dict(id=name, kind="fixed", value=value, cap=CAP)
+                else:
+                    name = f"{family}_{mean:g}_{std:g}"
+                    condition = dict(id=name, kind=family, mean=mean, std=std, cap=CAP)
+                    if family == "uniform":
+                        # Match the Gaussian's raw standard deviation.
+                        width = math.sqrt(12) * std
+                        condition.update(width=width, low=mean - width / 2,
+                                         high=mean + width / 2)
+                cells[family].append(dict(mean=mean, std=std, condition_id=name))
+                if not any(case["id"] == name for case in cases):
+                    cases.append(condition)
     for value in (4, 8):
         cases.append(dict(id=f"fixed_{value}", kind="fixed", value=value, cap=CAP))
-    for high in (1, 2, 4, 8):
-        cases.append(dict(id=f"uniform_0_{high}", kind="uniform", low=0, high=high, cap=CAP))
     for name, means, probability in [("balanced", [0, 2], 0.5), ("rare_severe", [0, 4], 0.1)]:
         cases.append(dict(id=f"mixture_{name}", kind="mixture", means=means,
                           stds=[1, 1], high_probability=probability, cap=CAP))
@@ -49,7 +62,7 @@ def digest(path):
 
 
 def main():
-    assert MODELS, "Populate MODELS in a .local.py copy before evaluating."
+    assert MODELS, "Set study.MODELS in a .local.py entrypoint before evaluating."
     assert len({m["id"] for m in MODELS}) == len(MODELS), "Model IDs must be unique."
     output = ROOT / "results/evaluate" / STUDY
     output.mkdir(parents=True, exist_ok=True)
@@ -61,8 +74,9 @@ def main():
         "src/controllers/bcrbc_mac.py", "src/runners/delayed_parallel_runner.py",
         "src/envs/wrappers/delayed_wrapper.py")]
     sources = {str(p.relative_to(ROOT)): digest(p) for p in source_files}
-    manifest = dict(protocol="delay_study_v3_persistent_env", models=MODELS, conditions=cases,
-                    gaussian_cells=cells, episodes=EPISODES, parallel=PARALLEL,
+    manifest = dict(protocol="delay_study_v4_matched_grids", models=MODELS, conditions=cases,
+                    gaussian_cells=cells["gaussian"], uniform_cells=cells["uniform"],
+                    episodes=EPISODES, parallel=PARALLEL,
                     seed=SEED, mask_intervention=MASK_INTERVENTION,
                     feature_groups=FEATURE_GROUPS, sources=sources,
                     commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip())

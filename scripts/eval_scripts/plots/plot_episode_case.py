@@ -1,5 +1,8 @@
 """Usage: plot_episode_case.py STUDY MODEL CONDITION EPISODE [AGENT]."""
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pandas as pd
 from summarize_study import read_rows
 from study_plotting import load, save, plt

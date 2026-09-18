@@ -1,10 +1,14 @@
 # BCRBC observation-delay evaluation
 
-## Multi-model study (current entrypoint)
+## Multi-run study (current entrypoint)
 
-Use `delay_study.py` for the new frozen-model robustness evaluation. The older
-grid scripts below remain available for reproducing the earlier protocol.
-See [DELAY_STUDY.md](DELAY_STUDY.md) for configuration, metrics and plotting.
+Create a parameter-only `*.local.py` beside `delay_study.py`: import it as
+`study`, assign `study.MODELS` and other parameters, then call `study.main()`
+under the main guard. Do not copy the evaluation implementation.
+One study represents one algorithm; MODELS contains its independent training runs.
+See [DELAY_STUDY.md](DELAY_STUDY.md) for the complete four-run example,
+evaluation commands, training-log inputs and unified plotting.
+The older grid scripts below remain available for reproducing the earlier protocol.
 
 ## Earlier single-model action-consistency protocol
 
@@ -105,5 +109,5 @@ the summary, outside the Gaussian grid.
 Regenerate plots without rerunning environments:
 
 ```bash
-python scripts/eval_scripts/plot_bcrbc_delay_grid.py <protocol-result-directory>
+python scripts/eval_scripts/plots/plot_bcrbc_delay_grid.py <protocol-result-directory>
 ```
