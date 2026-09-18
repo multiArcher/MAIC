@@ -34,6 +34,8 @@ env_args:
   window_size_y: 768
 
   # Delay only local observations. State and available actions remain fresh.
+  # Use a delayed runner to propagate train/test mode to the environment.
+  delay_during_training: False  # Enable for delay-trained baselines only.
   delay_type: "gaussian"  # fixed, uniform, or gaussian
   delay: 1
   delay_mean: 1.0
