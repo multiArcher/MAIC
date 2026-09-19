@@ -109,4 +109,8 @@ class AgentMaker(Maker):
         """Code Kernel agent using attention to merge obs."""
         from modules.agents.kernel_agent import KernelAgent
         return KernelAgent(*args, **kwargs)
-    
+
+    @staticmethod
+    def make_cacom(*args, **kwargs):
+        from modules.agents.cacom_agent import CACOMAgent
+        return CACOMAgent(*args, **kwargs)
