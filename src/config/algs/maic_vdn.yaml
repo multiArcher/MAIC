@@ -1,16 +1,16 @@
 # ------------------------------------------------------------------------------
 # Experiment specific parameters
 # ------------------------------------------------------------------------------
-name: "entity_maic"
+name: "maic_vdn"
 
 runner: "parallel"
 batch_size_run: 8
 
-mac: "entity_maic_mac"
-agent: "entity_maic"
+mac: "maic_mac"
+agent: "maic"
 learner: "maic_learner"
 use_rnn: True
-entity_scheme: True
+entity_scheme: False
 
 test_nepisode: 64
 test_interval: 50000
@@ -47,7 +47,7 @@ obs_agent_id: True # Include the agent's one_hot id in the observation
 obs_last_action: True # Include the agent's last action (one_hot) in the observation
 
 # ------------------------------------------------------------------------------
-# --- QMix specific parameters ---
+# --- VDN specific parameters ---
 # ------------------------------------------------------------------------------
 # use epsilon greedy action selector
 action_selector: "epsilon_greedy"
@@ -78,7 +78,7 @@ standardise_rewards: True
 
 agent_output_type: "q"
 double_q: True
-mixer: "qmix"
+mixer: "vdn"
 mixing_embed_dim: 32
 hypernet_layers: 2
 hypernet_embed: 64

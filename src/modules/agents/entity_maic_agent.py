@@ -6,6 +6,8 @@ import torch.nn.functional as F
 import torch.distributions as D
 from torch.distributions import kl_divergence
 
+from modules.agents.maic_agent import hidden_dim_from_args
+
 
 class EntityMAICAgent(nn.Module):
     def __init__(self, input_shape, args):
@@ -14,19 +16,20 @@ class EntityMAICAgent(nn.Module):
         self.n_agents = args.n_agents
         self.latent_dim = args.latent_dim
         self.n_actions = args.n_actions
+        self.hidden_dim = hidden_dim_from_args(args)
 
         NN_HIDDEN_SIZE = args.nn_hidden_size
         activation_func = nn.LeakyReLU()
 
         self.embed_net = nn.Sequential(
-            nn.Linear(args.rnn_hidden_dim, NN_HIDDEN_SIZE),
+            nn.Linear(self.hidden_dim, NN_HIDDEN_SIZE),
             nn.BatchNorm1d(NN_HIDDEN_SIZE),
             activation_func,
             nn.Linear(NN_HIDDEN_SIZE, args.n_agents * args.latent_dim * 2)
         )
 
         self.inference_net = nn.Sequential(
-            nn.Linear(args.rnn_hidden_dim + args.n_actions, NN_HIDDEN_SIZE),
+            nn.Linear(self.hidden_dim + args.n_actions, NN_HIDDEN_SIZE),
             nn.BatchNorm1d(NN_HIDDEN_SIZE),
             activation_func,
             nn.Linear(NN_HIDDEN_SIZE, args.latent_dim * 2)
@@ -38,36 +41,36 @@ class EntityMAICAgent(nn.Module):
         self.embedding_layers = nn.ModuleList()
         for feat_name, feat_shape in input_shape[0].items():
             self.embedding_layers.append(
-                nn.Linear(feat_shape[1], args.rnn_hidden_dim, bias=False, device=args.device)
+                nn.Linear(feat_shape[1], self.hidden_dim, bias=False, device=args.device)
             )
 
         # Embedding layers: 1 -> hidden_dim
         for feat_name, feat_shape in input_shape[1].items():
             self.embedding_layers.append(
-                nn.Embedding(feat_shape[1], args.rnn_hidden_dim, device=args.device)
+                nn.Embedding(feat_shape[1], self.hidden_dim, device=args.device)
             )
 
         # Encoding layers: hidden_dim -> attn_dim
         self.encoding = nn.Sequential(
-            nn.Linear(args.rnn_hidden_dim, args.rnn_hidden_dim, device=args.device),
+            nn.Linear(self.hidden_dim, self.hidden_dim, device=args.device),
             nn.LeakyReLU(inplace=True),
         )
 
-        # self.fc1 = nn.Linear(input_shape, args.rnn_hidden_dim)
-        self.rnn = nn.GRUCell(args.rnn_hidden_dim, args.rnn_hidden_dim)
-        self.fc2 = nn.Linear(args.rnn_hidden_dim, args.n_actions)
+        # self.fc1 = nn.Linear(input_shape, self.hidden_dim)
+        self.rnn = nn.GRUCell(self.hidden_dim, self.hidden_dim)
+        self.fc2 = nn.Linear(self.hidden_dim, args.n_actions)
 
         self.msg_net = nn.Sequential(
-            nn.Linear(args.rnn_hidden_dim + args.latent_dim, NN_HIDDEN_SIZE),
+            nn.Linear(self.hidden_dim + args.latent_dim, NN_HIDDEN_SIZE),
             activation_func,
             nn.Linear(NN_HIDDEN_SIZE, args.n_actions)
         )
 
-        self.w_query = nn.Linear(args.rnn_hidden_dim, args.attention_dim)
+        self.w_query = nn.Linear(self.hidden_dim, args.attention_dim)
         self.w_key = nn.Linear(args.latent_dim, args.attention_dim)
 
     def init_hidden(self):
-        return self.fc2.weight.new(1, self.args.rnn_hidden_dim).zero_()
+        return self.fc2.weight.new(1, self.hidden_dim).zero_()
 
     def forward(self, inputs, hidden_state, bs, test_mode=False, **kwargs):
         entities = torch.cat(
@@ -79,8 +82,8 @@ class EntityMAICAgent(nn.Module):
         x = entities.mean(dim=-2)
 
         # x = F.relu(self.fc1(inputs))
-        h_in = hidden_state.reshape(-1, self.args.rnn_hidden_dim)
-        h = self.rnn(x.reshape(-1, self.args.rnn_hidden_dim), h_in)
+        h_in = hidden_state.reshape(-1, self.hidden_dim)
+        h = self.rnn(x.reshape(-1, self.hidden_dim), h_in)
         q = self.fc2(h)
 
         latent_parameters = self.embed_net(h)

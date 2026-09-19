@@ -1,16 +1,16 @@
 # ------------------------------------------------------------------------------
 # Experiment specific parameters
 # ------------------------------------------------------------------------------
-name: "entity_maic"
+name: "maic"
 
 runner: "parallel"
-batch_size_run: 8
+batch_size_run: 1
 
-mac: "entity_maic_mac"
-agent: "entity_maic"
+mac: "maic_mac"
+agent: "maic"
 learner: "maic_learner"
 use_rnn: True
-entity_scheme: True
+entity_scheme: False
 
 test_nepisode: 64
 test_interval: 50000
