@@ -69,31 +69,31 @@ class AgentMaker(Maker):
         return ImagineEntityAttnRNNAgentICM(*args, **kwargs)
 
     @staticmethod
-    def make_pymarl2_qmix_FiLMq_agent(*args, **kwargs) -> "FiLMAgent":
+    def make_pymarl2_qmix_FiLMq_agent(*args, **kwargs):
         """PyMARL2 QMix agent with FiLM."""
         from modules.agents.pymarl2_qmix_FiLMq_agent import FiLMAgent
         return FiLMAgent(*args, **kwargs)
 
     @staticmethod
-    def make_pymarl2_qmix_FiLMq_agent_with_t(*args, **kwargs) -> "FiLMTAgent":
+    def make_pymarl2_qmix_FiLMq_agent_with_t(*args, **kwargs):
         """PyMARL2 QMix agent with FiLM."""
         from modules.agents.pymarl2_qmix_FiLMq_agent_with_t import FiLMTAgent
         return FiLMTAgent(*args, **kwargs)
 
     @staticmethod
-    def make_pymarl2_qmix_DiT_FiLM(*args, **kwargs) -> "FiLMAgent":
+    def make_pymarl2_qmix_DiT_FiLM(*args, **kwargs):
         """PyMARL2 QMix agent with FiLM."""
         from modules.agents.pymarl2_qmix_DiT_FiLM import FiLMAgent
         return FiLMAgent(*args, **kwargs)
 
     @staticmethod
-    def make_pymarl2_qmix_agent_with_t(*args, **kwargs) -> "NRNNAgent":
+    def make_pymarl2_qmix_agent_with_t(*args, **kwargs):
         """PyMARL2 QMix agent with T-Net."""
         from modules.agents.pymarl2_qmix_agent_with_t import NRNNAgent
         return NRNNAgent(*args, **kwargs)
 
     @staticmethod
-    def make_entity_attend_FiLMq_agent(*args, **kwargs) -> "FiLMAgent":
+    def make_entity_attend_FiLMq_agent(*args, **kwargs):
         """Entity agent using attention to merge obs."""
         from modules.agents.entity_attend_FiLMq_agent import EntityFiLMAgent
         return EntityFiLMAgent(*args, **kwargs)
@@ -116,3 +116,6 @@ class AgentMaker(Maker):
         from modules.agents.maic_agent import MAICAgent
         return MAICAgent(*args, **kwargs)
  
+    def make_cacom(*args, **kwargs):
+        from modules.agents.cacom_agent import CACOMAgent
+        return CACOMAgent(*args, **kwargs)

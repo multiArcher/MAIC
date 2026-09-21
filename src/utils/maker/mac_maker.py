@@ -91,3 +91,8 @@ class MACMaker(Maker):
         """RDC Echo delay-compensating MAC."""
         from controllers.rdc_controller import RDCMAC
         return RDCMAC(*args, **kwargs)
+
+    @staticmethod
+    def make_cacom_mac(*args, **kwargs):
+        from controllers.cacom_controller import CACOMMAC
+        return CACOMMAC(*args, **kwargs)
