@@ -96,3 +96,8 @@ class LearnerMaker(Maker):
         """RDC Echo QMIX learner."""
         from learners.rdc_q_learner import RDCQLearner
         return RDCQLearner(*args, **kwargs)
+
+    @staticmethod
+    def make_cacom_learner(*args, **kwargs):
+        from learners.cacom_learner import CACOMLearner
+        return CACOMLearner(*args, **kwargs)
